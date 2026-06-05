@@ -48,6 +48,29 @@ test("source index accepts repeated file names in multi-range locations", () => 
   assert.match(context, /line 42 constraint gate/);
 });
 
+test("source index adds constraint setup context for narrow advice-assignment items", () => {
+  const doc = makeDoc("external/incomplete.rs", 180, {
+    20: "pub(super) fn configure(meta: &mut ConstraintSystem<F>) -> Self {",
+    50: "fn create_gate(&self, meta: &mut ConstraintSystem<F>) {",
+    112: "line 112 region.assign_advice(|| \"x_p\", self.x_p, row, || x_p)?;",
+  });
+  const index = new SourceIndex([doc]);
+  const context = index.contextForItem(
+    {
+      id: "base-coordinate-advice-source",
+      location: "external/incomplete.rs:112",
+      securityProperty: "Assigned advice cells must be bound to the intended source values.",
+      failureMode: "missing_constraint",
+      why: "The item is narrow, but the audit also needs gate and equality setup.",
+    },
+    100_000,
+  );
+
+  assert.match(context, /pub\(super\) fn configure/);
+  assert.match(context, /fn create_gate/);
+  assert.match(context, /region\.assign_advice/);
+});
+
 function makeDoc(path, lineCount, overrides) {
   const lines = Array.from({ length: lineCount }, (_, idx) => `line ${idx + 1}`);
   for (const [line, text] of Object.entries(overrides)) {

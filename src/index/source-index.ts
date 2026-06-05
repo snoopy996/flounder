@@ -1,5 +1,6 @@
 import type { AuditItem, Doc } from "../types.js";
 import { numberLines } from "../ingest/source.js";
+import { parseLocationRanges } from "../util/location.js";
 
 interface Slice {
   doc: Doc;
@@ -51,9 +52,12 @@ export class SourceIndex {
 
   slicesForItem(item: AuditItem): Slice[] {
     const out: Slice[] = [];
-    for (const direct of parseLocations(item.location)) {
+    const terms = termsForItem(item);
+    const directDocs: Doc[] = [];
+    for (const direct of parseLocationRanges(item.location)) {
       const doc = this.findDoc(direct.pathHint);
       if (doc) {
+        directDocs.push(doc);
         out.push({
           doc,
           startLine: Math.max(1, direct.startLine - 40),
@@ -63,7 +67,19 @@ export class SourceIndex {
       }
     }
 
-    const terms = termsForItem(item);
+    if (needsStructuralConstraintContext(item, terms)) {
+      for (const doc of directDocs) {
+        for (const symbol of this.symbols.filter((candidate) => candidate.path === doc.path && isConstraintSupportSymbol(candidate.name))) {
+          out.push({
+            doc,
+            startLine: Math.max(1, symbol.line - 20),
+            endLine: symbol.line + 140,
+            reason: `constraint context ${symbol.name}`,
+          });
+        }
+      }
+    }
+
     for (const doc of this.docs) {
       const lineHits = searchLines(doc, terms).slice(0, 6);
       for (const hit of lineHits) {
@@ -118,36 +134,6 @@ function fallbackContext(docs: Doc[], budget: number): string {
   return chunks.join("");
 }
 
-function parseLocations(location: string): Array<{ pathHint: string; startLine: number; endLine: number }> {
-  const ranges: Array<{ pathHint: string; startLine: number; endLine: number }> = [];
-  let activePath: string | undefined;
-
-  for (const rawSegment of location.split(/\s*,\s*/)) {
-    const segment = rawSegment.trim();
-    if (!segment) continue;
-
-    const withPath = /^(.*):\s*(\d+)(?:\s*-\s*(\d+))?$/.exec(segment);
-    const continuation = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(segment);
-    const match = withPath ?? continuation;
-    if (!match) continue;
-
-    const pathHint = withPath ? match[1]?.trim() : activePath;
-    const startLine = Number.parseInt(withPath ? (match[2] ?? "") : (match[1] ?? ""), 10);
-    const rawEnd = Number.parseInt(withPath ? (match[3] ?? "") : (match[2] ?? ""), 10);
-    const endLine = Number.isFinite(rawEnd) ? rawEnd : startLine;
-    if (!pathHint || !Number.isFinite(startLine) || !Number.isFinite(endLine)) continue;
-
-    activePath = pathHint;
-    ranges.push({
-      pathHint,
-      startLine: Math.min(startLine, endLine),
-      endLine: Math.max(startLine, endLine),
-    });
-  }
-
-  return ranges;
-}
-
 function termsForItem(item: AuditItem): string[] {
   const text = [
     item.id,
@@ -188,6 +174,19 @@ function termsForItem(item: AuditItem): string[] {
     "constraint",
   ];
   return [...new Set([...priority.filter((term) => text.toLowerCase().includes(term)), ...raw])].slice(0, 24);
+}
+
+function needsStructuralConstraintContext(item: AuditItem, terms: string[]): boolean {
+  const failureMode = item.failureMode.toLowerCase();
+  return (
+    failureMode.includes("constraint") ||
+    failureMode.includes("soundness") ||
+    terms.some((term) => ["advice", "assign_advice", "copy_advice", "witness", "constraint", "gate", "selector", "circuit", "proof"].includes(term))
+  );
+}
+
+function isConstraintSupportSymbol(name: string): boolean {
+  return /configure|create_gate|gate|constraint|synthesi[sz]e|assign|layout/i.test(name);
 }
 
 function searchLines(doc: Doc, terms: string[]): number[] {

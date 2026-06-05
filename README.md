@@ -165,6 +165,8 @@ npm run check:source-discovery -- \
   --model gpt-5.5 \
   --thinking xhigh \
   --trials 4 \
+  --expect-location-file-regex '<file-regex>' \
+  --expect-location-line <line> \
   --max-items 25
 ```
 
@@ -173,6 +175,8 @@ npm run check:source-discovery -- \
 For stronger blind-proof runs, this gate disables local checklist seeders by default. The model must first enumerate the matching audit item, then audit it. Use `--allow-local-seeders` only for debugging checklist coverage.
 
 Add `--rounds <n>` to test iterative deepening. Round 2 and later write `round_<n>_deepening_items.json`; the gate can then prove that follow-up coverage came from model reasoning rather than local checklist seeders.
+
+Use `--run-dir <path>` to re-check an existing live run artifact without spending another model run. Location checks understand line ranges such as `file.rs:269-372`, so an expected line can match a wider model-produced location.
 
 ## Pi Package Usage
 

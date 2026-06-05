@@ -2,20 +2,20 @@
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { defaultConfig, publicLocation, runPipeline } from "../dist/index.js";
+import { defaultConfig, locationContainsLine, publicLocation, runPipeline } from "../dist/index.js";
 
 const args = process.argv.slice(2);
-const source = readFlag(args, "--source") ?? process.env.FSA_DISCOVERY_SOURCE;
-if (!source) {
-  throw new Error("Provide --source <path> or set FSA_DISCOVERY_SOURCE.");
+const existingRunDir = readFlag(args, "--run-dir");
+const source = existingRunDir ? undefined : readFlag(args, "--source") ?? process.env.FSA_DISCOVERY_SOURCE;
+if (!existingRunDir && !source) {
+  throw new Error("Provide --source <path>, --run-dir <path>, or set FSA_DISCOVERY_SOURCE.");
 }
 
-const out = await mkdtemp(path.join(os.tmpdir(), "fsa-source-discovery-"));
 const cfg = defaultConfig();
 cfg.targetName = readFlag(args, "--target") ?? "source-discovery";
-cfg.sourcePaths = [source];
+if (source) cfg.sourcePaths = [source];
 cfg.corpusPaths = readMultiFlag(args, "--corpus");
-cfg.outputDir = out;
+cfg.outputDir = existingRunDir ? path.dirname(existingRunDir) : await mkdtemp(path.join(os.tmpdir(), "fsa-source-discovery-"));
 cfg.provider = readFlag(args, "--provider") ?? cfg.provider;
 cfg.enumModel = readFlag(args, "--enum-model") ?? readFlag(args, "--model") ?? cfg.enumModel;
 cfg.auditModel = readFlag(args, "--audit-model") ?? readFlag(args, "--model") ?? cfg.auditModel;
@@ -32,10 +32,12 @@ cfg.localChecklistSeeders = hasFlag(args, "--allow-local-seeders");
 const expectedFailureMode = readFlag(args, "--expect-failure-mode") ?? "missing_constraint";
 const expectedFailureModeRegex = readRegexFlag(args, "--expect-failure-mode-regex");
 const expectedLocation = readRegexFlag(args, "--expect-location-regex");
+const expectedLocationFile = readRegexFlag(args, "--expect-location-file-regex");
+const expectedLocationLine = readIntFlag(args, "--expect-location-line");
 const expectedEvidence = readRegexFlag(args, "--expect-evidence-regex") ?? /(constraint|bound|bind|advice|witness|source|input)/i;
 const minimumSeverity = readFlag(args, "--expect-min-severity") ?? readFlag(args, "--expect-severity") ?? "high";
 
-const result = await runPipeline(cfg);
+const result = existingRunDir ? { runDir: existingRunDir } : await runPipeline(cfg);
 const calls = await readdir(path.join(result.runDir, "calls"));
 const auditCalls = calls.filter((file) => /_audit_/.test(file));
 const enumerateCalls = calls.filter((file) => /_enumerate\.json$/.test(file));
@@ -53,13 +55,16 @@ const finding = findings.find((item) => {
   if (expectedFailureModeRegex ? !expectedFailureModeRegex.test(item.failureMode) : item.failureMode !== expectedFailureMode) return false;
   if (!atLeastSeverity(item.severity, minimumSeverity)) return false;
   if (expectedLocation && !expectedLocation.test(item.location)) return false;
+  if (expectedLocationFile && expectedLocationLine === undefined && !expectedLocationFile.test(item.location)) return false;
+  if (expectedLocationLine !== undefined && !locationContainsLine(item.location, expectedLocationLine, expectedLocationFile)) return false;
   const evidenceText = [item.title, item.description, item.evidence, item.fix].join("\n");
   return expectedEvidence.test(evidenceText);
 });
 
 if (!finding) {
   const failureModeLabel = expectedFailureModeRegex ? `/${expectedFailureModeRegex.source}/i` : expectedFailureMode;
-  throw new Error(`No live model finding matched failureMode=${failureModeLabel} minSeverity=${minimumSeverity}.`);
+  const locationLabel = expectedLocationLine === undefined ? "" : ` expectedLine=${expectedLocationLine}`;
+  throw new Error(`No live model finding matched failureMode=${failureModeLabel} minSeverity=${minimumSeverity}${locationLabel}.`);
 }
 
 const checklistItem = Array.isArray(checklist) ? checklist.find((item) => item.id === finding.id) : undefined;

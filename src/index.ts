@@ -23,5 +23,6 @@ export * from "./seeders/index.js";
 export * from "./trace/logger.js";
 export * from "./types.js";
 export * from "./util/json.js";
+export * from "./util/location.js";
 export * from "./util/paths.js";
 export * from "./verify/planner.js";

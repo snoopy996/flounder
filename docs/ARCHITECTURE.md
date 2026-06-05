@@ -100,6 +100,8 @@ Model calls should use pi-ai providers by default. `provider=codex-cli` is an ex
 
 Use `--rounds <n>` with the source-discovery gate when evaluating iterative deepening. Round artifacts must show that later coverage came from `deepen_round_<n>` model calls and survived duplicate filtering.
 
+Use `--expect-location-line <n>` with `--expect-location-file-regex <regex>` when the oracle should accept a broader model-produced source range that contains the target line. Use `--run-dir <path>` to re-check an existing live run artifact without making new model calls.
+
 ## Local-Only Verification
 
 Verification code must default to a local-only ladder:
