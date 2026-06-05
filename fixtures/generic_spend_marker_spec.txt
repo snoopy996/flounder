@@ -1,0 +1,5 @@
+A private-transfer proof system accepts a spend only when the revealed spend marker is unique for the spent object.
+
+The circuit binds an address public key to a private key by scalar multiplication. That key binding is part of the spend-marker uniqueness argument.
+
+If the key binding can be satisfied with a different private witness than the intended key, the same spent object may be accepted with distinct spend markers. This breaks value conservation and balance integrity.

@@ -12,18 +12,20 @@ export async function runAudit(input: {
   cfg: AuditorConfig;
   items: AuditItem[];
   source: Doc[];
+  corpus?: Doc[];
   llm?: LlmClient;
   logger: RunLogger;
 }): Promise<AuditResult[]> {
+  const staticDocs = [...input.source, ...(input.corpus ?? [])];
   if (input.cfg.dryRun || !input.llm) {
-    const dry = runStaticAuditors(input.items);
+    const dry = runStaticAuditors(input.items, staticDocs);
     await input.logger.artifact("audit_results.json", dry);
     return dry;
   }
 
   const index = new SourceIndex(input.source);
   const agentRegistry = createAgentRegistry(input.cfg.auditorAgents);
-  const staticResults = runStaticAuditors(input.items);
+  const staticResults = runStaticAuditors(input.items, staticDocs);
   const staticById = new Map(staticResults.filter((result) => result.nHits > 0).map((result) => [result.item.id, result]));
   const modelItems = input.items.filter((item) => !staticById.has(item.id));
   const modelResults = await mapLimit(modelItems, input.cfg.maxWorkers, async (item) =>

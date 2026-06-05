@@ -39,7 +39,7 @@ export async function runPipeline(cfg: AuditorConfig, options: { verifyTopK?: nu
   }
   const items = await enumerateAuditItems({ cfg, corpus, source, ...(llm ? { llm } : {}), logger });
   await logger.artifact("checklist_coverage.json", summarizeChecklist(items));
-  const results = await runAudit({ cfg, items, source, ...(llm ? { llm } : {}), logger });
+  const results = await runAudit({ cfg, items, source, corpus, ...(llm ? { llm } : {}), logger });
   await logger.artifact("run_coverage.json", summarizeRun(items, results));
   const summary = aggregate(results);
   await logger.artifact("summary.json", summary);

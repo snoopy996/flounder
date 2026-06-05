@@ -93,6 +93,8 @@ To run the same generic discovery assertion against an external source tree with
 npm run check:source-discovery -- --source <path>
 ```
 
+Add `--corpus <paths...>` and `--expect-severity critical` when validating that source plus neutral specification material proves a system-level impact chain.
+
 ## Pi Package Usage
 
 Try the package locally from this directory:

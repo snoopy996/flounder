@@ -24,7 +24,7 @@ const SOURCE_EXTS = new Set([
   ".circom",
 ]);
 
-const DOC_EXTS = new Set([".md", ".txt", ".rst", ".tex", ".org", ".adoc"]);
+const DOC_EXTS = new Set([".md", ".txt", ".rst", ".tex", ".org", ".adoc", ".html", ".htm"]);
 const PDF_EXTS = new Set([".pdf"]);
 const SKIP_DIRS = new Set([".git", "node_modules", "target", "build", "dist", "__pycache__", "vendor"]);
 
