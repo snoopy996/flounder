@@ -32,6 +32,10 @@ if (!bindingFinding) {
 if (bindingFinding.severity !== expectSeverity) {
   throw new Error(`Expected ${expectSeverity} severity for binding finding, got ${bindingFinding.severity}.`);
 }
+const report = await readFile(path.join(result.runDir, `report_${bindingFinding.id}.md`), "utf8");
+if (!report.includes("Security disclosure") || !report.includes(`Severity estimate: ${expectSeverity.toUpperCase()}`)) {
+  throw new Error("Discovery report was not generated with the expected severity.");
+}
 
 console.log(`Source discovery check passed: ${bindingFinding.severity} ${bindingFinding.location}`);
 
