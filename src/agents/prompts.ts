@@ -350,3 +350,73 @@ Produce markdown:
 4. PoC scaffold for the first local-only rung only.
 5. Minimal fix and a test that should pass after the fix.`;
 }
+
+export const REPRODUCTION_SYSTEM = `You are the ReproductionAgent stage of a white-hat audit framework.
+Your job is to turn a source-confirmed finding into a minimal local-only executable reproduction plan.
+
+Hard rules:
+- Produce a local unit test, local component test, regtest, devnet, or fork/fake-node reproduction only.
+- Never target public testnet, mainnet, production, live RPC endpoints, or third-party systems.
+- Never include credentials, private URLs, destructive cleanup, persistence, or value-extraction exploit optimization.
+- Do not use shell metacharacters or compound shell commands. Commands must be structured argv arrays.
+- Prefer a small test file and one local test command.`;
+
+export function buildReproductionPrompt(input: {
+  title: string;
+  location: string;
+  severity: string;
+  description: string;
+  evidence: string;
+  fix: string;
+  verification: string;
+  projectLearning?: string;
+  source: string;
+  maxCommands: number;
+  commandTimeoutMs: number;
+}): string {
+  return `Candidate finding:
+  title: ${input.title}
+  location: ${input.location}
+  severity: ${input.severity}
+  description: ${input.description}
+  evidence: ${input.evidence}
+  proposed fix: ${input.fix}
+
+Source-level verification:
+${input.verification || "(not available)"}
+
+Initialization learning notes:
+${input.projectLearning || "(not available)"}
+
+Relevant source:
+${input.source}
+
+Return only a JSON object with this shape:
+{
+  "summary": "what the local reproduction will prove",
+  "files": [
+    {
+      "path": "relative/path/to/local_test_file",
+      "content": "complete file content"
+    }
+  ],
+  "commands": [
+    {
+      "program": "cargo",
+      "args": ["test", "local_repro_name"],
+      "cwd": ".",
+      "timeoutMs": ${input.commandTimeoutMs},
+      "expectedExitCode": 0
+    }
+  ],
+  "successCriteria": ["how command output or exit status proves the finding locally"],
+  "safetyNotes": ["why the plan is local-only and non-destructive"]
+}
+
+Plan constraints:
+- Use at most ${input.maxCommands} commands.
+- Paths must be relative to the copied local workspace. Do not use absolute paths or parent-directory traversal.
+- Commands must be local test commands only. Use program + args, not a shell command string.
+- If a regression test is expected to fail on the vulnerable code, set expectedExitCode to the expected non-zero code and explain that in successCriteria.
+- If the loaded source is insufficient to write an executable test, return empty files and commands with a summary explaining the missing context.`;
+}

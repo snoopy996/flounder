@@ -17,8 +17,9 @@ The core workflow is:
 7. Run one or more exploration rounds. Later rounds use prior coverage and audit observations to propose novel follow-up items.
 8. Run multiple independent model audit trials per item.
 9. Aggregate by severity, hit rate, confidence, and evidence quality.
-10. Verify findings separately, in local sandbox-only tests.
-11. Keep a complete audit trail of prompts, model outputs, artifacts, and events.
+10. Verify findings separately with source-level reasoning.
+11. Optionally plan or execute local-only reproductions after findings have been collected.
+12. Keep a complete audit trail of prompts, model outputs, artifacts, and events.
 
 Only model-backed audit trials produce bug findings. Project profiles, source indexes, initialization learning notes, dynamic lens packs, and optional local checklist seeders organize context and propose questions; they do not count as discovery evidence by themselves.
 
@@ -85,7 +86,7 @@ fsa run \
 
 Artifacts are written under `runs/<target>-<timestamp>/`.
 
-This live run uses model initialization learning, model-generated lenses, and model enumeration by default. Deterministic local seeders are off unless `--local-seeders` is passed.
+This live run uses model initialization learning, model-generated lenses, model enumeration, audit trials, aggregation, and source-level verification by default. Deterministic local seeders are off unless `--local-seeders` is passed. Executable PoC planning and execution are off by default.
 
 Each audit round also writes `round_<n>_context_retrieval.json`. This artifact records which source slices were included for each audit item, why they were selected, how much budget they used, and whether optional QMD retrieval was available. Use it to debug recall quality before interpreting a no-finding as a model reasoning failure.
 
@@ -112,6 +113,80 @@ fsa run --config ./audit-config.json --max-items 25
 The default is uncapped.
 
 When `--rounds` is greater than 1, the first enumeration round does not consume the entire cap. The scheduler reserves budget for follow-up rounds and selects the initial checklist with source-location diversity so later modules are not dropped simply because one file produced many early candidates.
+
+## Confirmation And Reproduction
+
+Findings use three confirmation levels:
+
+- `suspected`: at least one model-backed audit trial reported a finding.
+- `confirmed-source`: the independent verification stage confirmed the reasoning from source-level evidence.
+- `confirmed-executable`: an optional local-only reproduction command matched its expected result.
+
+The default `fsa run` mode stops before PoC planning or execution. This keeps vulnerability hunting focused on finding and source-confirming candidates without writing tests or running project commands.
+
+To ask for a local-only reproduction plan at the end of a run:
+
+```bash
+fsa run --config ./audit-config.json --source <source-paths...> --repro plan
+```
+
+To execute local reproductions after all candidate findings are collected:
+
+```bash
+fsa run --config ./audit-config.json --source <source-paths...> --repro execute
+```
+
+You can also run the reproduction stage later against an existing run:
+
+```bash
+fsa reproduce \
+  --run runs/<target-run> \
+  --source <source-paths...> \
+  --repro execute \
+  --verify-top 100
+```
+
+`--verify-top` controls how many ranked findings receive source verification and optional reproduction. Set it high enough when you want the separate reproduction command to cover every candidate in `summary.json`.
+
+The ReproductionAgent writes files only inside a copied workspace under the run directory. It does not modify the target source tree. Execution is limited to structured local test commands such as `cargo test`, `go test`, `node --test`, `pytest`, `forge test`, and comparable local test runners. Public testnet, mainnet, production, broadcast, transfer, credential, and exploit-optimization flows are blocked by policy.
+
+## Default Hunting Profiles
+
+Use the reusable vulnerability-hunting profile when you want a live model-backed run with the project-learning, dynamic-lens, portfolio-enumeration, and multi-round behavior already enabled:
+
+```bash
+fsa run \
+  --config ./configs/vulnerability-hunt.default.json \
+  --target target-audit \
+  --source <source-paths...> \
+  --corpus <reference-paths...> \
+  --provider openai \
+  --model gpt-5.5
+```
+
+For zero-knowledge or constraint-system targets, start from the ZK profile:
+
+```bash
+fsa run \
+  --config ./configs/zk-constraint-hunt.default.json \
+  --target zk-target-audit \
+  --source <source-paths...> \
+  --corpus <specs-books-papers-and-design-notes...> \
+  --provider openai \
+  --model gpt-5.5
+```
+
+Both profiles are live-audit templates, not dry-run templates. They keep deterministic local checklist seeders disabled, enable source-backed portfolio enumeration, use `hybrid` breadth/depth exploration, reserve budget for later rounds, run multiple audit trials per item, and keep PoC reproduction off by default. They intentionally leave `sourcePaths`, `corpusPaths`, and `qmdCollections` empty so public package artifacts do not contain local paths or private collection names.
+
+Use `source-index+qmd` only with a QMD collection scoped to the target material when possible:
+
+```bash
+fsa run \
+  --config ./configs/zk-constraint-hunt.default.json \
+  --source <source-paths...> \
+  --corpus <reference-paths...> \
+  --qmd-collection target-code
+```
 
 ## Context Retrieval
 
@@ -294,6 +369,8 @@ Each run writes:
 - `audit_results.json`: per-item, per-trial findings.
 - `summary.json`: ranked finding summary and coverage.
 - `verifications.json`: independent local-only verification notes.
+- `reproductions.json`: optional local-only reproduction plans and command results when `--repro plan` or `--repro execute` is enabled.
+- `reproduction/<finding-id>/workspace`: optional copied workspace used only for executable reproduction.
 - `report_<id>.md`: private disclosure drafts for top findings.
 - `events.jsonl` and `calls/*.json`: audit trail for coverage analysis.
 

@@ -24,6 +24,7 @@ export * from "./profile/project.js";
 export * from "./provenance/halo2.js";
 export * from "./reports/coverage.js";
 export * from "./reports/disclosure.js";
+export * from "./reproduce/planner.js";
 export * from "./retrieval/context.js";
 export * from "./retrieval/qmd.js";
 export * from "./security/policy.js";

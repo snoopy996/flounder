@@ -43,6 +43,7 @@ flowchart TD
     AUDITN["Audit trials for new items"]
     AGG["Aggregation and ranking"]
     VERIFY["Skeptical local-only verification"]
+    REPRO["Optional ReproductionAgent"]
     REPORT["Private disclosure drafts"]
   end
 
@@ -102,29 +103,35 @@ flowchart TD
   DELTA --> AUDITN
   AUDITN --> AGG
   AGG --> VERIFY
+  VERIFY --> REPRO
   VERIFY --> REPORT
+  REPRO --> REPORT
   PIAI -. default .-> LEARN
   PIAI -. default .-> LENS
   PIAI -. default .-> ENUM
   PIAI -. default .-> AUDIT1
   PIAI -. default .-> DEEPEN
   PIAI -. default .-> VERIFY
+  PIAI -. optional .-> REPRO
   CODEX -. explicit fallback .-> LEARN
   CODEX -. explicit fallback .-> LENS
   CODEX -. explicit fallback .-> ENUM
   CODEX -. explicit fallback .-> AUDIT1
   CODEX -. explicit fallback .-> DEEPEN
   CODEX -. explicit fallback .-> VERIFY
+  CODEX -. explicit fallback .-> REPRO
   CLAUDE -. explicit fallback .-> LEARN
   CLAUDE -. explicit fallback .-> LENS
   CLAUDE -. explicit fallback .-> ENUM
   CLAUDE -. explicit fallback .-> AUDIT1
   CLAUDE -. explicit fallback .-> DEEPEN
   CLAUDE -. explicit fallback .-> VERIFY
+  CLAUDE -. explicit fallback .-> REPRO
   MOCK -. tests .-> LEARN
   MOCK -. tests .-> LENS
   MOCK -. tests .-> ENUM
   MOCK -. tests .-> AUDIT1
+  MOCK -. tests .-> REPRO
   PI --> POLICY
   REPORT --> TRACE
   AGG --> TRACE
@@ -148,6 +155,7 @@ source + corpus
   -> specialized audit trials for new items
   -> aggregation
   -> independent verification plan
+  -> optional local-only reproduction plan or execution
   -> disclosure draft
 ```
 
@@ -192,6 +200,7 @@ Near-miss analysis is a planning heuristic, not a detector. It queues no-finding
 - SpecMismatchAuditor: compares implementation and written spec line by line.
 - ConsensusAuditor: checks ambiguity that could split implementations.
 - VerificationAgent: refutes or confirms findings and writes local-only test scaffolds.
+- ReproductionAgent: optionally writes a minimal local-only reproduction plan, creates tests in a copied workspace, and executes bounded local test commands when explicitly enabled.
 
 Audit roles are declared in `src/agents/registry.ts`. Adding a new role should be a registry change plus tests and, when useful, a local checklist seeder.
 
@@ -269,3 +278,13 @@ Verification code must default to a local-only ladder:
 3. End-to-end local regtest/devnet/forked-node test.
 
 It must not generate or run live-network exploitation flows.
+
+Findings carry a confirmation status:
+
+- `suspected`: at least one model-backed audit trial reported a candidate.
+- `confirmed-source`: the independent verifier confirmed the source reasoning.
+- `confirmed-executable`: an optional local reproduction command matched its expected result.
+
+`AuditorConfig.reproductionMode` defaults to `off`, so normal hunting runs do not write PoC tests or run target project commands. `plan` asks the ReproductionAgent for a structured local-only plan. `execute` copies the configured source roots into `reproduction/<finding-id>/workspace`, writes only relative-path test files inside that workspace, and runs structured local test commands with the shared command-safety policy.
+
+The CLI also exposes `fsa reproduce --run <dir> --source <paths...> --repro plan|execute` so PoC work can be batched after all potential bugs are found. This command reuses `summary.json`, `verifications.json`, and the same ReproductionAgent runner, then updates reports and confirmation status.

@@ -27,6 +27,7 @@ export function aggregate(results: AuditResult[]): AuditSummary {
       evidence: best.evidence,
       exploitSketch: best.exploitSketch,
       fix: best.fix,
+      confirmationStatus: "suspected",
     });
   }
   findings.sort((a, b) => b.score - a.score);

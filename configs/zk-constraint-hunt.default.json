@@ -1,0 +1,154 @@
+{
+  "targetName": "zk-constraint-hunt",
+  "sourcePaths": [],
+  "corpusPaths": [],
+  "provider": "openai",
+  "model": "gpt-5.5",
+  "thinkingLevel": "xhigh",
+  "rounds": 2,
+  "explorationStrategy": "hybrid",
+  "maxNewItemsPerRound": 20,
+  "trials": 6,
+  "maxWorkers": 4,
+  "maxAuditItems": 80,
+  "maxTokens": 8000,
+  "contextCharBudget": 180000,
+  "contextRetrieval": "source-index+qmd",
+  "qmdCommand": "qmd",
+  "qmdLimit": 8,
+  "qmdMinScore": 0.25,
+  "qmdTimeoutMs": 60000,
+  "qmdCollections": [],
+  "portfolioEnumeration": true,
+  "portfolioMaxItems": 24,
+  "projectLearning": true,
+  "dynamicLensDiscovery": true,
+  "localChecklistSeeders": false,
+  "reproductionMode": "off",
+  "reproductionMaxCommands": 3,
+  "reproductionCommandTimeoutMs": 120000,
+  "dryRun": false,
+  "projectContext": {
+    "summary": "Default authorized profile for zero-knowledge and constraint-system audits. Add the target protocol's source, specs, books, papers, design docs, tests, and answer-free historical audit notes as corpus material.",
+    "criticalAssets": [
+      "proof soundness",
+      "constraint coverage",
+      "private witness integrity",
+      "public input binding",
+      "range, booleanity, and lookup correctness",
+      "value and nullifier uniqueness when present"
+    ],
+    "attackerCapabilities": [
+      "A malicious prover can choose private witness values and try to satisfy the circuit with semantically inconsistent values.",
+      "A malicious prover can search for selector, rotation, lookup, copy, equality, range, or arithmetic gaps that let a false statement verify."
+    ],
+    "trustBoundaries": [
+      "witness assignment to circuit constraints",
+      "caller-provided gadget input to internal advice cells",
+      "reference equation to implemented gate polynomial",
+      "lookup table or range-check helper to dependent gadget logic",
+      "public input or instance column to private witness relation"
+    ],
+    "securityInvariants": [
+      "Every witness value that affects a verified statement should be connected to the checks that rely on it.",
+      "Selectors and rotations should activate the intended constraints on every row where the security property is relied on.",
+      "Range, booleanity, lookup, copy, and equality relations should bind the same semantic value consumed by downstream checks.",
+      "Spec equations, exceptional-case assumptions, and protocol invariants should match the implemented gates and gadget composition."
+    ],
+    "focusAreas": [
+      "witness ingress and gadget handoff",
+      "copy, equality, lookup, and instance-column relations",
+      "selector and rotation coverage",
+      "range and boolean constraints",
+      "exceptional-case assumptions",
+      "spec-to-gate polynomial correspondence",
+      "multi-gadget composition boundaries"
+    ],
+    "outOfScope": [
+      "public-network proof exploitation",
+      "mainnet, testnet, or production broadcasting",
+      "working exploit optimization beyond local proof of concept"
+    ],
+    "scenarioGuidance": [
+      "Do not write static bug rules that claim findings. Static extraction should produce only facts, obligations, and retrieval hints.",
+      "Keep deterministic checklist seeders disabled for blind proof runs so the model must enumerate the item before any audit trial can find it.",
+      "Give high priority to source-backed ingress, handoff, selector, lookup, range, and spec-obligation items when the audit budget is capped."
+    ]
+  },
+  "lensPacks": [
+    {
+      "id": "zk-witness-ingress",
+      "displayName": "ZK Witness Ingress",
+      "description": "Audit how private witness values enter checked cells, committed values, accumulators, lookup inputs, and gadget outputs.",
+      "failureModes": [
+        "missing_constraint",
+        "soundness_gap",
+        "spec_impl_mismatch"
+      ],
+      "enumerationGuidance": [
+        "Create items that connect each security-critical witness assignment to the nearest visible check, copy, equality, lookup, range, or public-input relation.",
+        "When a checked internal value depends on a caller-provided gadget input, enumerate that boundary separately from downstream arithmetic."
+      ],
+      "auditGuidance": [
+        "Assignment code is the honest path, not proof of enforcement.",
+        "A positive finding needs a specific missing relation between the upstream semantic value and the checked internal value."
+      ]
+    },
+    {
+      "id": "zk-selector-rotation-coverage",
+      "displayName": "ZK Selector and Rotation Coverage",
+      "description": "Audit whether gates are active on the rows and rotations where their properties are relied on.",
+      "failureModes": [
+        "missing_constraint",
+        "soundness_gap",
+        "spec_impl_mismatch"
+      ],
+      "enumerationGuidance": [
+        "Map selector enable calls, queried rotations, row offsets, and adjacent gadget handoffs.",
+        "Create follow-up items when a no-finding only proves a local equation but not the activation or neighboring boundary."
+      ],
+      "auditGuidance": [
+        "Check selector coverage, row offsets, and rotations together with the property being enforced.",
+        "Do not assume a gate enforces a property outside the rows where its selector is active."
+      ]
+    },
+    {
+      "id": "zk-range-lookup-booleanity",
+      "displayName": "ZK Range, Lookup, and Booleanity",
+      "description": "Audit values that must be bits, limbs, table members, canonical field elements, or bounded scalars.",
+      "failureModes": [
+        "integer_overflow",
+        "missing_constraint",
+        "soundness_gap",
+        "spec_impl_mismatch"
+      ],
+      "enumerationGuidance": [
+        "Find decompositions, running sums, limb splits, lookup inputs, table selectors, and canonicality checks.",
+        "Separate bit/limb recovery items from downstream arithmetic items when both are visible."
+      ],
+      "auditGuidance": [
+        "Trace the same value from decomposition through range, lookup, boolean, and downstream equations.",
+        "Check overflow, truncation, reduction, endianness, and table-domain assumptions against the loaded reference material."
+      ]
+    },
+    {
+      "id": "zk-spec-to-gate",
+      "displayName": "ZK Spec to Gate",
+      "description": "Audit reference equations and exceptional-case assumptions against implemented gate polynomials and gadget composition.",
+      "failureModes": [
+        "spec_impl_mismatch",
+        "missing_constraint",
+        "soundness_gap",
+        "consensus_divergence"
+      ],
+      "enumerationGuidance": [
+        "Map each loaded equation, precondition, and exceptional-case rule to exact source lines for gate creation and assignment.",
+        "Prefer narrow items that pair one reference property with one visible implementation edge."
+      ],
+      "auditGuidance": [
+        "Compare algebraic signs, rotations, selectors, substitutions, helper assumptions, and composition preconditions.",
+        "If a precondition is enforced by a caller or helper, identify that enforcement edge rather than relying on intent."
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -33,6 +33,30 @@ test("checklist seeders enumerate scalar-mul advice dataflow questions from sour
   assert.match(bindingItems[0].location, /halo2_scalar_mul_binding\.rs:13-14/);
   assert.match(bindingItems[0].why, /scalar\/point dataflow context/);
   assert.match(bindingItems[0].securityProperty, /enforced by the downstream gates/);
+});
+
+test("source loader includes cross-language code and manifests while skipping run artifacts", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "fsa-loader-"));
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await mkdir(path.join(dir, "infra"), { recursive: true });
+  await mkdir(path.join(dir, "runs", "old-run"), { recursive: true });
+  await writeFile(path.join(dir, "package.json"), JSON.stringify({ dependencies: { express: "latest" } }));
+  await writeFile(path.join(dir, "Dockerfile"), "FROM scratch\n");
+  await writeFile(path.join(dir, "src", "Service.java"), "class Service { void handler() {} }\n");
+  await writeFile(path.join(dir, "src", "schema.graphql"), "type Query { user(id: ID!): User }\n");
+  await writeFile(path.join(dir, "infra", "main.tf"), "resource \"example\" \"target\" {}\n");
+  await writeFile(path.join(dir, "runs", "old-run", "leaked.ts"), "export const stale = true;\n");
+
+  const source = await loadSource([dir]);
+  const loaded = source.map((doc) => doc.path);
+  assert.ok(loaded.some((entry) => entry.endsWith("package.json")));
+  assert.ok(loaded.some((entry) => entry.endsWith("Dockerfile")));
+  assert.ok(loaded.some((entry) => entry.endsWith("Service.java")));
+  assert.ok(loaded.some((entry) => entry.endsWith("schema.graphql")));
+  assert.ok(loaded.some((entry) => entry.endsWith("main.tf")));
+  assert.equal(loaded.some((entry) => entry.includes("leaked.ts")), false);
+  assert.ok(loaded.every((entry) => !path.isAbsolute(entry)));
+  assert.ok(loaded.every((entry) => !entry.includes(dir)));
 });
 
 test("dry-run pipeline writes checklist and summary without model calls", async () => {
@@ -77,6 +101,8 @@ test("mock pipeline runs enumerate, audit, verify, and report end to end", async
 
   const verification = JSON.parse(await readFile(path.join(result.runDir, "verifications.json"), "utf8"));
   assert.equal(verification.length, 2);
+  assert.equal(verification[0].verdict, "confirmed");
+  assert.equal(result.summary.findings[0].confirmationStatus, "confirmed-source");
   const lensPacks = JSON.parse(await readFile(path.join(result.runDir, "lens_packs.json"), "utf8"));
   assert.equal(lensPacks[0].id, "mock-project-lens");
   const learning = JSON.parse(await readFile(path.join(result.runDir, "project_learning.json"), "utf8"));
@@ -106,6 +132,7 @@ test("mock pipeline runs enumerate, audit, verify, and report end to end", async
   const report = await readFile(path.join(result.runDir, reportName), "utf8");
   assert.match(report, /Security disclosure/);
   assert.match(report, /local, isolated environment only/i);
+  assert.match(report, /Confirmation status: confirmed-source/);
 
   for (const artifact of [
     "source_index.json",

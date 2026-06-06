@@ -14,11 +14,12 @@ import { profileProject } from "./profile/project.js";
 import { extractHalo2Provenance } from "./provenance/halo2.js";
 import { renderDisclosure } from "./reports/disclosure.js";
 import { summarizeChecklist, summarizeRun, summarizeSourceIndex } from "./reports/coverage.js";
+import { reproduceTop } from "./reproduce/planner.js";
 import { deepenAuditItems } from "./rounds/deepen.js";
 import { writeLastRunPointer } from "./trace/last-run.js";
 import { RunLogger } from "./trace/logger.js";
 import { loadResumedRunState } from "./trace/run-state.js";
-import type { AuditItem, AuditLensPackDefinition, AuditResult, AuditSummary, LlmClient, ProjectLearning, ProofObligation, ProvenanceGraph } from "./types.js";
+import type { AuditItem, AuditLensPackDefinition, AuditResult, AuditSummary, LlmClient, ProjectLearning, ProofObligation, ProvenanceGraph, Reproduction, Verification } from "./types.js";
 import { publicPath } from "./util/paths.js";
 import { verifyTop } from "./verify/planner.js";
 
@@ -196,13 +197,31 @@ export async function runPipeline(
       logger,
       topK: options.verifyTopK ?? 3,
     });
+    applyVerificationStatuses(summary, verifications);
+    const reproductions = await reproduceTop({
+      cfg: runCfg,
+      findings: summary.findings,
+      verifications,
+      source,
+      ...(projectLearning ? { projectLearning } : {}),
+      ...(llm ? { llm } : {}),
+      logger,
+      topK: options.verifyTopK ?? 3,
+    });
+    applyReproductionStatuses(summary, reproductions);
+    await logger.artifact("summary.json", summary);
     const byId = new Map(verifications.map((verification) => [verification.id, verification]));
+    const reproductionByFindingId = new Map(reproductions.map((reproduction) => [reproduction.findingId, reproduction]));
     for (const finding of summary.findings.slice(0, options.verifyTopK ?? 3)) {
-      await logger.artifact(`report_${finding.id}.md`, renderDisclosure(cfg.targetName, finding, byId.get(finding.id)));
+      await logger.artifact(`report_${finding.id}.md`, renderDisclosure(cfg.targetName, finding, byId.get(finding.id), reproductionByFindingId.get(finding.id)));
     }
   }
 
-  await logger.event("run_done", { findings: summary.findings.length });
+  await logger.event("run_done", {
+    findings: summary.findings.length,
+    confirmedSource: summary.findings.filter((finding) => finding.confirmationStatus === "confirmed-source").length,
+    confirmedExecutable: summary.findings.filter((finding) => finding.confirmationStatus === "confirmed-executable").length,
+  });
   await writeLastRunPointer(path.dirname(logger.runDir), logger.runDir, cfg.targetName);
   return { runDir: logger.runDir, summary };
 }
@@ -253,4 +272,28 @@ function countBy<T, K extends string>(items: T[], keyFn: (item: T) => K): Record
     out[key] = (out[key] ?? 0) + 1;
   }
   return out;
+}
+
+function applyVerificationStatuses(summary: AuditSummary, verifications: Verification[]): void {
+  const byId = new Map(verifications.map((verification) => [verification.id, verification]));
+  for (const finding of summary.findings) {
+    const verification = byId.get(finding.id);
+    if (!verification) continue;
+    finding.verificationVerdict = verification.verdict;
+    if (verification.confirmationStatus === "confirmed-source" && finding.confirmationStatus === "suspected") {
+      finding.confirmationStatus = "confirmed-source";
+    }
+  }
+}
+
+function applyReproductionStatuses(summary: AuditSummary, reproductions: Reproduction[]): void {
+  const byFindingId = new Map(reproductions.map((reproduction) => [reproduction.findingId, reproduction]));
+  for (const finding of summary.findings) {
+    const reproduction = byFindingId.get(finding.id);
+    if (!reproduction) continue;
+    finding.reproductionStatus = reproduction.status;
+    if (reproduction.confirmationStatus === "confirmed-executable") {
+      finding.confirmationStatus = "confirmed-executable";
+    }
+  }
 }

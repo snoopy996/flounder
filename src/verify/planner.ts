@@ -2,7 +2,7 @@ import type { AuditorConfig } from "../config.js";
 import { buildVerifyPrompt, VERIFY_SYSTEM } from "../agents/prompts.js";
 import { SourceIndex } from "../index/source-index.js";
 import { renderProjectLearning } from "../learn/project.js";
-import type { Doc, LlmClient, ProjectLearning, RankedFinding, Verification } from "../types.js";
+import type { Doc, LlmClient, ProjectLearning, RankedFinding, Verification, VerificationVerdict } from "../types.js";
 import type { RunLogger } from "../trace/logger.js";
 
 export async function verifyTop(input: {
@@ -17,6 +17,8 @@ export async function verifyTop(input: {
   if (input.cfg.dryRun || !input.llm) {
     const out = input.findings.slice(0, input.topK).map((finding) => ({
       id: finding.id,
+      verdict: "needs-investigation" as const,
+      confirmationStatus: "suspected" as const,
       markdown: `VERDICT: needs-investigation\n\nDry-run mode skipped model verification for ${finding.title}.`,
     }));
     await input.logger.artifact("verifications.json", out);
@@ -53,8 +55,20 @@ export async function verifyTop(input: {
       maxTokens: input.cfg.maxTokens,
       thinkingLevel: input.cfg.thinkingLevel,
     });
-    out.push({ id: finding.id, markdown });
+    const verdict = parseVerificationVerdict(markdown);
+    out.push({ id: finding.id, verdict, confirmationStatus: verdict === "confirmed" ? "confirmed-source" : "suspected", markdown });
   }
   await input.logger.artifact("verifications.json", out);
   return out;
+}
+
+export function parseVerificationVerdict(markdown: string): VerificationVerdict {
+  const verdictLine = markdown
+    .split(/\r?\n/)
+    .find((line) => /\bverdict\b/i.test(line))
+    ?.toLowerCase();
+  const text = (verdictLine ?? markdown.slice(0, 500)).toLowerCase();
+  if (/false[\s-]?positive|refuted|not\s+a\s+bug/.test(text)) return "false-positive";
+  if (/\bconfirmed(?:[\s-]?source)?\b/.test(text)) return "confirmed";
+  return "needs-investigation";
 }

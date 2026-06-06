@@ -1,6 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import type { AuditItem, AuditLensPackDefinition, AuditResult, ProjectLearning } from "../types.js";
+import type { AuditItem, AuditLensPackDefinition, AuditResult, AuditSummary, ProjectLearning, Verification } from "../types.js";
 
 export interface ResumedRunState {
   runDir: string;
@@ -44,6 +44,21 @@ export async function loadResumedRunState(runDir: string): Promise<ResumedRunSta
     completedRounds,
     ...(pendingRoundItems.length > 0 ? { pendingRoundItems } : {}),
   };
+}
+
+export async function loadSummaryFromRun(runDir: string): Promise<AuditSummary> {
+  const fullRunDir = path.resolve(runDir);
+  const value = await readOptionalObject<AuditSummary>(fullRunDir, "summary.json");
+  if (!value) throw new Error(`Run directory does not contain summary.json: ${runDir}`);
+  return value;
+}
+
+export async function loadVerificationsFromRun(runDir: string): Promise<Verification[]> {
+  return (await readOptionalArray<Verification>(path.resolve(runDir), "verifications.json")) ?? [];
+}
+
+export async function loadProjectLearningFromRun(runDir: string): Promise<ProjectLearning | undefined> {
+  return readOptionalObject<ProjectLearning>(path.resolve(runDir), "project_learning.json");
 }
 
 async function readAuditResults(runDir: string): Promise<AuditResult[]> {

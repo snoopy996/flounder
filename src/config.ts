@@ -1,4 +1,4 @@
-import type { AuditLensPackDefinition, AuditorAgentDefinition, ContextRetrievalMode, ExplorationStrategy, FailureMode, ProjectContext } from "./types.js";
+import type { AuditLensPackDefinition, AuditorAgentDefinition, ContextRetrievalMode, ExplorationStrategy, FailureMode, ProjectContext, ReproductionMode } from "./types.js";
 import { auditorAgentsFromLensPacks } from "./lens/context.js";
 
 export const DEFAULT_FAILURE_MODES: FailureMode[] = [
@@ -58,6 +58,11 @@ export interface AuditorConfig {
   projectLearning: boolean;
   dynamicLensDiscovery: boolean;
   localChecklistSeeders: boolean;
+  reproductionMode: ReproductionMode;
+  reproductionMaxCommands: number;
+  reproductionCommandTimeoutMs: number;
+  reproductionMaxFileBytes: number;
+  reproductionMaxLogBytes: number;
   dryRun: boolean;
 }
 
@@ -94,6 +99,11 @@ export function defaultConfig(): AuditorConfig {
     projectLearning: true,
     dynamicLensDiscovery: true,
     localChecklistSeeders: false,
+    reproductionMode: "off",
+    reproductionMaxCommands: 3,
+    reproductionCommandTimeoutMs: 120_000,
+    reproductionMaxFileBytes: 200_000,
+    reproductionMaxLogBytes: 40_000,
     dryRun: false,
   };
 }

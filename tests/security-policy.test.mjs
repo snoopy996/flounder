@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzeCommandSafety } from "../dist/security/policy.js";
+import { analyzeCommandSafety, analyzeReproductionCommandSafety } from "../dist/security/policy.js";
 
 test("command safety policy blocks live-network broadcast-like commands", () => {
   const decision = analyzeCommandSafety("zcash-cli -testnet sendrawtransaction poc");
@@ -13,4 +13,12 @@ test("command safety policy blocks live-network broadcast-like commands", () => 
 test("command safety policy allows local-only reproductions", () => {
   assert.equal(analyzeCommandSafety("cargo test local_regtest_poc").blocked, false);
   assert.equal(analyzeCommandSafety("zcash-cli -regtest sendrawtransaction fixture").blocked, false);
+});
+
+test("reproduction command policy allows only structured local test commands", () => {
+  assert.equal(analyzeReproductionCommandSafety({ program: "cargo", args: ["test", "local_regtest_poc"] }).blocked, false);
+  assert.equal(analyzeReproductionCommandSafety({ program: "node", args: ["--test", "repro.test.mjs"] }).blocked, false);
+  assert.equal(analyzeReproductionCommandSafety({ program: "zcash-cli", args: ["-testnet", "sendrawtransaction", "poc"] }).blocked, true);
+  assert.equal(analyzeReproductionCommandSafety({ program: "bash", args: ["-lc", "cargo test"] }).blocked, true);
+  assert.equal(analyzeReproductionCommandSafety({ program: "cargo;curl", args: ["test"] }).blocked, true);
 });

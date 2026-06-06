@@ -137,9 +137,9 @@ function responseFor(tag: string, user: string): string {
   }
 
   if (tag.startsWith("verify_")) {
-    return `1. VERDICT: needs-investigation
+    return `1. VERDICT: confirmed
 
-The mock verifier confirms the framework path only. A real verifier must inspect the target circuit and write a local unit test.
+The mock verifier confirms the candidate at source level for framework testing. A real verifier must inspect the target circuit and write a local unit test.
 
 2. Confidence ladder
 
@@ -161,6 +161,30 @@ fn advice_assignment_must_be_constrained() {
 4. Minimal fix
 
 Replace unconstrained advice assignment with copy/equality-constrained assignment.`;
+  }
+
+  if (tag.startsWith("reproduce_")) {
+    return JSON.stringify({
+      summary: "Mock local-only reproduction plan for CI coverage of the ReproductionAgent stage.",
+      files: [
+        {
+          path: "repro.test.mjs",
+          content:
+            "import assert from 'node:assert/strict';\nimport test from 'node:test';\n\ntest('mock reproduction demonstrates the local harness', () => {\n  assert.equal(1 + 1, 2);\n});\n",
+        },
+      ],
+      commands: [
+        {
+          program: "node",
+          args: ["--test", "repro.test.mjs"],
+          cwd: ".",
+          timeoutMs: 30000,
+          expectedExitCode: 0,
+        },
+      ],
+      successCriteria: ["The local test command exits with the expected status inside the copied workspace."],
+      safetyNotes: ["The command uses node --test in a local temporary workspace and does not target a public network."],
+    });
   }
 
   return "";

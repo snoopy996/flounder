@@ -9,6 +9,19 @@ const SOURCE_EXTS = new Set([
   ".sol",
   ".go",
   ".py",
+  ".java",
+  ".kt",
+  ".kts",
+  ".swift",
+  ".rb",
+  ".php",
+  ".ex",
+  ".exs",
+  ".cs",
+  ".fs",
+  ".scala",
+  ".dart",
+  ".lua",
   ".c",
   ".cc",
   ".cpp",
@@ -18,15 +31,85 @@ const SOURCE_EXTS = new Set([
   ".tsx",
   ".js",
   ".jsx",
+  ".sh",
+  ".bash",
   ".move",
   ".cairo",
   ".vy",
   ".circom",
+  ".sql",
+  ".proto",
+  ".graphql",
+  ".gql",
+  ".tf",
+  ".hcl",
+  ".rego",
+  ".json",
+  ".jsonc",
+  ".toml",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".gradle",
+]);
+
+const SOURCE_BASENAMES = new Set([
+  "dockerfile",
+  "makefile",
+  "gemfile",
+  "rakefile",
+  "justfile",
+  "procfile",
+  "pipfile",
+  "go.mod",
+  "go.sum",
+  "cargo.toml",
+  "cargo.lock",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "deno.json",
+  "deno.jsonc",
+  "pyproject.toml",
+  "requirements.txt",
+  "uv.lock",
+  "poetry.lock",
+  "pom.xml",
+  "build.gradle",
+  "settings.gradle",
+  "composer.json",
+  "mix.exs",
+  "foundry.toml",
+  "hardhat.config.ts",
+  "hardhat.config.js",
+  "wrangler.toml",
 ]);
 
 const DOC_EXTS = new Set([".md", ".txt", ".rst", ".tex", ".org", ".adoc", ".html", ".htm"]);
 const PDF_EXTS = new Set([".pdf"]);
-const SKIP_DIRS = new Set([".git", "node_modules", "target", "build", "dist", "__pycache__", "vendor"]);
+const SKIP_DIRS = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  "vendor",
+  "target",
+  "build",
+  "dist",
+  "coverage",
+  "runs",
+  "__pycache__",
+  ".cache",
+  ".npm-cache",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  ".venv",
+  "venv",
+  ".tox",
+]);
 
 export async function loadSource(paths: string[]): Promise<Doc[]> {
   return walk(paths, SOURCE_EXTS, "source");
@@ -90,7 +173,8 @@ async function walkOne(fullPath: string, exts: Set<string>, kind: Doc["kind"], o
   if (!info.isFile()) return;
 
   const ext = path.extname(fullPath).toLowerCase();
-  if (!exts.has(ext)) return;
+  const base = path.basename(fullPath).toLowerCase();
+  if (!exts.has(ext) && !SOURCE_BASENAMES.has(base)) return;
 
   const content = await readDoc(fullPath, ext);
   if (content.trim().length === 0) return;

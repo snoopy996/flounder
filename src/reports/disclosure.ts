@@ -1,6 +1,6 @@
-import type { RankedFinding, Verification } from "../types.js";
+import type { RankedFinding, Reproduction, Verification } from "../types.js";
 
-export function renderDisclosure(target: string, finding: RankedFinding, verification?: Verification): string {
+export function renderDisclosure(target: string, finding: RankedFinding, verification?: Verification, reproduction?: Reproduction): string {
   return `# Security disclosure: ${finding.title}
 
 Private report for maintainers. Please coordinate disclosure.
@@ -9,6 +9,9 @@ Private report for maintainers. Please coordinate disclosure.
 - Severity estimate: ${finding.severity.toUpperCase()}
 - Component / location: ${finding.location}
 - Class: ${finding.failureMode}
+- Confirmation status: ${finding.confirmationStatus}
+- Source verifier verdict: ${verification?.verdict ?? "not-run"}
+- Reproduction status: ${reproduction?.status ?? "not-run"}
 
 ## Summary
 
@@ -31,6 +34,8 @@ ${finding.fix}
 Verification is intended for a local, isolated environment only: unit tests, regtest, devnet, or forked node. It must not be run against a live public network.
 
 ${verification?.markdown ?? "_Verification notes not generated._"}
+
+${reproduction?.markdown ?? "_Executable reproduction not generated. Run the optional ReproductionAgent stage in plan or execute mode when local PoC evidence is needed._"}
 
 ## Disclosure Preferences
 

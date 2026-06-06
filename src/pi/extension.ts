@@ -37,6 +37,9 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
       projectLearning: Type.Optional(Type.Boolean({ description: "When true in live runs, let the model write initialization learning notes before lens discovery." })),
       dynamicLensDiscovery: Type.Optional(Type.Boolean({ description: "When true in live runs, let the model propose project-specific lens packs before enumeration." })),
       localChecklistSeeders: Type.Optional(Type.Boolean({ description: "When true, add deterministic local checklist seeders as coverage hints." })),
+      reproductionMode: Type.Optional(Type.String({ description: "Optional ReproductionAgent mode: off, plan, or execute. Default off." })),
+      reproductionMaxCommands: Type.Optional(Type.Number({ description: "Cap local reproduction commands per finding." })),
+      reproductionCommandTimeoutMs: Type.Optional(Type.Number({ description: "Timeout per local reproduction command in milliseconds." })),
       dryRun: Type.Optional(Type.Boolean({ description: "When true, run local checklist seeders only and make no model calls." })),
     }),
     async execute(_toolCallId, params) {
@@ -65,6 +68,11 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
       cfg.projectLearning = params.projectLearning ?? cfg.projectLearning;
       cfg.dynamicLensDiscovery = params.dynamicLensDiscovery ?? cfg.dynamicLensDiscovery;
       cfg.localChecklistSeeders = params.localChecklistSeeders ?? cfg.dryRun;
+      if (params.reproductionMode === "off" || params.reproductionMode === "plan" || params.reproductionMode === "execute") {
+        cfg.reproductionMode = params.reproductionMode;
+      }
+      cfg.reproductionMaxCommands = params.reproductionMaxCommands ?? cfg.reproductionMaxCommands;
+      cfg.reproductionCommandTimeoutMs = params.reproductionCommandTimeoutMs ?? cfg.reproductionCommandTimeoutMs;
       if (params.model) {
         cfg.enumModel = params.model;
         cfg.auditModel = params.model;

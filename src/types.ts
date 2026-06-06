@@ -1,6 +1,9 @@
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 export type ExplorationStrategy = "breadth" | "depth" | "hybrid";
 export type ContextRetrievalMode = "source-index" | "source-index+qmd";
+export type ReproductionMode = "off" | "plan" | "execute";
+export type ConfirmationStatus = "suspected" | "confirmed-source" | "confirmed-executable";
+export type VerificationVerdict = "confirmed" | "needs-investigation" | "false-positive";
 
 export type BuiltInFailureMode =
   | "missing_constraint"
@@ -178,6 +181,9 @@ export interface RankedFinding {
   evidence: string;
   exploitSketch: string;
   fix: string;
+  confirmationStatus: ConfirmationStatus;
+  verificationVerdict?: VerificationVerdict;
+  reproductionStatus?: ReproductionStatus;
 }
 
 export interface AuditSummary {
@@ -191,7 +197,54 @@ export interface AuditSummary {
 
 export interface Verification {
   id: string;
+  verdict: VerificationVerdict;
+  confirmationStatus: Extract<ConfirmationStatus, "suspected" | "confirmed-source">;
   markdown: string;
+}
+
+export interface ReproductionFile {
+  path: string;
+  content: string;
+}
+
+export interface ReproductionCommand {
+  program: string;
+  args: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  expectedExitCode?: number;
+}
+
+export interface ReproductionPlan {
+  summary: string;
+  files: ReproductionFile[];
+  commands: ReproductionCommand[];
+  successCriteria: string[];
+  safetyNotes: string[];
+}
+
+export type ReproductionStatus = "planned" | "not-run" | "blocked" | "needs-work" | "confirmed-executable" | "skipped";
+
+export interface ReproductionCommandResult {
+  command: ReproductionCommand;
+  exitCode: number | null;
+  expectedExitCode: number;
+  timedOut: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface Reproduction {
+  id: string;
+  findingId: string;
+  status: ReproductionStatus;
+  confirmationStatus: ConfirmationStatus;
+  plan?: ReproductionPlan;
+  workspace?: string;
+  commandResults: ReproductionCommandResult[];
+  markdown: string;
+  blockedReason?: string;
 }
 
 export interface LlmClient {

@@ -11,6 +11,10 @@ import { createLlmClient } from "./llm/client.js";
 import { MockAuditLlmClient } from "./llm/mock.js";
 import { normalizeLensPacks, normalizeProjectContext } from "./lens/context.js";
 import { resolveLastRunDir } from "./trace/last-run.js";
+import { reproduceTop } from "./reproduce/planner.js";
+import { loadProjectLearningFromRun, loadSummaryFromRun, loadVerificationsFromRun } from "./trace/run-state.js";
+import { renderDisclosure } from "./reports/disclosure.js";
+import type { AuditSummary, Reproduction, Verification } from "./types.js";
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
@@ -46,6 +50,43 @@ async function main(argv: string[]): Promise<void> {
     const summary = aggregate(results);
     await logger.artifact("summary.json", summary);
     printCoverage(logger.runDir, summary.coverage);
+    return;
+  }
+
+  if (cmd === "reproduce") {
+    const { cfg, verifyTopK } = await parseConfig(rest);
+    const runDir = readFlag(rest, "--run") ?? readFlag(rest, "--run-dir") ?? (hasFlag(rest, "--resume-last") ? await resolveLastRunDir(cfg.outputDir) : undefined);
+    if (!runDir) throw new Error("--run <dir> is required");
+    if (cfg.sourcePaths.length === 0) throw new Error("--source <paths...> or sourcePaths in --config is required for reproduction");
+    if (cfg.reproductionMode === "off") cfg.reproductionMode = "plan";
+    const summary = await loadSummaryFromRun(runDir);
+    const verifications = await loadVerificationsFromRun(runDir);
+    const projectLearning = await loadProjectLearningFromRun(runDir);
+    const logger = new RunLogger(cfg.outputDir, cfg.targetName, new Date(), { runDir, streamEvents: true });
+    await logger.init();
+    const source = await loadSource(cfg.sourcePaths);
+    const llm = cfg.dryRun ? undefined : hasFlag(rest, "--mock-llm") ? new MockAuditLlmClient(logger) : createLlmClient(cfg, logger);
+    if (llm && "setLogger" in llm && typeof llm.setLogger === "function") {
+      llm.setLogger(logger);
+    }
+    const reproductions = await reproduceTop({
+      cfg,
+      findings: summary.findings,
+      verifications,
+      source,
+      ...(projectLearning ? { projectLearning } : {}),
+      ...(llm ? { llm } : {}),
+      logger,
+      topK: verifyTopK,
+    });
+    applyReproductionStatuses(summary, reproductions);
+    await logger.artifact("summary.json", summary);
+    const verificationById = new Map(verifications.map((verification) => [verification.id, verification]));
+    const reproductionByFindingId = new Map(reproductions.map((reproduction) => [reproduction.findingId, reproduction]));
+    for (const finding of summary.findings.slice(0, verifyTopK)) {
+      await logger.artifact(`report_${finding.id}.md`, renderDisclosure(cfg.targetName, finding, verificationById.get(finding.id), reproductionByFindingId.get(finding.id)));
+    }
+    printCoverage(runDir, summary.coverage);
     return;
   }
 
@@ -85,6 +126,11 @@ async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig; verify
   const qmdCollections = readMultiFlag(args, "--qmd-collection");
   if (qmdCollections.length > 0) cfg.qmdCollections = qmdCollections;
   cfg.portfolioMaxItems = readIntFlag(args, "--portfolio-max-items") ?? cfg.portfolioMaxItems;
+  cfg.reproductionMode = readReproductionModeFlag(args) ?? cfg.reproductionMode;
+  cfg.reproductionMaxCommands = readIntFlag(args, "--repro-max-commands") ?? cfg.reproductionMaxCommands;
+  cfg.reproductionCommandTimeoutMs = readIntFlag(args, "--repro-timeout-ms") ?? cfg.reproductionCommandTimeoutMs;
+  cfg.reproductionMaxFileBytes = readIntFlag(args, "--repro-max-file-bytes") ?? cfg.reproductionMaxFileBytes;
+  cfg.reproductionMaxLogBytes = readIntFlag(args, "--repro-max-log-bytes") ?? cfg.reproductionMaxLogBytes;
   if (args.includes("--dry-run")) cfg.dryRun = true;
   if (args.includes("--no-project-learning")) cfg.projectLearning = false;
   if (args.includes("--no-dynamic-lenses")) cfg.dynamicLensDiscovery = false;
@@ -142,6 +188,26 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   }
   const rawPortfolioEnumeration = raw.portfolioEnumeration ?? raw.portfolio_enumeration;
   if (typeof rawPortfolioEnumeration === "boolean") cfg.portfolioEnumeration = rawPortfolioEnumeration;
+  const rawReproductionMode = raw.reproductionMode ?? raw.reproduction_mode ?? raw.repro;
+  if (rawReproductionMode === "off" || rawReproductionMode === "plan" || rawReproductionMode === "execute") {
+    cfg.reproductionMode = rawReproductionMode;
+  }
+  const rawReproductionMaxCommands = raw.reproductionMaxCommands ?? raw.reproduction_max_commands;
+  if (typeof rawReproductionMaxCommands === "number" && Number.isFinite(rawReproductionMaxCommands)) {
+    cfg.reproductionMaxCommands = Math.max(1, Math.floor(rawReproductionMaxCommands));
+  }
+  const rawReproductionCommandTimeoutMs = raw.reproductionCommandTimeoutMs ?? raw.reproduction_command_timeout_ms;
+  if (typeof rawReproductionCommandTimeoutMs === "number" && Number.isFinite(rawReproductionCommandTimeoutMs)) {
+    cfg.reproductionCommandTimeoutMs = Math.max(1000, Math.floor(rawReproductionCommandTimeoutMs));
+  }
+  const rawReproductionMaxFileBytes = raw.reproductionMaxFileBytes ?? raw.reproduction_max_file_bytes;
+  if (typeof rawReproductionMaxFileBytes === "number" && Number.isFinite(rawReproductionMaxFileBytes)) {
+    cfg.reproductionMaxFileBytes = Math.max(1000, Math.floor(rawReproductionMaxFileBytes));
+  }
+  const rawReproductionMaxLogBytes = raw.reproductionMaxLogBytes ?? raw.reproduction_max_log_bytes;
+  if (typeof rawReproductionMaxLogBytes === "number" && Number.isFinite(rawReproductionMaxLogBytes)) {
+    cfg.reproductionMaxLogBytes = Math.max(1000, Math.floor(rawReproductionMaxLogBytes));
+  }
   const rawQmdTimeoutMs = raw.qmdTimeoutMs ?? raw.qmd_timeout_ms;
   if (typeof rawQmdTimeoutMs === "number" && Number.isFinite(rawQmdTimeoutMs)) cfg.qmdTimeoutMs = Math.max(1000, Math.floor(rawQmdTimeoutMs));
   const rawQmdCollections = raw.qmdCollections ?? raw.qmd_collections ?? raw.qmdCollection ?? raw.qmd_collection;
@@ -208,6 +274,11 @@ function readRetrievalFlag(args: string[]): AuditorConfig["contextRetrieval"] | 
   return value === "source-index" || value === "source-index+qmd" ? value : undefined;
 }
 
+function readReproductionModeFlag(args: string[]): AuditorConfig["reproductionMode"] | undefined {
+  const value = readFlag(args, "--repro") ?? readFlag(args, "--reproduction");
+  return value === "off" || value === "plan" || value === "execute" ? value : undefined;
+}
+
 async function readResumeRunDir(args: string[], outputDir: string): Promise<string | undefined> {
   if (hasFlag(args, "--resume-last")) return resolveLastRunDir(outputDir);
   const resumeRun = readFlag(args, "--resume-run");
@@ -238,6 +309,7 @@ function printHelp(): void {
 Usage:
   fsa run --target <name> --source <paths...> [--corpus <paths...>] [--dry-run]
   fsa audit --checklist <file> --source <paths...>
+  fsa reproduce --run <dir> --source <paths...> [--repro plan|execute]
 
 Options:
   --config <file>         JSON config with projectContext, lensPacks, agents, models, paths
@@ -265,13 +337,30 @@ Options:
   --qmd-timeout-ms <n>    QMD query timeout, default 60000
   --qmd-collection <names...>
                           limit QMD retrieval to one or more collections
+  --verify-top <n>        top ranked findings for verification and reproduction, default 3
   --dry-run               no model calls; local checklist seeders only
   --no-project-learning   disable model initialization learning notes
   --no-dynamic-lenses     disable model-generated project lens packs
   --local-seeders         add deterministic local checklist seeders
   --no-local-seeders      require checklist items to come from model enumeration
+  --repro <mode>          off|plan|execute, default off for run; reproduce defaults to plan
+  --repro-max-commands <n>
+                          cap local reproduction commands per finding, default 3
+  --repro-timeout-ms <n>  timeout per local reproduction command, default 120000
   --mock-llm              run full pipeline with deterministic mock model
 `);
+}
+
+function applyReproductionStatuses(summary: AuditSummary, reproductions: Reproduction[]): void {
+  const byFindingId = new Map(reproductions.map((reproduction) => [reproduction.findingId, reproduction]));
+  for (const finding of summary.findings) {
+    const reproduction = byFindingId.get(finding.id);
+    if (!reproduction) continue;
+    finding.reproductionStatus = reproduction.status;
+    if (reproduction.confirmationStatus === "confirmed-executable") {
+      finding.confirmationStatus = "confirmed-executable";
+    }
+  }
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {
