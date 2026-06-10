@@ -28,9 +28,10 @@ test("codex-cli fallback isolates non-interactive audit calls from user config a
     workdir: "tmp-workdir",
     outputFile: "tmp-workdir/last-message.txt",
     thinkingLevel: "xhigh",
+    webSearch: "disabled",
   });
 
-  assert.deepEqual(args.slice(0, 3), ["exec", "-c", 'model_reasoning_effort="xhigh"']);
+  assert.deepEqual(args.slice(0, 5), ["exec", "-c", "web_search=disabled", "-c", 'model_reasoning_effort="xhigh"']);
   assert.ok(args.includes("--ephemeral"));
   assert.ok(args.includes("--json"));
   assert.ok(args.includes("--ignore-user-config"));

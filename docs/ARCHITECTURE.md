@@ -98,6 +98,8 @@ Model calls use pi-ai providers by default. `provider=codex-cli` and `provider=c
 
 Model and provider selection stays runtime-configured. Do not assume every model family is available through every provider.
 
+For blind benchmarks with `provider=codex-cli`, set `FSA_CODEX_WEB_SEARCH=disabled` to prevent public-report contamination. Real audits may leave Codex web search at its runtime default or set `FSA_CODEX_WEB_SEARCH=live|cached|disabled` explicitly.
+
 ## Pi Integration
 
 The package extension exposes `fsa_hunt` and installs the shared shell-command guardrail. It does not expose a staged audit driver.

@@ -21,11 +21,13 @@ export class CodexCliClient implements LlmClient {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "fsa-codex-cli-"));
     const outputFile = path.join(tmp, "last-message.txt");
     const prompt = renderPrompt(input.system, input.user, input.agentic ?? false);
+    const webSearch = readCodexWebSearchEnv();
     const args = buildCodexExecArgs({
       model: input.model,
       workdir: tmp,
       outputFile,
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+      ...(webSearch ? { webSearch } : {}),
     });
     let eventChain = Promise.resolve();
     let textLineCount = 0;
@@ -99,6 +101,7 @@ export function buildCodexExecArgs(input: {
   workdir: string;
   outputFile: string;
   thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  webSearch?: "live" | "cached" | "disabled";
 }): string[] {
   const args = [
     "exec",
@@ -120,7 +123,16 @@ export function buildCodexExecArgs(input: {
   if (input.thinkingLevel) {
     args.splice(1, 0, "-c", `model_reasoning_effort="${input.thinkingLevel}"`);
   }
+  if (input.webSearch) {
+    args.splice(1, 0, "-c", `web_search=${input.webSearch}`);
+  }
   return args;
+}
+
+function readCodexWebSearchEnv(): "live" | "cached" | "disabled" | undefined {
+  const value = process.env.FSA_CODEX_WEB_SEARCH;
+  if (value === "live" || value === "cached" || value === "disabled") return value;
+  return undefined;
 }
 
 function renderPrompt(system: string, user: string, agentic: boolean): string {
