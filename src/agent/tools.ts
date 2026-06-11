@@ -23,6 +23,12 @@ import type { ProjectMemory } from "./memory.js";
 // Bug classes, search schedules, source facts, and report actions are not
 // default tools because they tell the model how to reason.
 
+export interface FixPatch {
+  path: string;
+  old: string;
+  new: string;
+}
+
 export interface AgentFinding {
   id: string;
   title: string;
@@ -35,12 +41,19 @@ export interface AgentFinding {
   confidence: number;
   confirmationStatus: ConfirmationStatus;
   commandRunId?: string;
+  /** Optional machine-applicable fix for differential (fail-after-fix) confirmation. */
+  fixPatch?: FixPatch;
+  /** Patterns the cited test prints once the exploit is blocked by the applied fix. */
+  patchedSuccessPatterns?: string[];
 }
 
 export interface CommandRunRecord {
   id: string;
   passed: boolean;
   command: string;
+  /** Structured command, so the framework can re-run it for differential confirmation. */
+  commandSpec: ReproductionCommand;
+  successPatterns: string[];
   matched: string[];
   missing: string[];
   exitCode: number | null;
@@ -151,6 +164,7 @@ export function ingestFindingsFromScratch(session: AgentSession): { parsed: numb
     const citedRun = commandRunId ? session.commandRuns.find((run) => run.id === commandRunId) : undefined;
     const confirmed = Boolean(citedRun?.passed);
     const id = asString(record.id) ?? `f${findings.length + 1}`;
+    const fixPatch = normalizeFixPatch(record.fix_patch ?? record.fixPatch);
     findings.push({
       id,
       title,
@@ -163,6 +177,10 @@ export function ingestFindingsFromScratch(session: AgentSession): { parsed: numb
       confidence: clampFloat(record.confidence, 0, 1, 0.5),
       confirmationStatus: confirmed ? "confirmed-executable" : "suspected",
       ...(confirmed && citedRun ? { commandRunId: citedRun.id } : {}),
+      ...(fixPatch ? { fixPatch } : {}),
+      ...(asStringList(record.patched_success_patterns ?? record.patchedSuccessPatterns).length > 0
+        ? { patchedSuccessPatterns: asStringList(record.patched_success_patterns ?? record.patchedSuccessPatterns) }
+        : {}),
     });
 
     if (commandRunId && !citedRun) errors.push(`findings[${idx}]: command_id "${commandRunId}" does not match a bash command run.`);
@@ -287,6 +305,8 @@ const bashTool: AgentTool = {
       id: runId,
       passed,
       command: normalized.raw,
+      commandSpec: normalized.command,
+      successPatterns: normalized.successPatterns,
       matched: patternCheck.matched,
       missing: patternCheck.missing,
       exitCode: result.exitCode,
@@ -498,6 +518,16 @@ function asStringList(value: unknown): string[] {
 
 function asBool(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeFixPatch(value: unknown): FixPatch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const path = asString(raw.path);
+  const oldText = typeof raw.old === "string" ? raw.old : undefined;
+  const newText = typeof raw.new === "string" ? raw.new : undefined;
+  if (!path || oldText === undefined || oldText.length === 0 || newText === undefined) return undefined;
+  return { path, old: oldText, new: newText };
 }
 
 function asEnum<T extends string>(value: unknown, allowed: T[], fallback: T): T {

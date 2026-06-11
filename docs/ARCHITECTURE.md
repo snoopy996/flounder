@@ -69,12 +69,19 @@ There are no default bug-class, dataflow, checklist, memory, or report tools. Op
 
 ## Confirmation Boundary
 
-The hard rule is that the model cannot confirm a bug by assertion. Artifact semantics enforce it:
+The hard rule is that the model cannot confirm a bug by assertion. The problem is that the model otherwise controls all three of: the code under test, the test, and the success criterion. Three mechanisms take that control away.
 
-- A **finding** is a candidate that cited a `bash` `command_id` of a `purpose=confirm` run that passed (expected exit status plus every declared success pattern). Only findings get `confirmed-executable` status, enter `hunt_findings.json`/`summary.findings`, and get a disclosure report.
-- A **hypothesis** is any other candidate. Hypotheses are recorded prominently in `hunt_hypotheses.json` and counted in `summary.coverage.hypotheses`, but they are not findings and get no report.
+**Status ladder** (`ConfirmationStatus`):
 
-Confirmation requires a real test/build runner. An inspection command (`cat`, `rg`, …) can never mint confirmation even with `purpose=confirm` and a matching success pattern — otherwise a model could forge proof by printing a success string from a file it wrote itself (`isAgentConfirmCommand` in `src/security/policy.ts`).
+- A **hypothesis** (`suspected`) is any candidate not backed by a passing test. Recorded prominently in `hunt_hypotheses.json` and counted in `summary.coverage.hypotheses`, but it is not a finding and gets no report.
+- `confirmed-executable` — cited a `bash` `command_id` of a `purpose=confirm` run that passed (expected exit plus every declared success pattern).
+- `confirmed-differential` — the strongest: also survived fail-after-fix (below). `confirmed-*` candidates are findings: they enter `hunt_findings.json`/`summary.findings` and get a disclosure report.
+
+**1. Confirmation requires a real test/build runner.** An inspection command (`cat`, `rg`, …) can never mint confirmation even with `purpose=confirm` and a matching success pattern — otherwise a model could forge proof by printing a success string from a file it wrote itself (`isAgentConfirmCommand` in `src/security/policy.ts`).
+
+**2. Baseline integrity.** Right after the target source is copied, the framework records the pristine file set (`listWorkspaceFiles`, before corpus/warm-up/any model action) on the session. `write`/`edit` reject any path in that baseline — the model may only add new test files. So a test runs against code the model cannot have weakened to make its own exploit pass.
+
+**3. Differential confirmation (fail-after-fix, `src/agent/differential.ts`).** A passing exploit test only proves the test passes. For `confirmed-differential`, a finding also supplies `fix_patch` ({path, old, new}, an edit to a *target-source* file) and `patched_success_patterns`. The framework — not the model, which cannot touch target source — applies the fix to the pristine source, re-runs the *same* cited test, then restores the source. It confirms only when the exploit reproduced on the baseline AND, after the fix, the test still compiles/runs, the blocked-exploit signal appears, and the exploit no longer reproduces. A tautological test behaves identically before and after the fix, so it cannot reach `confirmed-differential`; a fix that merely breaks the build fails the "still runs" check.
 
 `bash` routes through `src/security/sandbox.ts` and the command-safety policy. It must stay local-only: source inspection, unit tests, fixtures, local regtest/devnet, forked local nodes, or isolated harnesses. Public network broadcast, transfer, credential use, persistence, exploit optimization, destructive commands, and paths outside the copied workspace are blocked.
 
@@ -84,7 +91,7 @@ Confirmation is only reachable if the model's local test can compile and run, wh
 
 Warm-up is **lazy**: the `bash` tool runs it once, on the first test/build command (`isAgentConfirmCommand`), rather than eagerly before the loop. So a read-only audit, or a run that fails authentication before it ever runs a test, pays nothing for it.
 
-The next hardening target is to make executable confirmation less self-certifying: a generic passing test or printed success string should not be enough to prove exploitability. Confirmation should prefer tests that touch target code, exercise the vulnerable condition, and match framework- or verifier-owned success signals.
+Remaining hardening targets: an independent-refutation pass (a fresh-context model tries to break a confirmed finding), enforced network isolation for confirm runs, and turning `confirmed-differential` findings into stored regression tests that future runs re-execute.
 
 ## Memory And History
 

@@ -6,9 +6,10 @@ import { renderDisclosure, reportArtifactName } from "../reports/disclosure.js";
 import { projectHistoryDir, projectHistoryManifestPath, updateProjectHistory } from "../trace/history.js";
 import { writeLastRunPointer } from "../trace/last-run.js";
 import { RunLogger } from "../trace/logger.js";
-import type { AuditSummary, Doc, LlmClient, RankedFinding, Severity } from "../types.js";
+import type { AuditSummary, ConfirmationStatus, Doc, LlmClient, RankedFinding, Severity } from "../types.js";
 import { publicPath } from "../util/paths.js";
 import { listWorkspaceFiles, normalizeRelativePath, prepareSandboxWorkspace, writeSandboxFiles, type SandboxWorkspace } from "../security/sandbox.js";
+import { runDifferentialConfirmation, type DifferentialResult } from "./differential.js";
 import { runHuntLoop } from "./loop.js";
 import { ProjectMemory } from "./memory.js";
 import { isPiSessionProvider, runHuntSession } from "./pi-session.js";
@@ -128,12 +129,29 @@ export async function runHunt(
     await logger.event("hunt_findings_parse_errors", { errors: findingParse.errors.length });
   }
 
+  // Differential confirmation: for confirmed-executable findings that declared a
+  // machine-applicable fix, apply it to the pristine target source and re-run the
+  // same exploit test. A real bug's test is blocked by its fix; a tautology is
+  // not. Survivors reach the strongest status, confirmed-differential.
+  if (session.workspace && session.baselineFiles) {
+    const differentials: DifferentialResult[] = [];
+    for (const finding of session.findings) {
+      if (finding.confirmationStatus !== "confirmed-executable" || !finding.fixPatch || !finding.commandRunId) continue;
+      const exploitRun = session.commandRuns.find((run) => run.id === finding.commandRunId);
+      if (!exploitRun) continue;
+      const result = await runDifferentialConfirmation({ workspace: session.workspace, finding, exploitRun, baselineFiles: session.baselineFiles, cfg, logger });
+      differentials.push(result);
+      if (result.confirmed) finding.confirmationStatus = "confirmed-differential";
+    }
+    if (differentials.length > 0) await logger.artifact("hunt_differential.json", differentials);
+  }
+
   // Hard artifact semantics: only an execution-confirmed candidate is a finding.
   // Everything else is a hypothesis. Hypotheses are surfaced as their own artifact
   // (not buried), but they do not get disclosure reports and are not counted as
   // findings — that is the whole point of the confirmation gate.
-  const confirmed = session.findings.filter((finding) => finding.confirmationStatus === "confirmed-executable");
-  const hypotheses = session.findings.filter((finding) => finding.confirmationStatus !== "confirmed-executable");
+  const confirmed = session.findings.filter((finding) => isConfirmed(finding.confirmationStatus));
+  const hypotheses = session.findings.filter((finding) => !isConfirmed(finding.confirmationStatus));
 
   await logger.artifact("hunt_transcript.json", { stoppedReason, steps });
   await logger.artifact("hunt_findings.json", confirmed);
@@ -203,9 +221,9 @@ function buildSummary(confirmed: AgentFinding[], hypotheses: AgentFinding[], ste
 async function persistFindingMemory(memory: ProjectMemory, confirmed: AgentFinding[], hypotheses: AgentFinding[]): Promise<void> {
   for (const finding of confirmed) {
     await memory.remember({
-      note: `${finding.title} (confirmed-executable) at ${finding.location}: ${finding.description}`.slice(0, 600),
+      note: `${finding.title} (${finding.confirmationStatus}) at ${finding.location}: ${finding.description}`.slice(0, 600),
       kind: "finding",
-      tags: ["hunt", finding.severity, "confirmed-executable"],
+      tags: ["hunt", finding.severity, finding.confirmationStatus],
       sourceRef: finding.location,
     });
   }
@@ -221,9 +239,13 @@ async function persistFindingMemory(memory: ProjectMemory, confirmed: AgentFindi
   }
 }
 
+function isConfirmed(status: ConfirmationStatus): boolean {
+  return status === "confirmed-executable" || status === "confirmed-differential";
+}
+
 function toRankedFinding(finding: AgentFinding): RankedFinding {
   const severityWeight: Record<Severity, number> = { info: 0.2, low: 0.4, medium: 0.6, high: 0.85, critical: 1 };
-  const confirmBoost = finding.confirmationStatus === "confirmed-executable" ? 1.3 : 1;
+  const confirmBoost = finding.confirmationStatus === "confirmed-differential" ? 1.5 : finding.confirmationStatus === "confirmed-executable" ? 1.3 : 1;
   const score = round2(severityWeight[finding.severity] * (0.5 + 0.5 * finding.confidence) * confirmBoost);
   return {
     id: finding.id,
@@ -239,7 +261,7 @@ function toRankedFinding(finding: AgentFinding): RankedFinding {
     exploitSketch: finding.exploitSketch,
     fix: finding.fix,
     confirmationStatus: finding.confirmationStatus,
-    ...(finding.confirmationStatus === "confirmed-executable" ? { reproductionStatus: "confirmed-executable" as const } : {}),
+    ...(isConfirmed(finding.confirmationStatus) ? { reproductionStatus: "confirmed-executable" as const } : {}),
   };
 }
 

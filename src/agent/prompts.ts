@@ -35,7 +35,10 @@ The one rule the framework enforces:
   accepts it or the invariant breaks. The strongest proof fails on the current code and passes only after your minimal fix.
   A test that merely prints a success string without triggering the bug proves nothing — do not cite it.
 - findings.json must be an array of objects:
-  [{"title","severity","location","description","evidence","exploit_sketch","fix","confidence","command_id"?}]
+  [{"title","severity","location","description","evidence","exploit_sketch","fix","confidence","command_id"?,"fix_patch"?,"patched_success_patterns"?}]
+- For the strongest status (confirmed-differential), add "fix_patch": {"path","old","new"} (a minimal edit to the target source) and
+  "patched_success_patterns" (what your test prints once the exploit is blocked). The framework applies the fix to the pristine source and
+  re-runs your test: a real bug reproduces before the fix and is blocked after it. You cannot apply the fix yourself.
 
 White-hat boundaries (non-negotiable):
 - Verification is local-only: unit tests, component tests, local regtest/devnet, or forked/fake nodes. Never target a public testnet, mainnet, production, or any live network or third-party system.

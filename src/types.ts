@@ -3,7 +3,7 @@ export type ExplorationStrategy = "breadth" | "depth" | "hybrid";
 export type ContextRetrievalMode = "source-index" | "source-index+qmd";
 export type ReproductionMode = "off" | "plan" | "execute";
 export type ScopeMode = "augment" | "restrict";
-export type ConfirmationStatus = "suspected" | "confirmed-source" | "confirmed-executable";
+export type ConfirmationStatus = "suspected" | "confirmed-source" | "confirmed-executable" | "confirmed-differential";
 export type VerificationVerdict = "confirmed" | "needs-investigation" | "false-positive";
 
 export type BuiltInFailureMode =

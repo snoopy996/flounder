@@ -7,6 +7,7 @@ import { defaultConfig } from "../dist/config.js";
 import { ProjectMemory } from "../dist/agent/memory.js";
 import { buildTools, ingestFindingsFromScratch, newSession } from "../dist/agent/tools.js";
 import { runHunt } from "../dist/agent/hunt.js";
+import { runDifferentialConfirmation } from "../dist/agent/differential.js";
 import { isPiSessionProvider, mapThinkingLevel } from "../dist/agent/pi-session.js";
 import { MockAuditLlmClient } from "../dist/llm/mock.js";
 import { RunLogger } from "../dist/trace/logger.js";
@@ -191,6 +192,60 @@ test("baseline integrity: the model cannot modify the target source under audit"
     const edit = await tool("edit").run({ path: "halo2_missing_constraint.rs", old: "assign_advice", new: "x" }, ctx);
     assert.match(edit.observation, /blocked/i);
     assert.equal(session.baselineFiles.has("exploit_test.rs"), false, "new files are not part of the protected baseline");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("differential confirmation: a real fix blocks the exploit; a no-op fix does not confirm", async () => {
+  const dir = await tempDir();
+  try {
+    const cfg = defaultConfig();
+    const logger = await tempLogger(dir);
+    // Target source with the bug (accepts everything), plus the model's exploit test.
+    await writeFile(path.join(dir, "vuln.mjs"), "export function check(x) { return true; }\n");
+    await writeFile(
+      path.join(dir, "exploit.test.mjs"),
+      'import { check } from "./vuln.mjs";\nif (check("bad-input")) console.log("EXPLOIT OK"); else console.log("EXPLOIT BLOCKED");\n',
+    );
+    const workspace = { absolute: dir, relative: "w" };
+    const baselineFiles = new Set(["vuln.mjs"]);
+    const exploitRun = {
+      id: "cmd1",
+      passed: true,
+      command: "node exploit.test.mjs",
+      commandSpec: { program: "node", args: ["exploit.test.mjs"], expectedExitCode: 0, timeoutMs: 30000 },
+      successPatterns: ["EXPLOIT OK"],
+      matched: ["EXPLOIT OK"],
+      missing: [],
+      exitCode: 0,
+      expectedExitCode: 0,
+      timedOut: false,
+      workspace: "w",
+    };
+    const baseFinding = { id: "f1", title: "x", severity: "high", location: "vuln.mjs:1", description: "", evidence: "", exploitSketch: "", fix: "", confidence: 0.9, confirmationStatus: "confirmed-executable", commandRunId: "cmd1" };
+
+    // A real fix: the exploit is blocked after it -> confirmed-differential.
+    const realFix = {
+      ...baseFinding,
+      fixPatch: { path: "vuln.mjs", old: "return true;", new: 'return x === "good";' },
+      patchedSuccessPatterns: ["EXPLOIT BLOCKED"],
+    };
+    const real = await runDifferentialConfirmation({ workspace, finding: realFix, exploitRun, baselineFiles, cfg, logger });
+    assert.equal(real.confirmed, true, real.reason);
+    assert.equal(real.exploitStillReproduces, false);
+    // Source restored to baseline after the differential.
+    assert.equal(await readFile(path.join(dir, "vuln.mjs"), "utf8"), "export function check(x) { return true; }\n");
+
+    // A no-op fix (changes nothing relevant): exploit still reproduces -> not confirmed.
+    const noopFix = {
+      ...baseFinding,
+      fixPatch: { path: "vuln.mjs", old: "export function check", new: "export function check /* noop */" },
+      patchedSuccessPatterns: ["EXPLOIT BLOCKED"],
+    };
+    const noop = await runDifferentialConfirmation({ workspace, finding: noopFix, exploitRun, baselineFiles, cfg, logger });
+    assert.equal(noop.confirmed, false);
+    assert.equal(noop.exploitStillReproduces, true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
