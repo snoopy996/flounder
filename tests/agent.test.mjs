@@ -168,6 +168,34 @@ test("an inspection command cannot forge confirmation by printing a success patt
   }
 });
 
+test("baseline integrity: the model cannot modify the target source under audit", async () => {
+  const dir = await tempDir();
+  try {
+    const cfg = defaultConfig();
+    cfg.sourcePaths = [fixtures];
+    const logger = await tempLogger(dir);
+    const session = newSession();
+    session.baselineFiles = new Set(["halo2_missing_constraint.rs", "halo2_scalar_mul_binding.rs"]);
+    const ctx = { cfg, source: [], corpus: [], memory: new ProjectMemory(path.join(dir, "memory.jsonl")), logger, session };
+
+    // Writing over a target-source file is blocked — the model can't tamper with what it audits.
+    const overwrite = await tool("write").run({ path: "halo2_missing_constraint.rs", content: "fn neutralized() {}\n" }, ctx);
+    assert.match(overwrite.observation, /blocked/i);
+    assert.match(overwrite.observation, /target source/i);
+
+    // A new test file is fine.
+    const newFile = await tool("write").run({ path: "exploit_test.rs", content: "// poc\n" }, ctx);
+    assert.match(newFile.observation, /wrote exploit_test\.rs/);
+
+    // Editing a target-source file is blocked too (even before the old-text check).
+    const edit = await tool("edit").run({ path: "halo2_missing_constraint.rs", old: "assign_advice", new: "x" }, ctx);
+    assert.match(edit.observation, /blocked/i);
+    assert.equal(session.baselineFiles.has("exploit_test.rs"), false, "new files are not part of the protected baseline");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("hunt produces an execution-confirmed finding and banks cross-run memory", async () => {
   const dir = await tempDir();
   try {

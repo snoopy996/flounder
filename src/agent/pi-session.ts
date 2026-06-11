@@ -163,7 +163,7 @@ You are in full control of the investigation. There is no fixed checklist and no
 
 Use the provided tools to investigate:
 - read: read loaded source/corpus or files you create in the sandbox.
-- write / edit: create or modify files (e.g. a local test harness) inside the copied workspace only.
+- write / edit: create or modify your own test/scratch files inside the copied workspace. You CANNOT modify the target source under audit — write tests as new files; to show a fix, declare it in the finding's "fix" field and the framework applies it during confirmation.
 - bash: run one local command. Use purpose="inspect" to explore (ls/find/rg/cat). Use purpose="confirm" to PROVE a bug with a real local test/build runner (cargo test, forge test, go test, node --test, pytest, …) and declared success_patterns.
 
 How to report:

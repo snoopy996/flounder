@@ -8,7 +8,7 @@ import { writeLastRunPointer } from "../trace/last-run.js";
 import { RunLogger } from "../trace/logger.js";
 import type { AuditSummary, Doc, LlmClient, RankedFinding, Severity } from "../types.js";
 import { publicPath } from "../util/paths.js";
-import { normalizeRelativePath, prepareSandboxWorkspace, writeSandboxFiles, type SandboxWorkspace } from "../security/sandbox.js";
+import { listWorkspaceFiles, normalizeRelativePath, prepareSandboxWorkspace, writeSandboxFiles, type SandboxWorkspace } from "../security/sandbox.js";
 import { runHuntLoop } from "./loop.js";
 import { ProjectMemory } from "./memory.js";
 import { isPiSessionProvider, runHuntSession } from "./pi-session.js";
@@ -65,6 +65,10 @@ export async function runHunt(
     const workspace = await prepareSandboxWorkspace(cfg.sourcePaths, logger.runDir, "hunt/workspace");
     session.workspace = workspace;
     workspaceCwd = workspace.absolute;
+    // Capture the pristine target source before anything else touches the
+    // workspace, so the model cannot modify the code it is auditing — a
+    // confirmation must run against untampered source.
+    session.baselineFiles = await listWorkspaceFiles(workspace.absolute);
     // Make corpus (specs, papers, books) visible to the agent: copy it into the
     // workspace so the model can read/grep it, and list it in the manifest. This
     // reference material is often what makes a subtle bug discoverable.

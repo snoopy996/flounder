@@ -175,6 +175,32 @@ export function safeName(input: string): string {
   return input.replace(/[^a-zA-Z0-9_.-]+/g, "_").slice(0, 80) || "finding";
 }
 
+/**
+ * List every file currently in the workspace as workspace-relative POSIX paths.
+ * Called right after the target source is copied (before corpus, warm-up, or any
+ * model action) to capture the pristine baseline — the set of files the model is
+ * not allowed to modify, so confirmation runs against untampered target source.
+ */
+export async function listWorkspaceFiles(workspaceAbsolute: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  const walk = async (absDir: string, relDir: string): Promise<void> => {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (shouldSkipCopyName(entry.name)) continue;
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(path.join(absDir, entry.name), rel);
+      else out.add(rel);
+    }
+  };
+  await walk(workspaceAbsolute, "");
+  return out;
+}
+
 async function copyDirectoryContents(sourceDir: string, targetDir: string): Promise<void> {
   const entries = await readdir(sourceDir, { withFileTypes: true });
   for (const entry of entries) {

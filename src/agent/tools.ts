@@ -59,6 +59,12 @@ export interface AgentSession {
   scratchFiles: Map<string, string>;
   /** Whether the toolchain warm-up has run for this session's workspace. */
   prepared?: boolean;
+  /**
+   * Workspace-relative paths of the pristine target source (captured right after
+   * copy). The model may not write/edit these, so a confirmation runs against
+   * untampered code — it can only add new test files.
+   */
+  baselineFiles?: Set<string>;
 }
 
 export function newSession(): AgentSession {
@@ -202,6 +208,7 @@ const writeTool: AgentTool = {
     if (content === undefined) return { observation: 'error: "content" is required.' };
     if (Buffer.byteLength(content, "utf8") > ctx.cfg.reproductionMaxFileBytes) return { observation: "error: content exceeds the configured file-size limit." };
 
+    if (baselineProtected(ctx, normalized)) return { observation: baselineBlockMessage(normalized) };
     if (normalized !== "findings.json") {
       const blockedFile = firstBlockedSandboxFile([{ path: normalized, content }]);
       if (blockedFile) return { observation: `blocked: ${blockedFile}` };
@@ -219,7 +226,7 @@ const writeTool: AgentTool = {
 const editTool: AgentTool = {
   name: "edit",
   description:
-    'Replace text in a file inside the copied sandbox workspace. args: {"path": relative, "old": string, "new": string, "replace_all"?: bool}. This never modifies the target source tree.',
+    'Replace text in a test/scratch file you created in the sandbox workspace. args: {"path": relative, "old": string, "new": string, "replace_all"?: bool}. It cannot modify the target source under audit — write your tests as new files; the framework applies your declared fix during confirmation.',
   async run(args, ctx) {
     const target = asString(args.path);
     if (!target) return { observation: 'error: "path" is required.' };
@@ -231,6 +238,7 @@ const editTool: AgentTool = {
     if (!workspace) return { observation: "error: edit needs on-disk source roots (sourcePaths); none are configured for this run." };
     const existing = await readWorkspaceCandidate(ctx, target);
     if (!existing) return { observation: `error: no sandbox file matches "${target}".` };
+    if (baselineProtected(ctx, existing.path)) return { observation: baselineBlockMessage(existing.path) };
     if (!existing.content.includes(oldText)) return { observation: `error: old text was not found in ${existing.path}.` };
 
     const next = asBool(args.replace_all, false) ? existing.content.split(oldText).join(newText) : existing.content.replace(oldText, newText);
@@ -324,6 +332,16 @@ function confirmFailureReason(
   if (normalized.successPatterns.length === 0) return "purpose=confirm requires success_patterns describing the invariant break or patched regression";
   if (!exitMatched) return `exit=${result.exitCode} expected=${result.expectedExitCode} timedOut=${result.timedOut}`;
   return `missing success patterns: ${patternCheck.missing.join(" | ")}`;
+}
+
+/** True when the path is part of the pristine target source the model may not modify. */
+function baselineProtected(ctx: ToolContext, normalizedPath: string): boolean {
+  if (normalizedPath === "findings.json") return false;
+  return Boolean(ctx.session.baselineFiles?.has(normalizedPath));
+}
+
+function baselineBlockMessage(normalizedPath: string): string {
+  return `blocked: "${normalizedPath}" is part of the target source under audit and cannot be modified. Write your test/PoC as a NEW file. To demonstrate a bug, prove it on the unmodified code; the framework applies your declared fix during confirmation.`;
 }
 
 async function ensurePrepared(ctx: ToolContext, workspace: SandboxWorkspace): Promise<void> {
