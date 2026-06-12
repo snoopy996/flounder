@@ -1,0 +1,8 @@
+{
+  "provider": "claude-code",
+  "model": "claude-opus-4-8",
+  "thinking": "high",
+  "models": {
+    "dig": { "thinking": "xhigh" }
+  }
+}
