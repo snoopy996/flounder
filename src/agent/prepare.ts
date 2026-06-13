@@ -42,7 +42,7 @@ export interface PrepareReport {
   results: PrepareCommandResult[];
 }
 
-export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorkspace; cfg: AuditorConfig; logger: RunLogger }): Promise<PrepareReport> {
+export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorkspace; cfg: AuditorConfig; logger: RunLogger; cacheDir?: string }): Promise<PrepareReport> {
   const plans = await detectToolchains(input.workspace.absolute);
   if (plans.length === 0) {
     await input.logger.event("hunt_prepare_skipped", { reason: "no supported toolchain manifest detected" });
@@ -60,7 +60,7 @@ export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorks
         expectedExitCode: 0,
         ...(plan.cwd ? { cwd: plan.cwd } : {}),
       };
-      const run = await runSandboxCommand(command, input.workspace.absolute, input.cfg.reproductionMaxLogBytes, input.cfg.sourcePaths);
+      const run = await runSandboxCommand(command, input.workspace.absolute, input.cfg.reproductionMaxLogBytes, input.cfg.sourcePaths, input.cacheDir);
       const ok = run.exitCode === 0 && !run.timedOut;
       const record: PrepareCommandResult = {
         toolchain: plan.toolchain,
@@ -99,8 +99,12 @@ async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPla
   };
   const has = (name: string): boolean => manifests.some((entry) => entry.name === name);
 
+  // Warm with `cargo build` (not `--tests`): it compiles the heavy runtime
+  // dependency tree (the bulk of build time, which `cargo test` then reuses)
+  // without trying to compile the model's scratch test files under tests/ — those
+  // may not compile yet, and a `--tests` warm-up would fail on them and warm nothing.
   const cargoDir = shallowest((name) => name === "Cargo.toml");
-  if (cargoDir !== undefined) plans.push({ toolchain: "cargo", ...cwd(cargoDir), commands: [["cargo", "fetch"], ["cargo", "build", "--tests"]] });
+  if (cargoDir !== undefined) plans.push({ toolchain: "cargo", ...cwd(cargoDir), commands: [["cargo", "fetch"], ["cargo", "build"]] });
 
   const foundryDir = shallowest((name) => name === "foundry.toml");
   if (foundryDir !== undefined) plans.push({ toolchain: "forge", ...cwd(foundryDir), commands: [["forge", "build"]] });

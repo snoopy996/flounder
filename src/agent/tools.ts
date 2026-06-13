@@ -380,7 +380,7 @@ function baselineBlockMessage(normalizedPath: string): string {
 async function ensurePrepared(ctx: ToolContext, workspace: SandboxWorkspace): Promise<void> {
   if (!ctx.cfg.huntPrepare || ctx.session.prepared) return;
   ctx.session.prepared = true; // set before awaiting so a second test command does not re-trigger
-  await prepareWorkspaceToolchain({ workspace, cfg: ctx.cfg, logger: ctx.logger });
+  await prepareWorkspaceToolchain({ workspace, cfg: ctx.cfg, logger: ctx.logger, ...(ctx.session.buildCacheDir ? { cacheDir: ctx.session.buildCacheDir } : {}) });
 }
 
 async function ensureWorkspace(ctx: ToolContext): Promise<SandboxWorkspace | undefined> {
