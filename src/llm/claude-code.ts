@@ -35,7 +35,7 @@ export class ClaudeCodeClient implements LlmClient {
       "--disable-slash-commands",
       "--no-session-persistence",
       "--permission-mode",
-      "dontAsk",
+      "bypassPermissions",
     ];
 
     try {
