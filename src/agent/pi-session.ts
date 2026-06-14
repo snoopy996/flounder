@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import type { AuditorConfig } from "../config.js";
 import type { RunLogger } from "../trace/logger.js";
 import type { TranscriptStep } from "./prompts.js";
-import type { AgentTool, ToolContext } from "./tools.js";
+import { readScratchScopes, type AgentTool, type ToolContext } from "./tools.js";
 
 // Continuous-session driver (point 5). Instead of re-driving a stateless
 // complete() once per step — which re-sends the whole transcript every turn and
@@ -68,14 +68,32 @@ export async function runHuntSession(input: {
   // Budget: the continuous session runs until the model stops on its own. Cap the
   // number of model turns so a real run cannot grow unbounded in cost/time.
   const maxTurns = Math.max(1, Math.floor(input.cfg.huntMaxSteps));
+  // Forced-finalize budget: the loop driver nudges and force-writes when its step
+  // budget runs out, but a continuous session has no such hook — on a large
+  // codebase the model can spend its whole turn budget exploring and stop (or be
+  // aborted) without ever writing scopes.json, leaving a 0-scope map (observed on
+  // a 60-turn run). After the main budget is spent we grant a few extra turns and
+  // explicitly ask for the artifact the model already has the material to produce.
+  const MAX_FINALIZE_TURNS = 3;
   let turns = 0;
   let budgetAborted = false;
+  let finalizing = false;
+  let finalizeTurns = 0;
+  let finalizeAborted = false;
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "tool_execution_start") {
       void input.logger.event("hunt_step", { step: stepNo + 1, tool: event.toolName });
     } else if (event.type === "tool_execution_end" && event.isError) {
       void input.logger.event("hunt_tool_error", { tool: event.toolName });
     } else if (event.type === "turn_end") {
+      if (finalizing) {
+        finalizeTurns += 1;
+        if (finalizeTurns >= MAX_FINALIZE_TURNS && !finalizeAborted) {
+          finalizeAborted = true;
+          void session.abort();
+        }
+        return;
+      }
       turns += 1;
       if (turns >= maxTurns && !budgetAborted) {
         budgetAborted = true;
@@ -85,30 +103,52 @@ export async function runHuntSession(input: {
     }
   });
 
-  try {
-    await session.prompt(buildSessionPrompt({
-      cfg: input.cfg,
-      fileManifest: input.fileManifest,
-      ...(input.scopeNote ? { scopeNote: input.scopeNote } : {}),
-      ...(input.memoryHint ? { memoryHint: input.memoryHint } : {}),
-      ...(input.deep ? { deep: true } : {}),
-      ...(input.deepFocus ? { deepFocus: input.deepFocus } : {}),
-      ...(input.map ? { map: true } : {}),
-    }));
-    return { steps, stoppedReason: budgetAborted ? "step-budget" : "finished" };
-  } catch (error) {
-    if (budgetAborted) return { steps, stoppedReason: "step-budget" };
-    const message = error instanceof Error ? error.message : String(error);
-    await input.logger.event("hunt_session_error", { error: message.slice(0, 500) });
-    // Authentication is an environment setup step, not a finding. Surface it
-    // loudly and actionably instead of silently producing zero findings.
-    if (looksLikeAuthError(message)) {
-      throw new Error(
-        `hunt session could not authenticate provider "${input.cfg.provider}". Log pi into the provider (e.g. \`pi\` then /login for ${input.cfg.provider}), or run with --mock-llm for an offline check. Underlying: ${message.slice(0, 300)}`,
-      );
+  // Map-phase forced finalize: if the map stopped (cleanly or on budget) without a
+  // usable scope inventory, spend a bounded extra turn asking explicitly for it.
+  // readScratchScopes reads the same in-memory scratch the tools write and that
+  // hunt.ts reads after this returns, so this is the exact "0 scopes" condition.
+  const finalizeMapIfEmpty = async (): Promise<void> => {
+    if (!input.map || finalizing) return;
+    if (readScratchScopes(input.ctx.session).length > 0) return;
+    finalizing = true;
+    await input.logger.event("hunt_map_finalize", { reason: "no scopes written before stop" });
+    try {
+      await session.prompt(MAP_FINALIZE_PROMPT);
+    } catch {
+      // best-effort: an abort during the finalize turns is expected
     }
-    steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: message.slice(0, 500) });
-    return { steps, stoppedReason: "error" };
+    await input.logger.event("hunt_map_finalize_done", { scopes: readScratchScopes(input.ctx.session).length });
+  };
+
+  try {
+    try {
+      await session.prompt(buildSessionPrompt({
+        cfg: input.cfg,
+        fileManifest: input.fileManifest,
+        ...(input.scopeNote ? { scopeNote: input.scopeNote } : {}),
+        ...(input.memoryHint ? { memoryHint: input.memoryHint } : {}),
+        ...(input.deep ? { deep: true } : {}),
+        ...(input.deepFocus ? { deepFocus: input.deepFocus } : {}),
+        ...(input.map ? { map: true } : {}),
+      }));
+    } catch (error) {
+      if (!budgetAborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        await input.logger.event("hunt_session_error", { error: message.slice(0, 500) });
+        // Authentication is an environment setup step, not a finding. Surface it
+        // loudly and actionably instead of silently producing zero findings.
+        if (looksLikeAuthError(message)) {
+          throw new Error(
+            `hunt session could not authenticate provider "${input.cfg.provider}". Log pi into the provider (e.g. \`pi\` then /login for ${input.cfg.provider}), or run with --mock-llm for an offline check. Underlying: ${message.slice(0, 300)}`,
+          );
+        }
+        steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: message.slice(0, 500) });
+        return { steps, stoppedReason: "error" };
+      }
+      // budgetAborted: fall through to the forced finalize below
+    }
+    await finalizeMapIfEmpty();
+    return { steps, stoppedReason: budgetAborted ? "step-budget" : "finished" };
   } finally {
     unsubscribe();
     await shutdownSession(session);
@@ -203,6 +243,8 @@ ${input.map
       ? "Begin the obligation-driven method: model the system, rank and commit to the most soundness-critical region (unless one is pinned above), then enumerate its obligations from design intent and discharge each by naming the enforcing line or flagging its absence. Record every obligation and its status to findings.json. Do not wrap up while obligations remain unchecked."
       : "Begin the audit. When you have investigated thoroughly and written findings.json, stop."}`;
 }
+
+const MAP_FINALIZE_PROMPT = `Your exploration budget is spent. Do NOT read, grep, or run anything else. Based ONLY on what you have already examined, WRITE scopes.json now at the workspace root as your very next action — call the write tool once with a JSON array of objects {"id","obligation","region":"file:lines","lenses":[...],"exposure","difficulty","score","why"} covering the most soundness-critical regions you saw (entrypoints that move value, accounting/share math, authorization, liquidation/swap invariants, oracle binding). Partial but concrete beats empty. After writing, emit {"done": true}. Output only the write tool call.`;
 
 function mapIntro(): string {
   return `You are an autonomous white-hat security auditor doing the MAP phase: enumerate the COMPLETE set of audit SCOPES for this target. You are NOT finding or proving bugs yet — a later phase deep-audits each scope. Your job is COVERAGE, not a ranked shortlist that drops things.
