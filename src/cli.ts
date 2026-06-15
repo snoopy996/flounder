@@ -219,6 +219,8 @@ pi-style read/write/edit/bash tools and durable cross-run memory. The framework
 supplies capability and verification, not a checklist.
 
 Options:
+  --source <paths...>     code under audit; the model reads (not modifies) these. Point at a buildable root (or use --build-root) to enable execution confirmation.
+  --corpus <paths...>     design/reference MATERIALS the model reads to derive what the code MUST enforce: specifications, whitepapers, design notes, protocol docs, prior audit reports, incident write-ups/post-mortems, even a relevant book chapter. Copied into the sandbox under corpus/; the map/dig prompts treat them as design intent (lens 1). This is the supported way to give the audit context — it is CONTEXT (what the system is supposed to guarantee), not answers. Do not put the suspected bug or its location here; provide the spec and let the model find the gap.
   --config <file>         JSON config with project context, models, and paths
   --provider <name>       pi-ai provider (default openai-codex); codex-cli/claude-code are CLI fallbacks
   --model <name>          set the hunt model
