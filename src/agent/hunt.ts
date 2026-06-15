@@ -14,7 +14,7 @@ import { runRefutation } from "./refutation.js";
 import { runHuntLoop } from "./loop.js";
 import { ProjectMemory } from "./memory.js";
 import { loadScopeInventory, saveScopeInventory, scopeProgress } from "./scope-store.js";
-import { isPiSessionProvider, runHuntSession } from "./pi-session.js";
+import { isPiSessionProvider, runHuntSession, SessionLlmClient } from "./pi-session.js";
 import type { TranscriptStep } from "./prompts.js";
 import { buildTools, clearScratchFindings, dedupeFindings, ingestFindingsFromScratch, newSession, readScratchScopes, type AgentFinding, type AgentSession, type AuditScope, type ToolContext } from "./tools.js";
 
@@ -368,7 +368,10 @@ export async function runHunt(
     const candidates = session.findings.filter((finding) => isConfirmed(finding.confirmationStatus));
     if (candidates.length > 0) {
       const refuteCfg = withRole(cfg, "refute");
-      const refuteLlm = options.llm ?? createLlmClient(refuteCfg, logger);
+      // Session-only providers (e.g. openai-codex via OAuth) have no API key, so the
+      // pi-ai complete() path errors out. Route refutation through an AgentSession,
+      // the same authenticated mechanism the dig uses, so the skeptic actually runs.
+      const refuteLlm = options.llm ?? (isPiSessionProvider(refuteCfg.provider) ? new SessionLlmClient(refuteCfg, logger) : createLlmClient(refuteCfg, logger));
       // Give the skeptic the PoC/scratch test files so it can audit the
       // confirmation's TRUST ASSUMPTIONS (e.g. an out-of-spec mocked verifier that
       // makes a vacuous "confirmation"), not just re-derive the invariant.

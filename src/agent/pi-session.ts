@@ -3,6 +3,7 @@ import { createAgentSession, defineTool, SessionManager, type ToolDefinition } f
 import { Type } from "typebox";
 import type { AuditorConfig } from "../config.js";
 import type { RunLogger } from "../trace/logger.js";
+import type { LlmClient } from "../types.js";
 import type { TranscriptStep } from "./prompts.js";
 import { readScratchScopes, scratchHasFindings, type AgentTool, type ToolContext } from "./tools.js";
 
@@ -310,6 +311,64 @@ Obligation-driven method (general, not a hint about this target):
 - DISCHARGE each obligation one at a time. Finding that "a constraint exists" is NOT discharge: state exactly what the constraint binds the value to and confirm that referent is the value the obligation actually requires — not merely an adjacent/internal value, and not merely a relationship among witnessed values when the property names a specific trusted source. A value bound to the wrong referent leaves the obligation UNMET.
 - A MISSING enforcing constraint is the finding. Missing-constraint bugs look like ordinary assignment/witnessing on every line — reason from the obligation, never from whether the code "looks standard", "matches upstream", or is "the canonical implementation" (the reference can carry the same bug; some bugs live in the canonical code itself).
 - Record every obligation and its status (discharged-with-line / UNMET / uncertain) to findings.json as you go; an UNMET obligation is a finding (or a hypothesis with location and the exact missing edge).`;
+}
+
+// One-shot completion over a codex/pi AgentSession (OAuth-authed). Needed for code
+// paths that want a single completion on a SESSION-only provider (e.g. openai-codex),
+// where pi-ai's API-key-based complete() fails with "No API key". Used for the
+// refutation/realism pass so it actually runs on codex instead of erroring out.
+export class SessionLlmClient implements LlmClient {
+  constructor(private readonly cfg: AuditorConfig, private readonly logger?: RunLogger) {}
+  async complete(input: { tag: string; system: string; user: string; model?: string; maxTokens?: number; thinkingLevel?: AuditorConfig["thinkingLevel"]; agentic?: boolean }): Promise<string> {
+    const modelName = input.model ?? this.cfg.auditModel;
+    const model = getModelSafe(this.cfg.provider, modelName);
+    if (!model) throw new Error(`session completion: unknown provider/model ${this.cfg.provider}/${modelName}`);
+    const { session } = await createAgentSession({
+      model,
+      thinkingLevel: mapThinkingLevel(input.thinkingLevel ?? this.cfg.thinkingLevel),
+      noTools: "all",
+      customTools: [],
+      cwd: process.cwd(),
+      sessionManager: SessionManager.inMemory(),
+    });
+    let text = "";
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "agent_end") {
+        const messages = (event as { messages?: Array<{ role?: string; content?: unknown }> }).messages ?? [];
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          if (messages[i]?.role === "assistant") {
+            text = extractMessageText(messages[i]?.content);
+            break;
+          }
+        }
+      }
+    });
+    try {
+      await session.prompt(`${input.system}\n\n${input.user}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (looksLikeAuthError(message)) {
+        throw new Error(`session completion could not authenticate provider "${this.cfg.provider}". Run \`pi\` /login for ${this.cfg.provider}. Underlying: ${message.slice(0, 200)}`);
+      }
+      throw error;
+    } finally {
+      unsubscribe();
+      await shutdownSession(session);
+    }
+    await this.logger?.call({ tag: input.tag, model: `${this.cfg.provider}/${modelName}`, system: input.system, user: input.user, response: text });
+    if (text.trim().length === 0) throw new Error(`session completion returned no text: ${this.cfg.provider}/${modelName}`);
+    return text;
+  }
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => (typeof block === "string" ? block : block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string" ? (block as { text: string }).text : ""))
+      .join("");
+  }
+  return "";
 }
 
 function getModelSafe(provider: string, modelId?: string): ReturnType<typeof getModel> | undefined {
