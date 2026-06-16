@@ -9,6 +9,13 @@ import { renderToolCatalogue } from "./tools.js";
 // gives capability and refuses to trust unverified claims; it does not direct
 // the model's reasoning.
 
+// Shared confirmation-validity rule for every mode that builds a PoC. NOT a domain
+// playbook, NOT a component taxonomy — a single mindset (exploit as a real attacker
+// actually could) that the model applies per case. It is the constructive form of
+// the standard the refutation step already enforces (ground 2): a PoC that grants the
+// attacker a capability the deployed system would deny proves a counterfactual.
+const POC_TRUST_RULE = `- Build the PoC the way the ATTACKER would: assume only the capabilities a real attacker actually has against the deployed system, and never grant yourself one the system would deny them. Exercise the real components rather than stubbing whatever the system trusts or pins; where a trusted component genuinely cannot run locally, the stub must reproduce only behavior an attacker could really obtain from it — success only for an input an honest party could truly produce, a value within its real bounds — never blanket success. If the exploit only works once you give yourself a capability the attacker lacks, you have not shown a real bug; record it as suspected.`;
+
 export const HUNT_SYSTEM = `You are an autonomous white-hat security auditor working on AUTHORIZED source code.
 Your goal is to find real, exploitable, high-impact security vulnerabilities in the loaded source and to prove them.
 
@@ -53,6 +60,7 @@ The one rule the framework enforces:
 - A confirm test must exercise the ACTUAL vulnerable code path: construct the malicious input or condition and show the code
   accepts it or the invariant breaks. The strongest proof fails on the current code and passes only after your minimal fix.
   A test that merely prints a success string without triggering the bug proves nothing — do not cite it.
+${POC_TRUST_RULE}
 - findings.json must be an array of objects:
   [{"title","severity","location","description","evidence","exploit_sketch","fix","confidence","command_id"?,"fix_patch"?,"patched_success_patterns"?}]
 - For the strongest status (confirmed-differential), add "fix_patch": {"path","old","new"} (a minimal edit to the target source) and
@@ -97,6 +105,7 @@ How you act:
 The one rule the framework enforces:
 - A claim is not proven until a local command confirms it. A finding reaches "confirmed-executable" only when findings.json cites a bash command_id from a purpose=confirm run that actually passed (expected exit status AND declared success_patterns observed). Otherwise it is recorded as "suspected". An UNMET obligation you cannot yet execute is still worth recording as a suspected finding/hypothesis with its exact missing edge.
 - A confirm test must exercise the ACTUAL vulnerable code path. The strongest proof fails on the current code and passes only after a minimal fix. A test that merely prints a success string without triggering the bug proves nothing.
+${POC_TRUST_RULE}
 - findings.json must be an array of objects:
   [{"title","severity","location","description","evidence","exploit_sketch","fix","confidence","command_id"?,"fix_patch"?,"patched_success_patterns"?}]
 - For confirmed-differential, add "fix_patch": {"path","old","new"} and "patched_success_patterns". The framework applies the fix to pristine source and re-runs your test.
@@ -206,7 +215,8 @@ Method:
    - REAL: the PoC passes and triggers the bug -> record the finding at its true severity, cite command_id of the passing confirm run, and supply fix_patch + patched_success_patterns so the framework can differentially confirm (exploit reproduces before the fix, blocked after).
    - FALSE POSITIVE: after genuine effort the bug does NOT reproduce because it is mitigated/false -> record ONE finding of severity "info" whose title starts "REFUTED:" and whose evidence cites the exact mitigating code (file:line) that makes it safe.
 
-The one hard rule: a claim is only confirmed-executable by citing command_id of a purpose=confirm run that actually passed and actually triggered the vulnerable path. Never confirm by assertion or by re-reasoning. Be skeptical: default to refuting unless an executable PoC proves the bug.`;
+The one hard rule: a claim is only confirmed-executable by citing command_id of a purpose=confirm run that actually passed and actually triggered the vulnerable path. Never confirm by assertion or by re-reasoning. Be skeptical: default to refuting unless an executable PoC proves the bug.
+${POC_TRUST_RULE}`;
 
 export function buildVerifyKickoff(input: {
   target: string;

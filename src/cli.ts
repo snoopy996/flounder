@@ -63,6 +63,7 @@ async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig }> {
   if (args.includes("--no-prepare")) cfg.huntPrepare = false;
   cfg.huntPrepareTimeoutMs = readIntFlag(args, "--prepare-timeout-ms") ?? cfg.huntPrepareTimeoutMs;
   if (args.includes("--no-refute")) cfg.huntRefute = false;
+  if (args.includes("--no-appeal")) cfg.huntAppeal = false;
   if (args.includes("--deep")) cfg.huntDeep = true;
   cfg.huntMaxScopes = readIntFlag(args, "--max-scopes") ?? cfg.huntMaxScopes;
   cfg.huntMapSteps = readIntFlag(args, "--map-steps") ?? cfg.huntMapSteps;
@@ -121,6 +122,8 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   if (typeof rawHuntPrepareTimeoutMs === "number" && Number.isFinite(rawHuntPrepareTimeoutMs)) cfg.huntPrepareTimeoutMs = Math.max(10_000, Math.floor(rawHuntPrepareTimeoutMs));
   const rawHuntRefute = raw.huntRefute ?? raw.hunt_refute;
   if (typeof rawHuntRefute === "boolean") cfg.huntRefute = rawHuntRefute;
+  const rawHuntAppeal = raw.huntAppeal ?? raw.hunt_appeal;
+  if (typeof rawHuntAppeal === "boolean") cfg.huntAppeal = rawHuntAppeal;
   const rawHuntDeep = raw.huntDeep ?? raw.hunt_deep;
   if (typeof rawHuntDeep === "boolean") cfg.huntDeep = rawHuntDeep;
   const rawHuntDeepFocus = raw.huntDeepFocus ?? raw.hunt_deep_focus;
@@ -235,6 +238,7 @@ Options:
                           hunt: per-command timeout for the warm-up, default 600000
   --build-root <path>     hunt: directory copied into the sandbox so it is buildable (e.g. a workspace root); defaults to --source
   --no-refute             hunt: skip the independent-refutation pass on confirmed findings
+  --no-appeal             hunt: skip the one faithful-PoC appeal a refuted finding may make
   --deep                  hunt: map → dig flow (map enumerates scopes, dig deep-audits the top ones)
   --deep-focus <path>     hunt: skip map and deep-audit one pinned region (implies --deep)
   --max-scopes <n>        hunt: how many un-audited scopes the dig phase audits per run, default 6

@@ -49,6 +49,10 @@ export interface AgentFinding {
   refutation?: { refuted: boolean; reason: string; unrealistic?: boolean };
   /** An execution-proven finding an independent skeptic disputes — kept, but flagged for humans. */
   disputed?: boolean;
+  /** Outcome of the one appeal a refuted finding may make: rebuild a faithful PoC that
+   * answers the skeptic's objection. Recorded whether upheld or not, so the original
+   * confirmation + refutation + appeal trail is never lost. */
+  appeal?: { attempted: boolean; upheld: boolean; reason: string };
   /** The map-phase scope this finding came from (when the map → dig flow produced it). */
   scopeId?: string;
 }

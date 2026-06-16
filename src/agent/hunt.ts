@@ -395,6 +395,55 @@ export async function runHunt(
         }
       }
       if (verdicts.length > 0) await logger.artifact("hunt_refutation.json", verdicts);
+
+      // Appeal: a finding the skeptic rejected as UNREALISTIC gets ONE chance to
+      // answer the objection with a faithful PoC. A real bug whose first PoC was
+      // merely unfaithful survives; a vacuous one cannot. The original confirmation,
+      // the refutation, and the appeal outcome are all kept (finding.appeal) so a
+      // wrong refutation is recoverable, never silently lost.
+      if (cfg.huntAppeal !== false) {
+        const appealCfg = withRole(cfg, "dig");
+        for (const finding of candidates) {
+          if (!finding.refutation?.refuted || !finding.refutation.unrealistic) continue;
+          const critique = finding.refutation.reason;
+          // Run the appeal in isolation: snapshot the real finding set, let the verify
+          // session produce its own, then restore so only the original finding is updated.
+          const mainFindings = session.findings;
+          const mainCount = session.counters.finding;
+          clearScratchFindings(session);
+          session.findings = [];
+          await runPhase(appealCfg, { mode: "verify", verifySeed: buildAppealSeed(finding, critique), maxSteps: cfg.huntDigSteps });
+          ingestFindingsFromScratch(session);
+          const appealOut = session.findings;
+          session.findings = mainFindings;
+          session.counters.finding = mainCount;
+          const reConfirmed = appealOut.find((produced) => isConfirmed(produced.confirmationStatus) && !/^REFUTED:/i.test(produced.title));
+          let upheld = false;
+          if (reConfirmed) {
+            // Re-judge the NEW PoC by the same skeptic standard. Survives → real bug recovered.
+            const appealPocFiles = [...session.scratchFiles.entries()]
+              .filter(([scratchPath]) => /\.t\.(sol|rs|ts|js)$/i.test(scratchPath) || /(^|\/)tests?\//i.test(scratchPath) || /(poc|exploit)/i.test(scratchPath))
+              .map(([scratchPath, content]) => ({ path: scratchPath, content }));
+            await runRefutation({ findings: [reConfirmed], source, cfg: refuteCfg, llm: refuteLlm, logger, max: 1, ...(appealPocFiles.length > 0 ? { pocFiles: appealPocFiles } : {}) });
+            upheld = !(reConfirmed.refutation?.refuted && reConfirmed.refutation.unrealistic);
+            if (upheld) {
+              finding.confirmationStatus = reConfirmed.confirmationStatus;
+              if (reConfirmed.commandRunId) finding.commandRunId = reConfirmed.commandRunId;
+              if (reConfirmed.fixPatch) finding.fixPatch = reConfirmed.fixPatch;
+              finding.disputed = false;
+            }
+          }
+          finding.appeal = {
+            attempted: true,
+            upheld,
+            reason: upheld
+              ? "rebuilt a faithful PoC that survived re-refutation"
+              : reConfirmed?.refutation?.reason ?? "no faithful PoC produced on appeal",
+          };
+          await logger.event("hunt_appeal", { findingId: finding.id, upheld });
+        }
+        clearScratchFindings(session);
+      }
     }
   }
 
@@ -500,7 +549,7 @@ function renderRunReport(input: {
   out.push(`## Confirmed findings (${input.confirmed.length})`, "");
   if (input.confirmed.length === 0) out.push("_None reached execution-confirmed status this run. See hypotheses below._", "");
   for (const finding of [...input.confirmed].sort(bySeverity)) {
-    out.push(`### [${finding.severity.toUpperCase()}] ${finding.title} — ${finding.confirmationStatus}${finding.disputed ? " — ⚠ DISPUTED by independent refutation" : ""}`);
+    out.push(`### [${finding.severity.toUpperCase()}] ${finding.title} — ${finding.confirmationStatus}${finding.disputed ? " — ⚠ DISPUTED by independent refutation" : ""}${finding.appeal?.upheld ? " — recovered on appeal (faithful PoC survived re-refutation)" : ""}`);
     if (finding.scopeId) out.push(`- Scope: \`${finding.scopeId}\``);
     out.push(`- Location: ${finding.location}`);
     if (finding.description) out.push(`- ${clip(finding.description, 700)}`);
@@ -512,7 +561,7 @@ function renderRunReport(input: {
   if (input.hypotheses.length > 0) {
     out.push(`## Hypotheses — suspected, need a human or a test (${input.hypotheses.length})`, "");
     for (const finding of [...input.hypotheses].sort(bySeverity)) {
-      out.push(`- **[${finding.severity.toUpperCase()}]** ${finding.title} — ${finding.location}${finding.scopeId ? ` (scope \`${finding.scopeId}\`)` : ""}`);
+      out.push(`- **[${finding.severity.toUpperCase()}]** ${finding.title} — ${finding.location}${finding.scopeId ? ` (scope \`${finding.scopeId}\`)` : ""}${finding.appeal?.attempted ? " — refuted; appeal not upheld" : finding.disputed ? " — ⚠ disputed by refutation" : ""}`);
     }
     out.push("");
   }
@@ -622,6 +671,28 @@ function buildVerifySeed(finding: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+// Seed for the ONE appeal a refuted finding may make. Same claim the verify session
+// gets, plus the skeptic's exact objection and an instruction to answer it with a
+// FAITHFUL PoC (assume only what the attacker can actually cause), or concede.
+function buildAppealSeed(finding: AgentFinding, critique: string): string {
+  const base = buildVerifySeed({
+    title: finding.title,
+    severity: finding.severity,
+    location: finding.location,
+    description: finding.description,
+    evidence: finding.evidence,
+    exploit_sketch: finding.exploitSketch,
+    fix: finding.fix,
+    ...(finding.fixPatch ? { fix_patch: finding.fixPatch } : {}),
+  });
+  return `${base}
+
+APPEAL: this finding was confirmed by a prior PoC, then an independent skeptic refuted that confirmation as UNREALISTIC with this objection:
+"${critique}"
+
+The underlying bug may still be real — the prior PoC may simply have been unfaithful (e.g. it gave a trusted/pinned component blanket success the attacker cannot actually obtain). Answer the objection DIRECTLY: build a NEW PoC whose setup assumes only what an attacker can actually cause in the deployed system, then confirm by execution. If, after genuine effort, the bug truly cannot be triggered without behavior the real system would never exhibit, refute it with a "REFUTED:" finding that explains why.`;
+}
+
 function toRankedFinding(finding: AgentFinding): RankedFinding {
   const severityWeight: Record<Severity, number> = { info: 0.2, low: 0.4, medium: 0.6, high: 0.85, critical: 1 };
   const confirmBoost = finding.confirmationStatus === "confirmed-differential" ? 1.5 : finding.confirmationStatus === "confirmed-executable" ? 1.3 : 1;
@@ -643,6 +714,7 @@ function toRankedFinding(finding: AgentFinding): RankedFinding {
     ...(isConfirmed(finding.confirmationStatus) ? { reproductionStatus: "confirmed-executable" as const } : {}),
     ...(finding.disputed ? { disputed: true } : {}),
     ...(finding.refutation?.refuted ? { refutationReason: finding.refutation.reason } : {}),
+    ...(finding.appeal ? { appeal: finding.appeal } : {}),
   };
 }
 

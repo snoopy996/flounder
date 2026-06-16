@@ -26,6 +26,7 @@ export interface AuditorConfig {
   huntPrepare: boolean;
   huntPrepareTimeoutMs: number;
   huntRefute: boolean;
+  huntAppeal: boolean;
   // Deep narrow-scope audit posture: obligation-driven, no breadth/wrap-up
   // pressure. Optionally pin the focus region; otherwise the model ranks and
   // picks the most soundness-critical region itself.
@@ -130,6 +131,7 @@ export function defaultConfig(): AuditorConfig {
     huntPrepare: true,
     huntPrepareTimeoutMs: 600_000,
     huntRefute: true,
+    huntAppeal: true,
     huntDeep: false,
     huntMapSteps: 20,
     huntDigSteps: 30,
