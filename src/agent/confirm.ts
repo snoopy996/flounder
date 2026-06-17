@@ -10,6 +10,7 @@ import { RunLogger } from "../trace/logger.js";
 import type { Doc } from "../types.js";
 import { publicPath } from "../util/paths.js";
 import { consolidateByFixEquivalence, type FixEquivEdge, type FixEquivItem } from "./consolidate.js";
+import { RunRecorder } from "../db/record.js";
 import { ProjectMemory } from "./memory.js";
 import { isPiSessionProvider, runAuditSession } from "./pi-session.js";
 import { buildTools, newSession, type AgentSession, type FixPatch, type ToolContext } from "./tools.js";
@@ -70,6 +71,8 @@ export async function runConfirm(
   if (priorFindings.length === 0) {
     throw new Error(`fsa confirm: no confirmed findings in ${path.join(inputRunDir, "audit_findings.json")} (point it at a completed run dir).`);
   }
+  // SQLite tracking: record a `confirm` run under the same project (failure-isolated).
+  const recorder = RunRecorder.start(confirmCfg, logger.runDir, "confirm", logger);
   // RESUME (auto, unless --fresh): an interrupted prior confirm of THIS input run left a
   // decision sheet; carry its already-SETTLED rows (reproduced yes/no) forward and tell
   // the model to skip them, so a re-run continues instead of re-reproducing from scratch.
@@ -166,6 +169,13 @@ export async function runConfirm(
     submitCandidates: rows.filter((row) => row.recommendation === "submit-candidate").length,
   });
   await writeLastRunPointer(path.dirname(logger.runDir), logger.runDir, `${confirmCfg.targetName}-confirm`);
+
+  // SQLite tracking: the decision sheet (one row per distinct bug) + mark the run done.
+  recorder.confirmDecisions(
+    rows.map((row) => ({ bug: row.bug, reproduced: row.reproduced, recommendation: row.recommendation, members: row.members })),
+    path.join(logger.runDir, "confirm_report.md"),
+  );
+  recorder.finish("done");
 
   return { runDir: logger.runDir, decisionRows: rows.length };
 }
