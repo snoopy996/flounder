@@ -26,6 +26,13 @@ async function main(argv: string[]): Promise<void> {
     if (cfg.sourcePaths.length === 0) throw new Error("--source <paths...> is required");
     if (cfg.dryRun) throw new Error("agentic mode cannot run in --dry-run; use the mock model with --mock-llm for offline checks");
     applyAuditPosture(cmd, rest, cfg);
+    // Sealed audit verbs default to UNBOUNDED step budgets (like `fsa confirm`): a real
+    // audit's decisive obligation can surface late, and a fixed budget silently truncates
+    // it. The model finishes early by emitting done; the budget is only a ceiling. Pass
+    // --max-steps / --map-steps / --dig-steps to cap a phase.
+    if (readIntFlag(rest, "--max-steps") === undefined) cfg.auditMaxSteps = Number.POSITIVE_INFINITY;
+    if (readIntFlag(rest, "--map-steps") === undefined) cfg.auditMapSteps = Number.POSITIVE_INFINITY;
+    if (readIntFlag(rest, "--dig-steps") === undefined) cfg.auditDigSteps = Number.POSITIVE_INFINITY;
     const result = await runAudit(cfg, {
       streamEvents: true,
       ...(hasFlag(rest, "--mock-llm") ? { llm: new MockAuditLlmClient() } : {}),
@@ -290,7 +297,7 @@ Shared options:
   --out <dir>             artifact output directory (default runs)
   --history-dir <dir>     project history directory, default <out>/history
   --scope-note <text>     one-line authorized-scope hint for the agent
-  --max-steps <n>         max agent turns before stopping (default 40; confirm is unbounded unless set)
+  --max-steps <n>         cap agent turns for a breadth pass / pinned audit (default: UNBOUNDED — the model stops when done)
   --no-prepare            skip the toolchain warm-up (deps fetch/build)
   --prepare-timeout-ms <n>  per-command timeout for the warm-up, default 600000
   --no-refute / --no-appeal  skip the independent-refutation / one-appeal passes on confirmed findings
@@ -298,8 +305,8 @@ Shared options:
 
 run / map / audit deep-phase options:
   --quick                 run only: a single breadth pass instead of map -> audit
-  --map-steps <n>         action budget for the map phase, default 20
-  --dig-steps <n>         per-scope action budget for the dig phase, default 30
+  --map-steps <n>         cap the map phase (default: UNBOUNDED)
+  --dig-steps <n>         cap each scope's dig (default: UNBOUNDED; the dig stops when its obligations are discharged)
   --dig-samples <n>       independent dig passes per scope, findings unioned (raises recall), default 1
   --dig-concurrency <n>   scopes deep-audited in parallel (isolated workspaces), default 1
   --max-scopes <n>        un-audited scopes the dig audits per run, default 6
