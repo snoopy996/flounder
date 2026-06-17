@@ -5,8 +5,9 @@
 ## Supported Use
 
 - Audit only code you own, code you are engaged to audit, or code that is explicitly in a public bug-bounty scope.
-- Verification must stay local-only: unit tests, regtest, devnet, forked nodes, or isolated fixtures.
-- Do not broadcast transactions or run exploit flows against public testnet or mainnet.
+- `fsa run` verification stays local-only and network-sealed: unit tests, regtest, devnet, forked nodes, or isolated fixtures.
+- `fsa confirm` may fork and read a live network/data to reproduce a finding locally, but it must never broadcast a transaction to a non-local network or write to any live system — replay the exploit against a local fork only.
+- Never broadcast transactions or run exploit flows against a public testnet or mainnet, in either command.
 - Reproductions should prove the invariant break at the smallest scale needed for maintainers to fix it.
 - Reports should be private disclosure drafts, not public exploit guides.
 

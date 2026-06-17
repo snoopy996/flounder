@@ -5,8 +5,8 @@ Use this skill when auditing source code for security bugs across application, i
 ## Rules
 
 - Work only on code the user is authorized to audit.
-- Keep verification local-only: unit tests, regtest, devnet, or forked node.
-- Do not broadcast transactions or run exploit flows on public testnet/mainnet.
+- `fsa run` discovery is network-sealed and local-only: unit tests, regtest, devnet, or forked local node. `fsa confirm` reproduction may fork and read live networks, but never broadcasts a transaction to a live one.
+- Never broadcast transactions or run exploit flows against a live network; replay only against a local fork.
 - Generate the smallest reproduction needed to prove or refute the invariant.
 - Prefer private disclosure report drafts over public exploit writeups.
 
@@ -19,6 +19,7 @@ Use this skill when auditing source code for security bugs across application, i
 5. Do not require a fixed checklist, failure-mode taxonomy, search schedule, rounds, or trials before the agent can investigate.
 6. Confirm strong hypotheses with local-only tests through the sandbox.
 7. Record findings privately with exact source evidence and confirmation status.
+8. To take a finished run to a real-world standard, use `fsa confirm <run-dir> --source <paths...>`: it reproduces each finding against real ground truth (e.g. a mainnet fork), consolidates duplicates, checks novelty online, and emits a submit/no-submit decision sheet. A finding clears the bar only if it triggers on the real target with attacker-real capabilities and an exhibited effect — not by argument.
 
 ## Failure Modes
 

@@ -2,7 +2,7 @@
 
 ## Boundary
 
-`full-stack-auditor` is now centered on the thin agentic audit path. The public driver is `fsa run`; the model decides the audit strategy and the framework supplies only capabilities, safety, confirmation gates, and replayable state.
+`full-stack-auditor` is now centered on the thin agentic audit path. The public driver is `fsa run` — the network-**sealed** discovery pass; the model decides the audit strategy and the framework supplies only capabilities, safety, confirmation gates, and replayable state. Its open-world counterpart, **`fsa confirm`** (`src/agent/confirm.ts`), takes a finished run's findings and reproduces them against real-world ground truth with the network available (see [Open-World Confirmation](#open-world-confirmation-fsa-confirm)).
 
 The main layers are:
 
@@ -113,7 +113,26 @@ Reference-independence is why execution-grounding is the core of confirmation, n
 
 **Independent refutation** (`src/agent/refutation.ts`, gated by `AuditorConfig.auditRefute`, default on) guards against a single reasoning chain inheriting a wrong assumption. After confirmation, a fresh-context skeptic — which never saw the finder's investigation — re-derives the invariant and tries to break each confirmed finding (show the property is enforced, or the exploit does not work), under the same no-comparison-clearing rule. A single-test `confirmed-executable` it debunks is downgraded to a hypothesis; a `confirmed-differential` it disputes is kept (execution is ground truth) but flagged `disputed` in the finding and the disclosure report for human review. Verdicts are written to `audit_refutation.json`.
 
-Remaining hardening targets: execution-driven discovery on a buildable target (adversarial property tests reveal under-constraint empirically, independent of any reference), enforced network isolation for confirm runs, and turning `confirmed-differential` findings into stored regression tests that future runs re-execute.
+Remaining hardening targets: execution-driven discovery on a buildable target (adversarial property tests reveal under-constraint empirically, independent of any reference), stronger enforced network isolation for the sealed `run` (beyond the policy block — `fsa confirm` is the deliberately-networked pass, so `run` should be provably air-gapped), and turning `confirmed-differential` findings into stored regression tests that future runs re-execute.
+
+## Open-World Confirmation (`fsa confirm`)
+
+`fsa confirm <run-dir> --source <paths...>` (`src/agent/confirm.ts`, `runConfirm`) is the open-world counterpart to the sealed `run`. It does not discover; it takes a finished run's confirmed findings to a real-world standard of certainty and emits a submit/no-submit decision sheet. It reuses the same session driver, sandbox, and confirmation gate as `run` — the only capability difference is the network.
+
+**Pipeline (one session):**
+
+1. **Freeze + fingerprint.** Before any network access, `runConfirm` hashes the input run's `audit_report.md` / `audit_findings.json` / `report_f*.md` (sha256 + timestamp) to `confirm_provenance.json`. This anchors the provenance claim that the findings were produced blind, independent of anything the open-world pass later reads online.
+2. **Reproduce.** The frozen findings seed a single network-enabled session. The model reproduces each against real ground truth — it decides what that is for the target (a mainnet fork of the deployed contract + its real verifier, a real released package, a real local node) and writes the reproduction itself. No per-technology branches: the framework supplies capability + goals + an objective execution-grounded bar (real target, attacker-real capabilities, the effect exhibited as a concrete observable), and refuses to accept a row as `reproduced` unless it cites a passing `purpose=confirm` run that cleared that bar.
+3. **Consolidate by execution** (`src/agent/consolidate.ts`). A fix-equivalence matrix cross-applies each reproduced bug's `fix_patch` to the pristine source and re-runs the others' PoCs (reusing `runDifferentialConfirmation`); two bugs are the same iff a single fix neutralizes both, in both directions. `unionFindClusters` turns the symmetric relation into clusters. Distinct bugs are decided by execution, not by similar titles — the framework's call, not the model's.
+4. **Decide.** `confirm_decision.json` (one row per distinct bug: reproduced?, evidence, novelty/corroboration, `submit-candidate`/`needs-human`/`drop`), `confirm_report.md`, and `confirm_equivalence.json` (the matrix + clusters).
+
+**Network policy.** `analyzeConfirmBashCommandSafety` (`src/security/policy.ts`) relaxes the sealed-run policy to allow fork/read/fetch/search and arbitrary programs, but keeps the white-hat line: a broadcast/submit verb (`cast send`, `forge script --broadcast`, `eth_sendRawTransaction`, …) is blocked only when its target is non-local, so replaying the exploit against a *local* fork is allowed while pushing it to a live network is not. Structural guards (plain program name, simple argv, workspace-contained paths) are unchanged. The bash tool selects this policy when `AuditorConfig.confirmMode` is set.
+
+**Budget.** Confirm is unbounded by default: `runConfirm` sets `auditMaxSteps` to a non-finite sentinel, and the session driver treats non-finite/≤0 as "no turn cap" (the run ends when the model emits done). Reproduction is heavy and a fixed step count silently truncates productive work; `--max-steps N` caps it only when asked. The confirm prompt pushes the model to reproduce early and own its own stop rather than survey indefinitely. Confirm requires a pi-session provider; the mock/CLI fallbacks cannot fork a live network.
+
+**Epistemics.** The same execution-grounding that makes `run`'s confirmation trustworthy is transposed to the open world: execution against the real target is the only truth; a web source is a lead and a novelty disqualifier, never proof; only attacker-real capabilities count. A finding that only reproduced under a substituted trusted component, an unreachable precondition, or assumed state is recorded `not-reproduced` with the exact crutch named — this is the execution-grounded version of the `run` refutation's faithfulness check, now run against the *real* component rather than a re-mocked one.
+
+Validated end-to-end on a prior `run`'s Aztec findings: the real `numRealTransactions` accounting bug reproduced on a mainnet fork (real proxy + real verifier, flipping one attacker-controllable byte), while the verifier-false-return and short-return-proxy findings were execution-*refuted* (the real verifier reverts; the real proxy returns well-formed data) — 13 findings consolidated to 7 distinct, 1 reproduced, zero false reproductions.
 
 ## Memory And History
 
@@ -128,6 +147,8 @@ Each audit writes:
 - `report_<id>.md`: private disclosure drafts, for confirmed findings only.
 - `events.jsonl` and `calls/*.json`: trace and model calls.
 
+Each `fsa confirm` writes `confirm_provenance.json` (frozen findings' fingerprints), `confirm_decision.json` + `confirm_report.md` (the decision sheet), `confirm_equivalence.json` (the fix-equivalence matrix and clusters), and the usual `confirm_transcript.json` / `events.jsonl` / `calls/*.json` session trace.
+
 Per-target memory lives at `<out>/history/<target>/memory.jsonl`. Audit surfaces recent memory at kickoff and automatically stores parsed findings for later runs.
 
 Project history lives under `<out>/history/<target>/manifest.json` and records sanitized run metadata, findings, and materials. Paths must stay repository-relative or placeholder-based in public-facing artifacts.
@@ -136,7 +157,7 @@ Project history lives under `<out>/history/<target>/manifest.json` and records s
 
 Audit has two interchangeable drivers behind the same tools, sandbox, confirmation gate, and artifacts:
 
-- Continuous session (`src/agent/pi-session.ts`, default for real runs): a pi-coding-agent `AgentSession` owns the loop. The framework registers only the sandboxed tools as the session's `customTools` (with `noTools: "all"`, so pi's built-in filesystem tools are disabled) and calls `session.prompt()` once; the session keeps context server-side and orchestrates tool calls natively. This avoids the per-step transcript resend that grows quadratically and exhausts quota. The session is bounded by a turn budget (`AuditorConfig.auditMaxSteps`): on reaching it the framework counts `turn_end` events and calls `session.abort()`, so a real run cannot grow unbounded in cost. Used whenever the provider is a real pi-ai provider.
+- Continuous session (`src/agent/pi-session.ts`, default for real runs): a pi-coding-agent `AgentSession` owns the loop. The framework registers only the sandboxed tools as the session's `customTools` (with `noTools: "all"`, so pi's built-in filesystem tools are disabled) and calls `session.prompt()` once; the session keeps context server-side and orchestrates tool calls natively. This avoids the per-step transcript resend that grows quadratically and exhausts quota. The session is bounded by a turn budget (`AuditorConfig.auditMaxSteps`): on reaching it the framework counts `turn_end` events and calls `session.abort()`, so a real run cannot grow unbounded in cost. A non-finite/≤0 budget means **no turn cap** (the run ends only when the model emits done) — `fsa confirm` uses this by default, since reproduction is heavy and a fixed step count truncates productive work. Used whenever the provider is a real pi-ai provider.
 - Legacy loop (`src/agent/loop.ts`): the framework re-drives a stateless `complete()` once per step with a JSON action protocol. Used for the deterministic mock (offline tests) and the explicit CLI fallbacks.
 
 The default audit provider is `openai-codex` (`gpt-5.5`). The continuous session requires pi to be authenticated for that provider (`pi` → `/login`); pi does not reuse the standalone codex CLI's credentials, so an unauthenticated run fails fast with an actionable message (use `--mock-llm` for offline checks). Per project constraint, the session driver targets pi providers such as `openai-codex`; `claude-code` is not used as a session backend (it is not permitted outside Claude apps and needs no API key here).

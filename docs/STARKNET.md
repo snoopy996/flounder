@@ -28,7 +28,11 @@ For larger repositories, include the highest-signal specs, bridge message format
 
 ## Local Reproduction
 
-Reproduction is part of the audit: the agent calls `bash` to run local tests in the copied workspace, and a finding only becomes `confirmed-executable` when a `purpose=confirm` test passes. Reproduction commands must stay inside local test runners, local fixtures, or isolated devnets. Do not use public mainnet or public testnet message sending, transaction broadcasting, exploit optimization, or credentialed infrastructure.
+Reproduction is part of the audit: the agent calls `bash` to run local tests in the copied workspace, and a finding only becomes `confirmed-executable` when a `purpose=confirm` test passes. During `fsa run`, reproduction commands stay inside local test runners, local fixtures, or isolated devnets — no public mainnet/testnet message sending, transaction broadcasting, exploit optimization, or credentialed infrastructure.
+
+## Open-World Confirmation
+
+After a run, `fsa confirm <run-dir> --source <paths...>` reproduces the findings against real-world ground truth and writes a submit/no-submit decision sheet. Confirm may fork and read live networks/data, but still never broadcasts to a live one — the exploit is replayed only against a local fork or node. For heavy or old-toolchain Cairo/Rust workspaces, pre-seed the per-target package cache from a prior run and raise `--prepare-timeout-ms` so the cold build fits; reproducing a proof-system soundness gap against the real circuit/verifying key is the costliest case and may land `needs-human` when the real consumer circuit is out of `--source` scope.
 
 ## Input Checklist
 

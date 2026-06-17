@@ -34,7 +34,19 @@ Reproduction is part of the audit: the agent calls `bash` to write and run local
 - `forge test`
 - `npx hardhat test`
 
-The command policy blocks public-network broadcast, transfer, credential, persistence, and exploit-optimization flows. Public RPC URLs, public Hardhat networks, and arguments that reference RPC or secret environment variables are blocked. Use local Anvil, Hardhat, or isolated devnet endpoints.
+During `fsa run` the command policy blocks public-network broadcast, transfer, credential, persistence, and exploit-optimization flows. Public RPC URLs, public Hardhat networks, and arguments that reference RPC or secret environment variables are blocked. Use local Anvil, Hardhat, or isolated devnet endpoints.
+
+## Open-World Confirmation
+
+EVM is `fsa confirm`'s strongest path: a `forge test --fork-url <mainnet>` reproduces a finding against the **real deployed contract and its real configured components** at a chosen block. After a run, point confirm at it:
+
+```bash
+fsa confirm ./runs/protocol-contract-audit-<timestamp> \
+  --source <target>/src --build-root <target> \
+  --provider openai-codex
+```
+
+Confirm relaxes the policy to allow forking and reading a live chain (`--fork-url`, `cast call`, etc.), but still **never broadcasts**: a `cast send` / `forge script --broadcast` is blocked when its RPC target is non-local, so the exploit is replayed against the *local* fork, never the live chain. A finding is marked `reproduced` only if it triggers on the forked real target with attacker-real capabilities and an exhibited on-chain effect — which also execution-*refutes* findings whose `run` PoC only worked against a mocked verifier/proxy (the real component reverts or returns well-formed data).
 
 ## Input Checklist
 

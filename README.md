@@ -1,12 +1,18 @@
 # full-stack-auditor
 
-White-hat security audit framework for autonomous, model-driven source investigation.
+White-hat security audit framework for autonomous, model-driven source investigation. The framework provides capability and guarantees, not strategy — the model decides what to read, inspect, edit in a sandbox, test, and report.
 
-The public workflow is `fsa run`: a thin agentic loop where the model decides what to read, inspect, edit in a sandbox, test, and report. The framework provides capability and guarantees, not strategy.
+Two complementary passes:
+
+- **`fsa run`** — the network-**sealed** discovery pass. A thin agentic loop with **no network access**, so a finding is provably *found blind*, not looked up. The model investigates the copied source and proves bugs with local tests.
+- **`fsa confirm`** — the **open-world** counterpart. It takes a prior run's confirmed findings, reproduces each against **real-world ground truth** (e.g. a mainnet fork of the deployed contract), consolidates duplicates into distinct bugs, checks novelty online, and emits a submit/no-submit decision sheet — by execution, not by argument.
 
 ```bash
-fsa run --target my-target --source ./src --corpus ./docs --max-steps 40
+fsa run     --target my-target --source ./src --corpus ./docs --max-steps 40
+fsa confirm ./runs/my-target-<timestamp> --source ./src   # reproduce that run's findings on the real target
 ```
+
+> Found blind (`run`), then confirmed open (`confirm`).
 
 ## Design Principle
 
@@ -139,9 +145,35 @@ npm run check:public  # public-surface scan for secrets and local paths
 npm run verify        # full local verification gate
 ```
 
+## Confirm — open-world reproduction
+
+`fsa confirm <run-dir> --source <paths...>` takes a finished `fsa run` to a real-world standard of certainty and writes a submit/no-submit decision sheet. It is the open-world counterpart to the sealed `run`, and the only capability difference is that the network is available.
+
+```bash
+fsa confirm ./runs/protocol-<timestamp> \
+  --source ./contracts --build-root . \
+  --provider openai-codex
+```
+
+What it does, in one session:
+
+1. **Freeze + fingerprint** the run's findings (sha256 + timestamp) *before* any network access — anchoring the "found blind, no network" provenance.
+2. **Reproduce** each finding against **real ground truth** — the model decides what that is for the target (a mainnet fork of the deployed contract and its real verifier, a real released package, a local node) and writes the reproduction itself. A finding is marked `reproduced` only if it triggers on the real target, using only attacker-real capabilities, with the effect **exhibited** as a concrete observable (a drained balance, a forged output, an accepted invalid input) — never a printed string, never an argument.
+3. **Consolidate** by execution: a fix-equivalence matrix cross-applies each bug's fix against the others' PoCs and merges any a single fix neutralizes — *distinct bugs decided by execution, not by similar titles*.
+4. **Check novelty** online (advisories, issues, post-mortems) — used only as a *lead* and as a *disqualifier* for already-disclosed bugs, never as proof.
+5. **Decide**: `confirm_decision.json` + `confirm_report.md`, one row per distinct bug — reproduced?, evidence, novelty/corroboration, and a `submit-candidate` / `needs-human` / `drop` recommendation.
+
+The three rules the prompt enforces: **execution is the only truth**; **the web is a lead, never proof**; **only attacker-real capabilities** (the same faithful-PoC rule the `run` refutation applies). A finding that only reproduced under a substituted trusted component, an unreachable precondition, or assumed state does **not** clear the bar — it is recorded `not-reproduced` with the exact crutch named.
+
+`fsa confirm` is **unbounded by default** (reproduction is heavy; it ends when the model is done); pass `--max-steps N` to cap it. It needs a pi-session provider (e.g. `openai-codex`) — the mock/CLI fallbacks cannot fork a live network.
+
+**White-hat for the open world:** confirm may **fork and read** live networks/data to reproduce locally, but it must **never broadcast** a transaction to a non-local network, move funds, or write to any live system. Replay the exploit against a *local* fork; never push it to the live one (`src/security/policy.ts`).
+
+> Validated end-to-end: pointed at a prior `run`'s Aztec findings, `fsa confirm` reproduced the real `numRealTransactions` accounting bug on a mainnet fork (real proxy + real verifier, flipping one attacker-controllable byte) and execution-*refuted* the findings that only worked against a mocked verifier/proxy — zero false reproductions.
+
 ## Reproduction
 
-Reproduction is part of the audit itself: the agent calls `bash` to write and run local tests in the copied workspace, and a finding only reaches `confirmed-executable` when a `purpose=confirm` test passes. The agent writes files only inside a copied workspace under the run directory; it never modifies the target source tree. Command safety blocks public-network broadcast, transfer, credential, persistence, and exploit-optimization flows.
+Inside `fsa run`, reproduction is part of the audit itself: the agent calls `bash` to write and run local tests in the copied workspace, and a finding only reaches `confirmed-executable` when a `purpose=confirm` test passes. The agent writes files only inside a copied workspace under the run directory; it never modifies the target source tree. Command safety blocks public-network broadcast, transfer, credential, persistence, and exploit-optimization flows.
 
 ## Domain Profiles
 
@@ -194,6 +226,14 @@ Each audit writes:
 - `<out>/history/<target>/memory.jsonl`: durable per-target memory.
 - `<out>/history/<target>/manifest.json`: project-level history.
 
+Each `fsa confirm` writes:
+
+- `confirm_provenance.json`: sha256 + timestamp of the run findings, frozen before any network access.
+- `confirm_decision.json`: the decision sheet — one row per distinct bug (reproduced?, evidence, novelty, recommendation).
+- `confirm_report.md`: the human-readable decision sheet.
+- `confirm_equivalence.json`: the fix-equivalence matrix (which fixes block which PoCs) and the resulting clusters.
+- `confirm_transcript.json`, `events.jsonl`, `calls/*.json`: the open-world session trace.
+
 Run artifacts are private by default. Redact before sharing outside the trusted project context.
 
 ## Library API
@@ -214,10 +254,10 @@ Use `full-stack-auditor/pi/extension` for the pi package extension entrypoint.
 ## White-Hat Rules
 
 - Audit only authorized code or public bug-bounty scope.
-- Verification must be local-only: unit tests, regtest, devnet, forked local node, or isolated harness.
-- Never broadcast or execute against public testnet/mainnet.
-- Do not write value-extraction exploits, exfiltrate data, or read secrets.
-- Build the smallest local proof needed to confirm or refute the invariant break.
+- In `fsa run`, verification is local-only and network-sealed: unit tests, regtest, devnet, forked local node, or isolated harness — never any live network.
+- In `fsa confirm`, the network is available for reproduction, but the boundary holds: **fork and read** live networks/data freely; **never broadcast** a transaction to a non-local network, move funds, or write to any live system. Replay the exploit against a *local* fork.
+- Do not write value-extraction exploits against live systems, exfiltrate data, or read secrets.
+- Build the smallest proof needed to confirm or refute the invariant break.
 - Report privately and coordinate disclosure.
 
 ## Contributing And Security

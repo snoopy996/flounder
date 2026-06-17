@@ -33,7 +33,7 @@ npm run verify
 
 - Do not add code that broadcasts, transfers, drains, mints, or submits transactions to public networks.
 - Do not add prompts that ask for weaponized exploit code.
-- Do not weaken the live-network command guardrail without adding stronger coverage.
+- Do not weaken the live-network command guardrail without adding stronger coverage. Two policies exist: `fsa run` is network-sealed (local-only); `fsa confirm` (`analyzeConfirmBashCommandSafety`) intentionally allows fork/read/fetch but still blocks broadcasting a transaction to a non-local network. Changes to either must keep the no-broadcast line and add tests.
 - Use deterministic mock tests for pipeline behavior; real provider tests should be opt-in and must not require secrets in CI.
 - Do not add local absolute paths, credentials, private URLs, customer data, or machine-specific paths to source, docs, prompts, tests, examples, package metadata, or generated public artifacts.
 - If sensitive data reaches Git history, rotate the affected secret when applicable, rewrite history before publication, and verify the cleaned history before pushing.
