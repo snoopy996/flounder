@@ -22,7 +22,7 @@ fsa run \
   --provider openai \
   --model gpt-5.5 \
   --thinking xhigh \
-  --max-steps 60
+  --map-steps 60 --dig-steps 60
 ```
 
 For larger repositories, include the highest-signal specs, prior audits, test suites, deployment notes, and threat-model material as corpus input. The agent can choose when to search or read it.

@@ -8,8 +8,8 @@ Two complementary passes:
 - **`fsa confirm`** — the **open-world** counterpart. It takes a prior run's confirmed findings, reproduces each against **real-world ground truth** (e.g. a mainnet fork of the deployed contract), consolidates duplicates into distinct bugs, checks novelty online, and emits a submit/no-submit decision sheet — by execution, not by argument.
 
 ```bash
-fsa run     --target my-target --source ./src --corpus ./docs --max-steps 40
-fsa confirm ./runs/my-target-<timestamp> --source ./src   # reproduce that run's findings on the real target
+fsa run     --target my-target --source ./src --corpus ./docs   # map → audit; unbounded by default
+fsa confirm ./runs/my-target-<timestamp> --source ./src        # reproduce that run's findings on the real target
 ```
 
 > Found blind (`run`), then confirmed open (`confirm`).
@@ -29,28 +29,35 @@ Everything about what might be a bug and how to investigate it belongs to the ag
 
 ## Agentic Flow
 
+`fsa run` orchestrates a **map → dig** pass; each phase — and each other verb — runs the *same* thin agent session (the loop further below). The default `fsa run` is map→dig; `fsa run --quick`, `fsa audit`, and `fsa map` enter that one session directly, and `fsa confirm` runs it open-world.
+
 ```mermaid
 flowchart TD
-  A["fsa run"] --> B["Load source and corpus"]
-  B --> C["Create logger, history, memory, session"]
-  C --> D["Expose generic tools"]
-  D --> E["Agent emits one JSON action or done"]
-  E --> F{"Tool"}
-  F --> G["read"]
-  F --> H["write / edit sandbox files"]
-  F --> I["bash in copied workspace"]
-  G --> N["Observation appended to transcript"]
-  H --> N
-  I --> O{"Command confirmation-eligible?"}
-  O -->|yes| N
-  O -->|no| N
+  RUN["fsa run (default)"] --> MAP["MAP — enumerate + score a complete scope inventory (scopes.json)"]
+  MAP --> DIG["DIG — deep-audit each selected scope, one at a time"]
+  DIG -. "checkpoint after MAP and after each dig — resumable, never drops a scope" .-> MAP
+  QUICK["fsa run --quick · fsa audit &lt;region&gt;/--scope/--verify · fsa map"] --> SESSION["one agent session (the loop below)"]
+  DIG --> SESSION
+  CONFIRM["fsa confirm (open-world, networked)"] --> SESSION
+```
+
+Each session is the thin loop:
+
+```mermaid
+flowchart TD
+  B["Load source and corpus → sandbox copy"] --> C["Create logger, history, memory, session"]
+  C --> D["Expose generic tools: read · write · edit · bash"]
+  D --> E["Agent emits one JSON action, or done"]
+  E --> F{"action?"}
+  F -->|read / write / edit| N["Observation appended to transcript"]
+  F -->|bash in workspace| O{"confirmation-eligible?"}
+  O --> N
   N --> E
-  E --> P["done"]
-  P --> Q["Parse findings.json"]
-  Q --> R{"Cites passed command_id?"}
+  E -->|done| Q["Parse findings.json"]
+  Q --> R{"Cites a passed command_id?"}
   R -->|yes| S["confirmed-executable"]
   R -->|no| T["suspected"]
-  S --> U["Write artifacts and history"]
+  S --> U["Persist audit_findings.json + reports + history"]
   T --> U
 ```
 
@@ -106,6 +113,8 @@ The sealed verbs (`run` / `map` / `audit`) share the tools, the confirmation gat
 | `fsa audit --scope <id,...>` | dig specific inventory items after a `fsa map` (the human-in-the-loop pick over the complete map) |
 | `fsa audit --verify <findings.json>` | confirm-or-refute existing suspected findings by execution — the standalone confirmation step on a prior run's `audit_findings.json` |
 | `fsa confirm <run-dir>` | open-world: reproduce a run's findings on the real target |
+
+The sealed verbs are **unbounded by default** (a run ends when the model is done, not at a step count) — a fixed budget silently truncates a productive dig. Cap a phase only when you want to: `--map-steps` / `--dig-steps` (and `--max-steps` for `run --quick` / `audit <region>`). A killed run **resumes** (it skips MAP and the already-audited scopes), so longer unbounded runs are safe to interrupt.
 
 ### Most effective setup
 
@@ -178,7 +187,7 @@ Inside `fsa run`, reproduction is part of the audit itself: the agent calls `bas
 
 ## Domain Profiles
 
-Config files under `configs/` can still provide source paths, corpus paths, project context, and optional domain hints. In audit mode, these are context, not a framework-owned checklist.
+Config files under `configs/` can still provide source paths, corpus paths, project context, and optional domain hints. In audit mode, these are context, not a framework-owned checklist. They are **opt-in and off by default** — a plain `fsa run` carries no preset bug knowledge; pass `--config` only when you want to seed a known vulnerability class. See [configs/README.md](configs/README.md) for when to use them and the line a profile must not cross.
 
 Examples:
 
@@ -212,7 +221,7 @@ Try the package locally from this directory:
 pi -e .
 ```
 
-The extension registers `fsa_run` and installs the shared command-safety guardrail for shell commands.
+The extension registers two tools — `fsa_run` (the sealed map→dig audit) and `fsa_confirm` (the open-world reproduction of a finished run's findings) — and installs the shared command-safety guardrail for shell commands. They mirror the `fsa run` / `fsa confirm` CLI verbs so a pi agent can orchestrate audit→confirm.
 
 ## Outputs
 

@@ -12,13 +12,15 @@ The main layers are:
 - Safety: `src/security/policy.ts` and `src/security/sandbox.ts` gate local command execution.
 - Reporting and history: `src/reports`, `src/trace`, and `src/agent/memory.ts`.
 - Provider adapters: `src/llm/pi-ai.ts`, with explicit local CLI fallbacks in `src/llm/codex-cli.ts` and `src/llm/claude-code.ts`.
-- Pi integration: `src/pi/extension.ts` registers the `fsa_run` tool and shell guardrail.
+- Pi integration: `src/pi/extension.ts` registers the `fsa_run` and `fsa_confirm` tools and the shell guardrail.
 
 ## Audit Flow
 
+The diagram below is the **inner per-session loop** — one agent session. The default `fsa run` wraps it in a **map → dig** orchestration (and `fsa confirm` runs it open-world); that orchestration, plus the resumable scope inventory, is described under [Audit Modes](#audit-modes).
+
 ```mermaid
 flowchart TD
-  CLI["CLI: fsa run"] --> AUDIT["runAudit"]
+  CLI["CLI: fsa run / map / audit"] --> AUDIT["runAudit"]
   PI["pi tool: fsa_run"] --> AUDIT
   AUDIT --> INGEST["load source and corpus"]
   INGEST --> SESSION["logger, session, project memory"]
@@ -174,7 +176,7 @@ For blind benchmarks with `provider=codex-cli`, set `FSA_CODEX_WEB_SEARCH=disabl
 
 ## Pi Integration
 
-The package extension exposes `fsa_run` and installs the shared shell-command guardrail. It does not expose a staged audit driver.
+The package extension exposes two tools — `fsa_run` (the sealed map→dig audit) and `fsa_confirm` (the open-world reproduction pass over a finished run) — and installs the shared shell-command guardrail. The two mirror the `fsa run` / `fsa confirm` CLI verbs so a pi agent can orchestrate audit→confirm; the narrower verbs (`map`, `audit <region>/--scope/--verify`) stay CLI-only. It does not expose a staged audit driver.
 
 The command guardrail lives in `src/security/policy.ts` so non-pi integrations can reuse the same policy.
 
