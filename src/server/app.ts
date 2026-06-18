@@ -14,7 +14,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { MetadataStore, type RunKind, type Coverage } from "../db/store.js";
+import { MetadataStore, type RunKind, type Coverage, type ProviderInput } from "../db/store.js";
+import { getProviders, getModels } from "@earendil-works/pi-ai";
 import { type LaunchSpec, ActivityBus } from "./run-manager.js";
 import { projectHistoryDir } from "../trace/history.js";
 import { loadScopeInventory, saveScopeInventory } from "../agent/scope-store.js";
@@ -203,6 +204,48 @@ const ROUTES: Route[] = [
   }),
 
   route({
+    method: "GET", path: "/api/providers",
+    summary: "List saved provider profiles — a reusable model strategy (provider + model + thinking, with optional per-phase map/dig/refute overrides) that a project selects.",
+    handler: (c) => sendJson(c.res, 200, { providers: c.store.listProviders() }),
+  }),
+  route({
+    method: "POST", path: "/api/providers",
+    summary: "Create a provider profile.",
+    body: { name: "string (unique)", provider: "pi-ai provider id, or claude-code / codex-cli / mock", model: "string? — default model", thinking: "minimal|low|medium|high|xhigh?", roles: "object? — per-phase overrides { map|dig|refute: { provider?, model?, thinking? } }" },
+    handler: providerCreate,
+  }),
+  route({
+    method: "GET", path: "/api/pi/providers",
+    summary: "Providers pi-ai can drive (for the profile editor), plus the CLI fallbacks. Discovery, not the saved resource.",
+    handler: (c) => sendJson(c.res, 200, { providers: availableProviders() }),
+  }),
+  route({
+    method: "GET", path: "/api/pi/models/:provider",
+    summary: "Models pi-ai exposes for a provider (id, name, reasoning) — for the model dropdown.",
+    params: { provider: "provider id" },
+    handler: (c) => sendJson(c.res, 200, { models: availableModels(c.params.provider ?? "") }),
+  }),
+  route({
+    method: "GET", path: "/api/providers/:id",
+    summary: "A single provider profile.",
+    params: { id: "provider id" },
+    handler: (c) => { const p = c.store.getProvider(Number(c.params.id)); p ? sendJson(c.res, 200, { provider: p }) : sendJson(c.res, 404, { error: "no such provider" }); },
+  }),
+  route({
+    method: "PATCH", path: "/api/providers/:id",
+    summary: "Update a provider profile.",
+    params: { id: "provider id" },
+    body: { name: "string?", provider: "string?", model: "string?", thinking: "string?", roles: "object?" },
+    handler: providerUpdate,
+  }),
+  route({
+    method: "DELETE", path: "/api/providers/:id",
+    summary: "Delete a provider profile.",
+    params: { id: "provider id" },
+    handler: (c) => { const ok = c.store.deleteProvider(Number(c.params.id)); ok ? sendJson(c.res, 200, { ok: true, deleted: Number(c.params.id) }) : sendJson(c.res, 404, { error: "no such provider" }); },
+  }),
+
+  route({
     method: "GET", path: "/api/runs/:id",
     summary: "A single run (status, kind, coverage, finding count, run dir, timestamps).",
     params: { id: "run id" },
@@ -247,7 +290,7 @@ function catalog(): unknown {
   return {
     name: "flounder",
     description: "REST API for tracking and driving white-hat audits. Resources: project (CRUD), run (launch/stop/read), scope, finding, confirm-decision. Runs execute on connected daemons; every UI operation is one of these calls.",
-    resources: ["project", "run", "scope", "finding", "confirm-decision"],
+    resources: ["project", "provider", "run", "scope", "finding", "confirm-decision"],
     endpoints: ROUTES.filter((r) => !r.hidden).map((r) => ({
       method: r.method,
       path: r.path,
@@ -264,6 +307,11 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
   const port = options.port ?? 4500;
   const host = options.host ?? "127.0.0.1"; // localhost by default; expose only with daemon tokens set
   const store = MetadataStore.openForOutput(out);
+  // Seed a couple of starter profiles so a fresh install has something to select (no-op if any exist).
+  store.seedProviders([
+    { name: "openai-codex · gpt-5.5 · xhigh", provider: "openai-codex", model: "gpt-5.5", thinking: "xhigh" },
+    { name: "claude-code · opus · high", provider: "claude-code", model: "claude-opus-4-8", thinking: "high" },
+  ]);
   const plane = new ControlPlane();
   // NOTE: we do NOT reconcile `running` rows on startup — runs execute on daemons, which
   // survive a server restart. Blind-killing them here would be wrong. (A future daemon
@@ -398,6 +446,63 @@ function confirmDecisionsList(c: Ctx): void {
     if (reproduced) rows = rows.filter((row) => row.reproduced === reproduced);
     sendJson(c.res, 200, { confirmDecisions: rows });
   });
+}
+
+// ---- providers (model-strategy profiles) ----------------------------------
+
+const THINKING = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const CLI_FALLBACK_PROVIDERS = ["claude-code", "codex-cli", "mock"];
+
+// The providers pi-ai can drive (discovered at runtime) + our CLI fallbacks, for the editor.
+function availableProviders(): string[] {
+  let pi: string[] = [];
+  try {
+    pi = getProviders() as unknown as string[];
+  } catch {
+    pi = [];
+  }
+  return [...new Set([...pi, ...CLI_FALLBACK_PROVIDERS])].sort();
+}
+
+function availableModels(provider: string): Array<{ id: string; name: string; reasoning: boolean }> {
+  try {
+    const models = getModels(provider as never) as unknown as Array<Record<string, unknown>>;
+    return (models ?? []).map((m) => ({ id: String(m.id), name: String(m.name ?? m.id), reasoning: Boolean(m.reasoning) }));
+  } catch {
+    return [];
+  }
+}
+
+// Coerce a request body into a ProviderInput (drop unknown thinking levels; pass roles through).
+function readProviderInput(body: Record<string, unknown>): Partial<ProviderInput> {
+  const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const out: Partial<ProviderInput> = {};
+  const name = str(body.name); if (name) out.name = name;
+  const provider = str(body.provider); if (provider) out.provider = provider;
+  if ("model" in body) out.model = str(body.model);
+  if ("thinking" in body) { const t = str(body.thinking); out.thinking = t && THINKING.has(t) ? t : undefined; }
+  if ("roles" in body && body.roles && typeof body.roles === "object") out.roles = body.roles as ProviderInput["roles"];
+  return out;
+}
+
+async function providerCreate(c: Ctx): Promise<void> {
+  const input = readProviderInput((await readBody(c.req)) as Record<string, unknown>);
+  if (!input.name || !input.provider) return sendJson(c.res, 400, { error: "name and provider are required" });
+  if (c.store.getProviderByName(input.name)) return sendJson(c.res, 409, { error: `a provider named "${input.name}" already exists` });
+  const id = c.store.createProvider({ name: input.name, provider: input.provider, model: input.model, thinking: input.thinking, roles: input.roles });
+  sendJson(c.res, 200, { ok: true, id });
+}
+
+async function providerUpdate(c: Ctx): Promise<void> {
+  const id = Number(c.params.id);
+  if (!c.store.getProvider(id)) return sendJson(c.res, 404, { error: "no such provider" });
+  const input = readProviderInput((await readBody(c.req)) as Record<string, unknown>);
+  if (input.name) {
+    const clash = c.store.getProviderByName(input.name);
+    if (clash && clash.id !== id) return sendJson(c.res, 409, { error: `a provider named "${input.name}" already exists` });
+  }
+  c.store.updateProvider(id, input);
+  sendJson(c.res, 200, { ok: true });
 }
 
 function runStop(c: Ctx): void {

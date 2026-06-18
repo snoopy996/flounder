@@ -77,6 +77,34 @@ export interface Coverage {
   deferred: number;
 }
 
+// A provider profile = the model-selection part of the config, named + reusable. A project
+// selects one; launch resolves it into provider/model/thinking (+ per-phase overrides for
+// the map/dig/refute roles, mirroring AuditorConfig.models / resolveRole).
+export type AuditPhase = "map" | "dig" | "refute";
+export interface RoleOverride {
+  provider?: string | undefined;
+  model?: string | undefined;
+  thinking?: string | undefined;
+}
+export type ProviderRoles = Partial<Record<AuditPhase, RoleOverride>>;
+export interface ProviderInput {
+  name: string;
+  provider: string;
+  model?: string | undefined;
+  thinking?: string | undefined;
+  roles?: ProviderRoles | undefined;
+}
+export interface ProviderProfile {
+  id: number;
+  name: string;
+  provider: string;
+  model: string | null;
+  thinking: string | null;
+  roles: ProviderRoles;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface FindingFilter {
   status?: string | undefined; // exact status, e.g. "confirmed-differential"
   search?: string | undefined; // substring match on title or location
@@ -199,6 +227,20 @@ CREATE TABLE IF NOT EXISTS job(
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_job_status ON job(status);
+
+-- A reusable "model strategy" profile a project selects (provider + model + thinking,
+-- with optional per-phase overrides for map/dig/refute). No secrets: API keys stay on the
+-- daemon (pi /login); this is just the model-selection part of the config, lifted out.
+CREATE TABLE IF NOT EXISTS provider(
+  id INTEGER PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  provider TEXT NOT NULL,         -- pi-ai provider id, or claude-code / codex-cli / mock
+  model TEXT,                     -- default model for all phases (null = provider default)
+  thinking TEXT,                  -- default thinking level
+  roles_json TEXT,                -- { map?, dig?, refute? : { provider?, model?, thinking? } }
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 function now(): string {
@@ -610,6 +652,69 @@ export class MetadataStore {
     return this.db.prepare("SELECT * FROM job WHERE status IN ('queued','dispatched','running') ORDER BY created_at DESC").all() as Array<Record<string, unknown>>;
   }
 
+  // --- providers (model-strategy profiles) ----------------------------------
+
+  /** A project selects one of these; launch resolves it into provider/model/thinking
+   * (+ per-phase overrides). Stored as a named, reusable profile. */
+  createProvider(input: ProviderInput): number {
+    const ts = now();
+    const info = this.db
+      .prepare("INSERT INTO provider(name, provider, model, thinking, roles_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(input.name, input.provider, input.model ?? null, input.thinking ?? null, jsonOrNull(input.roles), ts, ts);
+    return Number(info.lastInsertRowid);
+  }
+
+  updateProvider(id: number, input: Partial<ProviderInput>): boolean {
+    const cur = this.getProvider(id);
+    if (!cur) return false;
+    this.db
+      .prepare("UPDATE provider SET name = ?, provider = ?, model = ?, thinking = ?, roles_json = ?, updated_at = ? WHERE id = ?")
+      .run(
+        input.name ?? cur.name,
+        input.provider ?? cur.provider,
+        input.model !== undefined ? (input.model ?? null) : cur.model,
+        input.thinking !== undefined ? (input.thinking ?? null) : cur.thinking,
+        input.roles !== undefined ? jsonOrNull(input.roles) : jsonOrNull(cur.roles),
+        now(),
+        id,
+      );
+    return true;
+  }
+
+  deleteProvider(id: number): boolean {
+    return Number(this.db.prepare("DELETE FROM provider WHERE id = ?").run(id).changes) > 0;
+  }
+
+  private getProviderRow(id: number): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM provider WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  }
+
+  getProvider(id: number): ProviderProfile | undefined {
+    const row = this.getProviderRow(id);
+    return row ? toProviderProfile(row) : undefined;
+  }
+
+  getProviderByName(name: string): ProviderProfile | undefined {
+    const row = this.db.prepare("SELECT * FROM provider WHERE name = ?").get(name) as Record<string, unknown> | undefined;
+    return row ? toProviderProfile(row) : undefined;
+  }
+
+  listProviders(): ProviderProfile[] {
+    return (this.db.prepare("SELECT * FROM provider ORDER BY name").all() as Array<Record<string, unknown>>).map(toProviderProfile);
+  }
+
+  countProviders(): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM provider").get() as { n: number }).n);
+  }
+
+  /** Insert the given default profiles if the provider table is empty (idempotent). */
+  seedProviders(defaults: ProviderInput[]): void {
+    if (this.countProviders() > 0) return;
+    this.transaction(() => {
+      for (const d of defaults) this.createProvider(d);
+    });
+  }
+
   // --- internals ------------------------------------------------------------
 
   private transaction(fn: () => void): void {
@@ -636,6 +741,20 @@ function jsonParseOrNull(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function toProviderProfile(row: Record<string, unknown>): ProviderProfile {
+  const roles = typeof row.roles_json === "string" ? (jsonParseOrNull(row.roles_json) as ProviderRoles | null) : null;
+  return {
+    id: Number(row.id),
+    name: String(row.name),
+    provider: String(row.provider),
+    model: (row.model as string | null) ?? null,
+    thinking: (row.thinking as string | null) ?? null,
+    roles: roles ?? {},
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
 }
 
 // Build a parameterized WHERE clause for finding queries (status + text search).

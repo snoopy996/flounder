@@ -23,13 +23,15 @@ async function withServer(fn) {
 test("api: GET /api is a self-describing catalog of every resource + operation", async () => {
   await withServer(async (base) => {
     const cat = await (await fetch(base + "/api")).json();
-    assert.deepEqual(cat.resources, ["project", "run", "scope", "finding", "confirm-decision"]);
+    assert.deepEqual(cat.resources, ["project", "provider", "run", "scope", "finding", "confirm-decision"]);
     const sigs = cat.endpoints.map((e) => e.method + " " + e.path);
     for (const expected of [
       "GET /api/projects", "POST /api/projects", "GET /api/projects/:name",
       "PATCH /api/projects/:name", "DELETE /api/projects/:name",
       "POST /api/projects/:name/runs", "GET /api/projects/:name/findings",
       "GET /api/projects/:name/scopes", "GET /api/projects/:name/confirm-decisions",
+      "GET /api/providers", "POST /api/providers", "GET /api/providers/:id",
+      "PATCH /api/providers/:id", "DELETE /api/providers/:id",
       "GET /api/runs/:id", "POST /api/runs/:id/stop",
     ]) assert.ok(sigs.includes(expected), `catalog missing ${expected}`);
     // every endpoint documents a summary so an agent can learn it
@@ -58,5 +60,35 @@ test("api: project CRUD round-trip over HTTP", async () => {
     assert.deepEqual((await json(await fetch(base + "/api/projects/p/findings"))).findings, []);
     assert.equal((await fetch(base + "/api/projects/p", { method: "DELETE" })).status, 200);
     assert.equal((await fetch(base + "/api/projects/p")).status, 404);
+  });
+});
+
+test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", async () => {
+  await withServer(async (base) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    // a fresh store is seeded with starter profiles
+    const seeded = (await json(await fetch(base + "/api/providers"))).providers;
+    assert.ok(seeded.length >= 1 && seeded.some((p) => p.provider === "openai-codex"), "expected seeded providers");
+
+    // discovery: pi-ai's provider list (+ CLI fallbacks) and a provider's models
+    const avail = (await json(await fetch(base + "/api/pi/providers"))).providers;
+    assert.ok(avail.includes("openai-codex") && avail.includes("claude-code") && avail.includes("mock"));
+
+    // create with a per-phase override (map cheaper than dig), then read it back
+    const created = await json(await post("/api/providers", { name: "prof-x", provider: "openai-codex", model: "gpt-5.5", thinking: "high", roles: { map: { thinking: "low" } } }));
+    assert.ok(created.ok && typeof created.id === "number");
+    assert.equal((await post("/api/providers", { name: "prof-x", provider: "x" })).status, 409); // duplicate name
+
+    const got = (await json(await fetch(base + "/api/providers/" + created.id))).provider;
+    assert.equal(got.provider, "openai-codex");
+    assert.equal(got.roles.map.thinking, "low");
+
+    // update + delete
+    await fetch(base + "/api/providers/" + created.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ thinking: "xhigh" }) });
+    assert.equal((await json(await fetch(base + "/api/providers/" + created.id))).provider.thinking, "xhigh");
+    assert.equal((await fetch(base + "/api/providers/" + created.id, { method: "DELETE" })).status, 200);
+    assert.equal((await fetch(base + "/api/providers/" + created.id)).status, 404);
   });
 });
