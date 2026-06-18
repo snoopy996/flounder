@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { defaultConfig, normalizeProjectContext, normalizeRoleModels, type AuditorConfig } from "./config.js";
 import { runAudit } from "./agent/audit.js";
 import { runConfirm } from "./agent/confirm.js";
+import { runPrepare } from "./agent/acquire.js";
 import { MockAuditLlmClient } from "./llm/mock.js";
 import { importRunToProjectHistory, projectHistoryManifestPath } from "./trace/history.js";
 import { MetadataStore } from "./db/store.js";
@@ -88,6 +89,29 @@ async function main(argv: string[]): Promise<void> {
     if (result.scopeCoverage) {
       const { total, audited, pending } = result.scopeCoverage;
       console.log(`[scopes] audited ${audited}/${total}` + (pending > 0 ? `, ${pending} pending — \`flounder audit\` again for the next batch (or --remap to re-enumerate).` : " — inventory fully audited."));
+    }
+    return;
+  }
+
+  if (cmd === "prepare") {
+    // Open-world ACQUISITION phase, BEFORE map: turn a clue (tx / address / project / link)
+    // into the complete, mainnet-matched scope the sealed audit will read, staged with a
+    // provenance manifest. Usage: flounder prepare <clue> [--posture blind|informed] [--no-match-deployed] [--endpoint <url>]
+    const { cfg } = await parseConfig(rest);
+    const clue = (rest[0] && !rest[0].startsWith("--") ? rest[0] : undefined) ?? readFlag(rest, "--clue");
+    if (!clue) throw new Error("flounder prepare needs a clue: flounder prepare <tx|address|project|url> [--posture blind|informed]");
+    const posture: "blind" | "informed" = readFlag(rest, "--posture") === "informed" ? "informed" : "blind";
+    const matchDeployed = !rest.includes("--no-match-deployed");
+    const endpoint = readFlag(rest, "--endpoint") ?? readFlag(rest, "--rpc");
+    const maxSteps = readIntFlag(rest, "--max-steps");
+    const result = await runPrepare(cfg, { clue, posture, matchDeployed, ...(endpoint !== undefined ? { endpoint } : {}), ...(maxSteps !== undefined ? { maxSteps } : {}), streamEvents: true });
+    console.log(`[prepare dir] ${result.workspaceDir}  ← staged, deployment-matched source (next: flounder map --source <this dir> --target <name>)`);
+    console.log(`[manifest] ${result.runDir}/prepare_manifest.json  ← provenance: components, deployment-match, posture, gaps`);
+    const v = result.validation;
+    console.log(`[scope] ${v.components} components — matched:${v.matched} unverified:${v.unverified} source-pinned(no deployment):${v.sourcePinned}`);
+    if (v.issues.length > 0) {
+      console.log(`[constraint issues] ${v.issues.length} (two-tier routing):`);
+      for (const issue of v.issues) console.log(`  - ${issue}`);
     }
     return;
   }
@@ -432,6 +456,7 @@ function printHelp(): void {
   console.log(`flounder — white-hat agentic security audit.
 
 Usage:
+  flounder prepare <clue> [--posture blind|informed] [--no-match-deployed] [--endpoint <url>]   open-world: clue (tx/address/project/repo/link) -> complete, deployment-matched scope; runs BEFORE map
   flounder run     --target <name> --source <paths...> [--corpus <paths...>]      sealed audit: map -> audit (--quick = one breadth pass)
   flounder map     --target <name> --source <paths...> [--corpus <paths...>]      enumerate the scope inventory only (writes audit_scopes.json)
   flounder audit   [<region> | --scope <id,...> | --verify <file>] --source ...   deep-audit a region, inventory scopes, or given claims

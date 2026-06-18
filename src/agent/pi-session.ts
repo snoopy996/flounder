@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import type { AuditorConfig } from "../config.js";
 import type { RunLogger } from "../trace/logger.js";
 import type { LlmClient } from "../types.js";
-import { AUDIT_CONFIRM_SYSTEM, type TranscriptStep } from "./prompts.js";
+import { AUDIT_CONFIRM_SYSTEM, AUDIT_PREPARE_SYSTEM, type TranscriptStep } from "./prompts.js";
 import { readScratchScopes, scratchHasFindings, type AgentTool, type ToolContext } from "./tools.js";
 
 // Continuous-session driver (point 5). Instead of re-driving a stateless
@@ -48,6 +48,8 @@ export async function runAuditSession(input: {
   verify?: string;
   /** Confirm mode: the open-world reproduce/consolidate/decide pass over a prior run's findings. */
   confirm?: string;
+  /** Prepare mode: the open-world acquire + mainnet-match phase (runs before map). Carries the clue + posture + match-mainnet constraint. */
+  prepare?: string;
   /** Called each turn in confirm mode with the decision rows written so far (raw), so a
    * tracker can project live reproduction progress. Best-effort; must not throw. */
   onConfirmCheckpoint?: (rows: unknown[]) => void;
@@ -180,6 +182,18 @@ export async function runAuditSession(input: {
     [...input.ctx.session.scratchFiles.keys()].some((key) => key === basename || key.endsWith(`/${basename}`));
   const finalizeIfEmpty = async (): Promise<void> => {
     if (finalizing) return;
+    if (input.prepare) {
+      if (hasScratch("prepare_manifest.json")) return;
+      finalizing = true;
+      await input.logger.event("audit_prepare_finalize", { reason: "no prepare_manifest.json before stop" });
+      try {
+        await session.prompt(PREPARE_FINALIZE_PROMPT);
+      } catch {
+        // best-effort
+      }
+      await input.logger.event("audit_prepare_finalize_done", { hasManifest: hasScratch("prepare_manifest.json") });
+      return;
+    }
     if (input.confirm) {
       if (hasScratch("confirm_decision.json")) return;
       finalizing = true;
@@ -227,6 +241,7 @@ export async function runAuditSession(input: {
         ...(input.map ? { map: true } : {}),
         ...(input.verify ? { verify: input.verify } : {}),
         ...(input.confirm ? { confirm: input.confirm } : {}),
+        ...(input.prepare ? { prepare: input.prepare } : {}),
       }));
     } catch (error) {
       if (!budgetAborted) {
@@ -305,9 +320,10 @@ const toolSchemas: Record<string, ReturnType<typeof Type.Object>> = {
   }),
 };
 
-function buildSessionPrompt(input: { cfg: AuditorConfig; scopeNote?: string; fileManifest: string; memoryHint?: string; deep?: boolean; deepFocus?: string; map?: boolean; verify?: string; confirm?: string }): string {
+function buildSessionPrompt(input: { cfg: AuditorConfig; scopeNote?: string; fileManifest: string; memoryHint?: string; deep?: boolean; deepFocus?: string; map?: boolean; verify?: string; confirm?: string; prepare?: string }): string {
   // Confirm is the open-world mode: it has its own white-hat line (fork/read live
   // networks OK, never broadcast), so it does NOT share the local-only scaffold below.
+  if (input.prepare) return buildPrepareSessionPrompt({ prepare: input.prepare, fileManifest: input.fileManifest, ...(input.memoryHint ? { memoryHint: input.memoryHint } : {}) });
   if (input.confirm) return buildConfirmSessionPrompt({ confirm: input.confirm, fileManifest: input.fileManifest, ...(input.scopeNote ? { scopeNote: input.scopeNote } : {}), ...(input.memoryHint ? { memoryHint: input.memoryHint } : {}) });
   const intro = input.verify ? verifyIntro(input.verify) : input.map ? mapIntro() : input.deep ? deepIntro(input.deepFocus) : breadthIntro();
   return `${intro}
@@ -350,6 +366,23 @@ ${input.map
 const MAP_FINALIZE_PROMPT = `Your exploration budget is spent. Do NOT read, grep, or run anything else. Based ONLY on what you have already examined, WRITE scopes.json now at the workspace root as your very next action — call the write tool once with a JSON array of objects {"id","obligation","region":"file:lines","lenses":[...],"exposure","difficulty","score","why"} covering the most soundness-critical regions you saw (entrypoints that move value, accounting/share math, authorization, liquidation/swap invariants, oracle binding). Partial but concrete beats empty. After writing, emit {"done": true}. Output only the write tool call.`;
 
 const FINDINGS_FINALIZE_PROMPT = `Your budget is spent. Do NOT read, grep, or run anything else. Based ONLY on the analysis you have already done, WRITE findings.json now at the workspace root as your very next action — call the write tool once with the obligations you enumerated for this region and EACH one's status: either discharged (state the exact enforcing line) or suspected (state root cause, exact location, attacker impact, and a fix). Do NOT mark anything confirmed/confirmed-executable — that status requires a test you actually ran and passed, and the budget is gone. Persisting your suspected/discharged analysis is the goal; partial but concrete beats empty. After writing, emit {"done": true}. Output only the write tool call.`;
+
+const PREPARE_FINALIZE_PROMPT = `Your budget is spent. Do NOT fetch or run anything else. WRITE prepare_manifest.json now at the workspace root as your very next action — call the write tool once with an object: {"clue","posture","match_deployed"(bool),"components":[{"role":"target|dependency|implementation|verifier|other","identity":"<address / package / path / etc.>","platform":"<chain / registry / host, or 'none'>","revision":"<block / version / commit / digest>","source":"<verified|published|repo@commit|unverified>","staged_path","match":"matched|unverified|n/a","match_evidence"}],"offscope":[{"kind":"circuit|spec|docs|prior-audit|other","resolved":(bool),"where","note"}],"gaps":[...],"answer_firewall":"clean|flagged: ...","notes"}. Record honestly: a deployed component you could not match is "unverified"; a non-deployed one is "n/a" with its source origin pinned; anything you could not find is a gap, not a guess. After writing, emit {"done": true}. Output only the write tool call.`;
+
+function buildPrepareSessionPrompt(input: { prepare: string; fileManifest: string; memoryHint?: string }): string {
+  return `${AUDIT_PREPARE_SYSTEM}
+
+Your task for THIS run (clue + posture + match-mainnet constraint):
+${input.prepare}
+
+Workspace (initially empty — stage everything you fetch here; this directory becomes the audit's source):
+${input.fileManifest}
+
+Durable memory from prior prepares of this target:
+${input.memoryHint && input.memoryHint.trim().length > 0 ? input.memoryHint.trim() : "(empty)"}
+
+Begin: resolve the clue, walk the on-chain graph, fetch and mainnet-match the source, record gaps, then write prepare_manifest.json.`;
+}
 
 const CONFIRM_FINALIZE_PROMPT = `Your budget is spent. Do NOT read, fork, fetch, or run anything else. Based ONLY on what you have already reproduced, WRITE confirm_decision.json now at the workspace root as your very next action — call the write tool once with a JSON array, one row per DISTINCT bug: {"bug","members":[...],"distinct_fix","reproduced":"yes"|"no"|"could-not-set-up","repro_evidence","repro_command_id","fix_patch":{"path","old","new"},"patched_success_patterns":[...],"corroboration","novelty","human_gates","recommendation":"submit-candidate"|"needs-human"|"drop"}. Mark "reproduced":"yes" ONLY for a bug you actually reproduced on the real target with a passing command_id; otherwise "no"/"could-not-set-up" with the crutch/blocker named. Include repro_command_id + fix_patch + patched_success_patterns for any source-level PoC so the framework can verify consolidation by execution. Partial but honest beats empty. After writing, emit {"done": true}. Output only the write tool call.`;
 

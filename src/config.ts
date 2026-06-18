@@ -68,6 +68,9 @@ export interface AuditorConfig {
   // live networks, fetch, search — never BROADCAST). This is the only capability
   // difference; the white-hat broadcast line and the confirmation gate are unchanged.
   confirmMode: boolean;
+  /** Prepare phase (open-world acquire + mainnet-match, runs BEFORE map). Uses the same
+   * network-enabled bash policy as confirm (fork/read/fetch — never broadcast). */
+  prepareMode: boolean;
   // Per-role model assignment. A role (map/dig/refute) resolves to its own entry,
   // else `default`, else the top-level provider/auditModel/thinkingLevel. Nothing
   // is auto-downgraded: an unspecified role inherits the main model.
@@ -153,6 +156,7 @@ export function defaultConfig(): AuditorConfig {
     auditMapOnly: false,
     auditRequireInventory: false,
     confirmMode: false,
+    prepareMode: false,
     dryRun: false,
   };
 }
