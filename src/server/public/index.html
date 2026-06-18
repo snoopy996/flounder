@@ -470,11 +470,13 @@ function phaseState(d, pr) {
   const prep = latest("prepare");
   const repro = (d.confirmDecisions || []).filter((c) => c.reproduced === "yes").length;
   const conf = latest("confirm");
+  const runningDig = runs.find((r) => r.status === "running" && (r.kind === "run" || r.kind === "audit"));
+  const thisRun = runningDig && runningDig.run_scopes_target != null ? " · this run " + (runningDig.run_scopes_done ?? 0) + "/" + runningDig.run_scopes_target : "";
   return {
     prepare: { status: prep ? prep.status : "none", stat: prep ? (prep.status === "done" ? "source staged" : prep.status) : "not run" },
     map: { status: pr.total > 0 ? "done" : (runningIn("run", "map") ? "running" : "none"), stat: pr.total > 0 ? pr.total + " obligations" : "—" },
     dig: { status: runningIn("run", "audit") ? "running" : (pr.audited > 0 ? "done" : (pr.total > 0 ? "pending" : "none")),
-           stat: pr.total > 0 ? (pr.audited + "/" + pr.total + " audited · " + pr.pending + " pending" + (d.findingsTotal ? " · " + d.findingsTotal + " findings" : "")) : "—" },
+           stat: pr.total > 0 ? (pr.audited + "/" + pr.total + " audited · " + pr.pending + " pending" + (d.findingsTotal ? " · " + d.findingsTotal + " findings" : "") + thisRun) : "—" },
     confirm: { status: conf ? conf.status : (d.confirmDecisions.length ? "done" : "none"), stat: d.confirmDecisions.length ? (repro + "/" + d.confirmDecisions.length + " reproduced") : "not run" },
   };
 }
@@ -517,6 +519,8 @@ function renderDetail() {
   for (const c of d.confirmDecisions) { const k = c.run_id; (confByRun[k] = confByRun[k] || { total: 0, yes: 0 }); confByRun[k].total++; if (c.reproduced === "yes") confByRun[k].yes++; }
   const runProgress = (r) => {
     if (r.kind === "confirm") { const cc = confByRun[r.id]; return cc ? (cc.yes + "/" + cc.total + " reproduced") : "—"; }
+    // Per-run dig batch (this run's N scopes), then the project-cumulative total for context.
+    if (r.run_scopes_target != null) return (r.run_scopes_done ?? 0) + "/" + r.run_scopes_target + " scopes this run" + (r.scopes_total != null ? " · " + (r.scopes_audited ?? 0) + "/" + r.scopes_total + " total" : "");
     if (r.scopes_total != null) return (r.scopes_audited ?? 0) + "/" + r.scopes_total + " scopes audited";
     return r.findings_total != null ? r.findings_total + " findings" : "—";
   };

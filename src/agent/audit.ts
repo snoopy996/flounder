@@ -257,6 +257,10 @@ export async function runAudit(
         .sort((a, b) => b.score - a.score)
         .slice(0, Math.max(1, cfg.auditMaxScopes));
     }
+    // This run's dig batch: toDig is the set of scopes THIS run audits (capped by --max-scopes),
+    // distinct from the project-cumulative coverage. Report it so the UI can show "M / N this run".
+    recorder.runScopes(0, toDig.length);
+    let digDone = 0;
     const aggregated: AgentFinding[] = [];
     // Checkpoint the run's confirmed findings so far to the run dir after each dig, so a
     // killed run keeps the completed digs' findings (raw confirmed-executable; the
@@ -330,6 +334,7 @@ export async function runAudit(
         // on the next run (concurrent digs' findings live in their isolated workspaces).
         await saveScopeInventory(inventoryDir, scopeInventory);
         recorder.scopes(scopeInventory);
+        recorder.runScopes(++digDone, toDig.length);
         return { findings: unioned, steps: digSteps, commandRuns: scopedRuns };
       };
       await logger.event("audit_dig_concurrent_start", { scopes: toDig.length, concurrency });
@@ -357,6 +362,7 @@ export async function runAudit(
         await saveScopeInventory(inventoryDir, scopeInventory);
         await checkpointFindings();
         recorder.scopes(scopeInventory);
+        recorder.runScopes(++digDone, toDig.length);
       }
     }
     // Each scope/dig session numbered its findings independently (f1, f2, …), so

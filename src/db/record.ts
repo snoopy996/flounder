@@ -27,6 +27,8 @@ export interface ConfirmDecisionInput {
 export interface RunTracker {
   readonly runDbId: number | undefined;
   scopes(scopes: AuditScope[]): void;
+  /** This run's dig batch: how many scopes it is digging (target) + how many done so far. */
+  runScopes(done: number, target: number): void;
   findings(findings: AgentFinding[], runDir: string, reason?: string): void;
   confirmDecisions(rows: ConfirmDecisionInput[], decisionPath?: string): void;
   finish(status: RunStatus, coverage?: Coverage, findingsTotal?: number): void;
@@ -87,6 +89,16 @@ export class RunRecorder implements RunTracker {
       this.store!.updateRunCoverage(this.runId!, this.store!.scopeProgress(this.projectId!));
     } catch (error) {
       this.disable("scopes", error);
+    }
+  }
+
+  /** Record this run's dig batch progress (target = scopes this run will dig, done = completed). */
+  runScopes(done: number, target: number): void {
+    if (!this.ready()) return;
+    try {
+      this.store!.updateRunScopes(this.runId!, done, target);
+    } catch (error) {
+      this.disable("run-scopes", error);
     }
   }
 

@@ -149,6 +149,8 @@ CREATE TABLE IF NOT EXISTS run(
   scopes_total INTEGER,
   scopes_audited INTEGER,
   scopes_pending INTEGER,
+  run_scopes_target INTEGER,
+  run_scopes_done INTEGER,
   findings_total INTEGER,
   started_at TEXT NOT NULL,
   ended_at TEXT
@@ -270,6 +272,8 @@ export class MetadataStore {
       "ALTER TABLE project ADD COLUMN provider_id INTEGER",
       "ALTER TABLE project ADD COLUMN dir TEXT",
       "ALTER TABLE daemon ADD COLUMN workspace TEXT",
+      "ALTER TABLE run ADD COLUMN run_scopes_target INTEGER",
+      "ALTER TABLE run ADD COLUMN run_scopes_done INTEGER",
     ]) {
       try {
         this.db.exec(alter);
@@ -416,6 +420,14 @@ export class MetadataStore {
     this.db
       .prepare("UPDATE run SET scopes_total = ?, scopes_audited = ?, scopes_pending = ? WHERE id = ?")
       .run(coverage.total, coverage.audited, coverage.pending, runId);
+  }
+
+  /** Per-run dig batch: how many scopes THIS run is digging (target) and how many it has
+   * completed (done) — distinct from the project-cumulative scopes_* above. */
+  updateRunScopes(runId: number, done: number, target: number): void {
+    this.db
+      .prepare("UPDATE run SET run_scopes_done = ?, run_scopes_target = ? WHERE id = ?")
+      .run(done, target, runId);
   }
 
   listRuns(projectId?: number, limit?: number): Array<Record<string, unknown>> {
