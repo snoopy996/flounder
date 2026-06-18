@@ -176,6 +176,8 @@
   .chip-search { margin-left: auto; max-width: 220px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   table.fixed { table-layout: fixed; }
+  .pager { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .pager .muted { font-size: 12px; }
   thead th { background: var(--canvas-subtle); color: var(--fg-muted); font-weight: 500; font-size: 12px; text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
   tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border-muted); vertical-align: top; overflow-wrap: anywhere; }
   tbody tr:last-child td { border-bottom: 0; }
@@ -310,7 +312,7 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
-let state = { projects: [], active: [], providers: [], filter: "", selected: null, detail: null, phase: null, f: { status: "", q: "", limit: 20, offset: 0, rows: [], total: 0 } };
+let state = { projects: [], active: [], providers: [], filter: "", selected: null, detail: null, phase: null, scopePage: 0, f: { status: "", q: "", limit: 20, offset: 0, rows: [], total: 0 } };
 
 // Live activity feed: streams a run's events.jsonl (model thinking/output + tool calls) over
 // SSE. Kept in a PERSISTENT detached node so the detail re-rendering each tick doesn't wipe
@@ -430,6 +432,7 @@ async function selectProject(name) {
   state.selected = name;
   lastDetailSig = null; // force a fresh render when (re)selecting, even if the data signature matches
   state.phase = null; // recompute the default phase tab for the newly-selected project
+  state.scopePage = 0;
   state.f = { status: "", q: "", limit: 20, offset: 0, rows: [], total: 0 };
   renderList();
   await loadDetail();
@@ -463,7 +466,7 @@ async function loadFindings(reset) {
   const res = await fetch("/api/projects/" + encodeURIComponent(state.selected) + "/findings?" + q.toString());
   if (!res.ok) return;
   const data = await res.json();
-  state.f.rows = reset ? data.findings : state.f.rows.concat(data.findings);
+  state.f.rows = data.findings; // page-based: replace, not accumulate
   state.f.total = data.total;
   renderFindings();
 }
@@ -538,7 +541,11 @@ function renderDetail() {
   const runsTableHtml = (rs) => rs.length
     ? '<table><thead><tr><th>kind</th><th>progress</th><th>dir</th><th>started</th><th></th></tr></thead><tbody>' + rs.map(runRowHtml).join("") + '</tbody></table>'
     : '<div class="muted">no runs in this phase yet</div>';
-  const scopeRows = (d.scopes || []).map((sc) => {
+  const SCOPE_PAGE = 12;
+  const allScopes = d.scopes || [];
+  if (state.scopePage * SCOPE_PAGE >= allScopes.length) state.scopePage = 0; // clamp after the inventory changes
+  const scopeSlice = allScopes.slice(state.scopePage * SCOPE_PAGE, state.scopePage * SCOPE_PAGE + SCOPE_PAGE);
+  const scopeRows = scopeSlice.map((sc) => {
     const act = sc.status === "audited" ? ""
       : sc.status === "deferred" ? '<button class="rowbtn" data-scope="' + esc(sc.scope_id) + '" data-sstatus="pending">Resume</button>'
       : '<button class="rowbtn" data-scope="' + esc(sc.scope_id) + '" data-sstatus="deferred">Skip</button>';
@@ -546,8 +553,8 @@ function renderDetail() {
     return '<tr class="scope-row" data-sdetail="' + esc(sc.scope_id) + '" style="cursor:pointer"><td><span class="sdot ' + dot + '"></span> <span class="label s-' + sc.status + '">' + sc.status + '</span></td><td class="mono">' + esc(sc.scope_id) + '</td><td>' + esc(sc.title)
       + '</td><td class="mono muted">' + esc(sc.location) + '</td><td class="mono muted">' + (sc.score != null ? Number(sc.score).toFixed(1) : "") + '</td><td>' + act + '</td></tr>';
   }).join("");
-  const scopesInner = (d.scopes && d.scopes.length)
-    ? '<div id="scopesScroll" style="max-height:460px;overflow-y:auto"><table class="fixed"><colgroup><col style="width:11%"><col style="width:15%"><col style="width:33%"><col style="width:28%"><col style="width:6%"><col style="width:7%"></colgroup><thead><tr><th>status</th><th>id</th><th>obligation</th><th>location</th><th>score</th><th></th></tr></thead><tbody>' + scopeRows + '</tbody></table></div>'
+  const scopesInner = allScopes.length
+    ? '<table class="fixed"><colgroup><col style="width:11%"><col style="width:15%"><col style="width:33%"><col style="width:28%"><col style="width:6%"><col style="width:7%"></colgroup><thead><tr><th>status</th><th>id</th><th>obligation</th><th>location</th><th>score</th><th></th></tr></thead><tbody>' + scopeRows + '</tbody></table>' + pager("S", state.scopePage * SCOPE_PAGE, SCOPE_PAGE, allScopes.length, scopeSlice.length)
     : '<div class="muted">No scopes mapped yet — run the map phase.</div>';
   // Confirmed bugs = decisions that actually reproduced on the real target (the payoff).
   const confirmed = d.confirmDecisions.filter((c) => c.reproduced === "yes");
@@ -649,6 +656,8 @@ function renderDetail() {
     row.insertAdjacentHTML("afterend", '<tr class="scope-detail"><td></td><td colspan="5" style="padding:10px 14px;background:rgba(127,127,127,.06)">' + body + '</td></tr>');
   });
   el.querySelectorAll("[data-phase]").forEach((n) => n.onclick = () => { state.phase = n.dataset.phase; renderDetail(); });
+  const sp = $("#prevS"); if (sp) sp.onclick = () => { state.scopePage = Math.max(0, state.scopePage - 1); renderDetail(); };
+  const sn = $("#nextS"); if (sn) sn.onclick = () => { state.scopePage += 1; renderDetail(); };
   renderChips();
   renderFindings();
   attachActivity(d);
@@ -673,10 +682,19 @@ function renderFindings() {
   if (state.f.rows.length === 0) { el.innerHTML = '<div class="muted">no findings match</div>'; return; }
   const rows = state.f.rows.map((f) => '<tr><td>' + statusBadge(f.status) + '</td><td>' + esc(f.title)
     + '</td><td class="mono muted">' + esc(f.location) + '</td><td class="timeline">' + (f.timeline || []).map((e) => e.to_status).join(" → ") + '</td></tr>').join("");
-  const more = state.f.rows.length < state.f.total
-    ? '<div class="loadmore"><button class="btn sm" id="moreBtn">Load ' + Math.min(state.f.limit, state.f.total - state.f.rows.length) + ' more (' + state.f.rows.length + '/' + state.f.total + ')</button></div>' : "";
-  el.innerHTML = '<table class="fixed"><colgroup><col style="width:13%"><col style="width:36%"><col style="width:39%"><col style="width:12%"></colgroup><thead><tr><th>status</th><th>title</th><th>location</th><th>timeline</th></tr></thead><tbody>' + rows + '</tbody></table>' + more;
-  const mb = $("#moreBtn"); if (mb) mb.onclick = () => { state.f.offset += state.f.limit; loadFindings(false); };
+  el.innerHTML = '<table class="fixed"><colgroup><col style="width:13%"><col style="width:36%"><col style="width:39%"><col style="width:12%"></colgroup><thead><tr><th>status</th><th>title</th><th>location</th><th>timeline</th></tr></thead><tbody>' + rows + '</tbody></table>' + pager("F", state.f.offset, state.f.limit, state.f.total, state.f.rows.length);
+  const pv = $("#prevF"); if (pv) pv.onclick = () => { state.f.offset = Math.max(0, state.f.offset - state.f.limit); loadFindings(false); };
+  const nx = $("#nextF"); if (nx) nx.onclick = () => { state.f.offset += state.f.limit; loadFindings(false); };
+}
+
+// A reusable prev/next pager (id suffix unique per table): "‹ Prev  from–to of total · page p/n  Next ›".
+function pager(suffix, offset, limit, total, shown) {
+  if (total <= limit && offset === 0) return "";
+  const page = Math.floor(offset / limit) + 1, pages = Math.max(1, Math.ceil(total / limit));
+  const from = total ? offset + 1 : 0, to = offset + shown;
+  return '<div class="pager"><button class="btn sm" id="prev' + suffix + '"' + (offset <= 0 ? ' disabled' : '') + '>‹ Prev</button>'
+    + '<span class="muted">' + from + '–' + to + ' of ' + total + ' · page ' + page + '/' + pages + '</span>'
+    + '<button class="btn sm" id="next' + suffix + '"' + (offset + limit >= total ? ' disabled' : '') + '>Next ›</button></div>';
 }
 
 function projectFields(d) {
