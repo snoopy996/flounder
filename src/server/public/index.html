@@ -61,7 +61,7 @@
   #list { overflow-y: auto; border-right: 1px solid var(--border); padding: 18px; background: var(--canvas); }
   #detail { overflow-y: auto; padding: 32px 36px; background: var(--canvas-subtle); }
   /* multica-style: a calm gray page with white cards. Major detail sections sit in .card. */
-  .card { background: var(--canvas); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; max-width: 1080px; }
+  .card { background: var(--canvas); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
   .card:last-child { margin-bottom: 0; }
 
   .searchbar { width: 100%; background: var(--canvas); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; margin-bottom: 12px; }
@@ -425,6 +425,7 @@ function labelWithCount(s, n) { return '<span class="label s-' + s + '">' + n + 
 function stateBadge(s) { const cls = ["running","done","error","killed"].includes(s) ? s : "none"; return '<span class="state ' + cls + '">' + (s || "no runs") + '</span>'; }
 function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function pct(a, t) { return t > 0 ? Math.round((a / t) * 100) : 0; }
+function fmtTime(s) { if (!s) return ""; const d = new Date(s); return isNaN(d.getTime()) ? "" : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }); }
 
 // --- theme ---
 function applyTheme(t) { document.documentElement.dataset.theme = t === "dark" ? "dark" : ""; localStorage.setItem("flounder-theme", t); $("#themeBtn").innerHTML = icon(t === "dark" ? "sun" : "moon"); }
@@ -577,7 +578,7 @@ function renderDetail() {
       : sc.status === "deferred" ? '<button class="rowbtn" data-scope="' + esc(sc.scope_id) + '" data-sstatus="pending">Resume</button>'
       : '<button class="rowbtn" data-scope="' + esc(sc.scope_id) + '" data-sstatus="deferred">Skip</button>';
     const dot = sc.status === "audited" ? "done" : sc.status;
-    return '<tr class="scope-row" data-sdetail="' + esc(sc.scope_id) + '" style="cursor:pointer"><td><span class="sdot ' + dot + '"></span> <span class="label s-' + sc.status + '">' + sc.status + '</span></td><td class="mono">' + esc(sc.scope_id) + '</td><td>' + esc(sc.title)
+    return '<tr class="scope-row" data-sdetail="' + esc(sc.scope_id) + '" style="cursor:pointer"><td><span class="sdot ' + dot + '"></span> <span class="label s-' + sc.status + '">' + sc.status + '</span>' + (sc.status === "audited" && sc.updated_at ? '<div class="muted" style="font-size:10px;margin-top:3px">' + fmtTime(sc.updated_at) + '</div>' : '') + '</td><td class="mono">' + esc(sc.scope_id) + '</td><td>' + esc(sc.title)
       + '</td><td class="mono muted">' + esc(sc.location) + '</td><td class="mono muted">' + (sc.score != null ? Number(sc.score).toFixed(1) : "") + '</td><td>' + act + '</td></tr>';
   }).join("");
   const scopesInner = allScopes.length
@@ -708,8 +709,8 @@ function renderFindings() {
   const el = $("#findings"); if (!el) return;
   if (state.f.rows.length === 0) { el.innerHTML = '<div class="muted">no findings match</div>'; return; }
   const rows = state.f.rows.map((f) => '<tr><td>' + statusBadge(f.status) + '</td><td>' + esc(f.title)
-    + '</td><td class="mono muted">' + esc(f.location) + '</td><td class="timeline">' + (f.timeline || []).map((e) => e.to_status).join(" → ") + '</td></tr>').join("");
-  el.innerHTML = '<table class="fixed"><colgroup><col style="width:13%"><col style="width:36%"><col style="width:39%"><col style="width:12%"></colgroup><thead><tr><th>status</th><th>title</th><th>location</th><th>timeline</th></tr></thead><tbody>' + rows + '</tbody></table>' + pager("F", state.f.offset, state.f.limit, state.f.total, state.f.rows.length);
+    + '</td><td class="mono muted">' + esc(f.location) + '</td><td class="muted" style="font-size:11px">' + fmtTime(f.updated_at || f.created_at) + '</td></tr>').join("");
+  el.innerHTML = '<table class="fixed"><colgroup><col style="width:170px"><col style="width:34%"><col style="width:42%"><col style="width:120px"></colgroup><thead><tr><th>status</th><th>title</th><th>location</th><th>found</th></tr></thead><tbody>' + rows + '</tbody></table>' + pager("F", state.f.offset, state.f.limit, state.f.total, state.f.rows.length);
   const pv = $("#prevF"); if (pv) pv.onclick = () => { state.f.offset = Math.max(0, state.f.offset - state.f.limit); loadFindings(false); };
   const nx = $("#nextF"); if (nx) nx.onclick = () => { state.f.offset += state.f.limit; loadFindings(false); };
 }
