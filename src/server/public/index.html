@@ -62,6 +62,10 @@
 
   .searchbar { width: 100%; background: var(--canvas); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; margin-bottom: 12px; }
   .searchbar:focus, input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+  .list-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .list-head .list-title { font-weight: 600; font-size: 14px; color: var(--fg); }
+  .list-head .counter { color: var(--fg-muted); border-color: var(--border); }
+  .list-head .btn { margin-left: auto; }
 
   .box { border: 1px solid var(--border); border-radius: 6px; background: var(--canvas); overflow: hidden; }
   .box-header { background: var(--canvas-subtle); padding: 10px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
@@ -163,10 +167,17 @@
   <span class="spacer"></span>
   <span id="livePill" class="counter">connecting…</span>
   <button class="icon-btn" id="themeBtn" title="Toggle theme"></button>
-  <button class="btn primary" id="newProjectBtn"><svg class="octicon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"></path></svg>New project</button>
 </header>
 <main>
-  <div id="list"></div>
+  <div id="list">
+    <div class="list-head">
+      <span class="list-title">Projects</span>
+      <span id="projCount" class="counter">0</span>
+      <button class="btn primary sm" id="newProjectBtn"><svg class="octicon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"></path></svg>New project</button>
+    </div>
+    <input class="searchbar" id="projSearch" placeholder="Filter projects…" />
+    <div id="listItems"></div>
+  </div>
   <div id="detail"><div class="empty">Select a project, or create one with “New project”.</div></div>
 </main>
 
@@ -296,10 +307,10 @@ applyTheme(localStorage.getItem("flounder-theme") || "light");
 
 // --- project list ---
 function renderList() {
-  const el = $("#list");
+  const items = $("#listItems");
   const shown = state.projects.filter((p) => p.name.toLowerCase().includes(state.filter.toLowerCase()));
-  const search = '<input class="searchbar" id="projSearch" placeholder="Filter projects…" value="' + esc(state.filter) + '" />';
-  if (state.projects.length === 0) { el.innerHTML = search + '<div class="box"><div class="empty">No projects yet.<br>Create one with “New project”.</div></div>'; bindSearch(); return; }
+  $("#projCount").textContent = shown.length;
+  if (state.projects.length === 0) { items.innerHTML = '<div class="box"><div class="empty">No projects yet.<br>Create one with the “New project” button above.</div></div>'; return; }
   const rows = shown.map((p) => {
     const pr = p.progress || { total: 0, audited: 0, pending: 0 };
     const labels = Object.entries(p.findingCounts || {}).map(([s, n]) => labelWithCount(s, n)).join(" ");
@@ -312,15 +323,11 @@ function renderList() {
       + (labels ? '<div class="labels">' + labels + '</div>' : '<div class="muted" style="margin-top:10px">' + p.findingsTotal + ' findings</div>')
       + '</div>';
   }).join("");
-  el.innerHTML = search + '<div class="box"><div class="box-header">' + icon("bug") + 'Projects <span class="counter" style="margin-left:auto;color:var(--fg-muted);border-color:var(--border)">' + shown.length + '</span></div>'
-    + (shown.length ? rows : '<div class="empty">No match.</div>') + '</div>';
-  bindSearch();
-  el.querySelectorAll(".box-row").forEach((c) => c.onclick = () => selectProject(c.dataset.name));
+  items.innerHTML = '<div class="box">' + (shown.length ? rows : '<div class="empty">No match.</div>') + '</div>';
+  items.querySelectorAll(".box-row").forEach((c) => c.onclick = () => selectProject(c.dataset.name));
 }
-function bindSearch() {
-  const s = $("#projSearch"); if (!s) return;
-  s.oninput = () => { state.filter = s.value; const pos = s.selectionStart; renderList(); const n = $("#projSearch"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
-}
+// the search box persists across re-renders, so a one-time binding keeps focus naturally
+$("#projSearch").oninput = () => { state.filter = $("#projSearch").value; renderList(); };
 
 async function selectProject(name) {
   state.selected = name;
