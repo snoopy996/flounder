@@ -144,6 +144,29 @@ test("store: setScopeStatus marks a scope deferred (skipped) and counts it", asy
   db.close();
 });
 
+test("store: daemon tokens + job queue (claim is FIFO and one-shot; cancel is observable)", async () => {
+  const db = await tempDb();
+  const { token } = db.createDaemonToken("local");
+  assert.ok(db.getDaemonByToken(token)); // valid token authenticates
+  assert.equal(db.getDaemonByToken("nope"), undefined); // unknown token rejected
+  const daemonId = Number(db.getDaemonByToken(token).id);
+
+  const j1 = db.enqueueJob("proj", { verb: "run" });
+  const j2 = db.enqueueJob("proj", { verb: "map" });
+  const claim1 = db.claimJob(daemonId);
+  assert.equal(claim1.id, j1); // FIFO
+  assert.deepEqual(claim1.spec, { verb: "run" });
+  assert.equal(db.getJob(j1).status, "dispatched");
+  assert.equal(db.claimJob(daemonId).id, j2);
+  assert.equal(db.claimJob(daemonId), undefined); // queue drained
+
+  db.requestJobCancel(j1);
+  assert.deepEqual(db.canceledJobIds(), [j1]); // a daemon polls this to abort
+  db.setJobStatus(j1, "killed");
+  assert.deepEqual(db.canceledJobIds(), []); // no longer running → not reported
+  db.close();
+});
+
 test("store: confirm decisions are replaced per run, not duplicated", async () => {
   const db = await tempDb();
   const projectId = db.upsertProject({ name: "p" });

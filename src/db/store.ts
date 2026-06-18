@@ -11,6 +11,7 @@
 
 import "./sqlite-quiet.js"; // must run before node:sqlite loads — filters its experimental warning
 import { createRequire } from "node:module";
+import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -175,6 +176,29 @@ CREATE TABLE IF NOT EXISTS confirm_decision(
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cd_project ON confirm_decision(project_id);
+
+CREATE TABLE IF NOT EXISTS daemon(
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  token TEXT UNIQUE NOT NULL,
+  capabilities TEXT,
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS job(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  spec_json TEXT NOT NULL,
+  status TEXT NOT NULL,           -- queued | dispatched | running | done | error | canceled
+  daemon_id INTEGER REFERENCES daemon(id),
+  run_id INTEGER REFERENCES run(id),
+  cancel INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_status ON job(status);
 `;
 
 function now(): string {
@@ -507,6 +531,74 @@ export class MetadataStore {
     return Number((this.db.prepare("SELECT COUNT(*) AS n FROM confirm_decision WHERE project_id = ? AND reproduced = 'yes'").get(projectId) as { n: number }).n);
   }
 
+  // --- daemons + job queue (control plane for remote execution) -------------
+
+  /** Mint a bearer token for a new daemon. The operator configures it on the daemon side. */
+  createDaemonToken(name: string): { id: number; token: string } {
+    const token = randomBytes(24).toString("hex");
+    const info = this.db.prepare("INSERT INTO daemon(name, token, created_at) VALUES (?, ?, ?)").run(name, token, now());
+    return { id: Number(info.lastInsertRowid), token };
+  }
+
+  getDaemonByToken(token: string): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM daemon WHERE token = ?").get(token) as Record<string, unknown> | undefined;
+  }
+
+  touchDaemon(id: number, capabilities?: unknown): void {
+    this.db
+      .prepare("UPDATE daemon SET last_seen_at = ?, capabilities = COALESCE(?, capabilities) WHERE id = ?")
+      .run(now(), capabilities !== undefined ? JSON.stringify(capabilities) : null, id);
+  }
+
+  listDaemons(): Array<Record<string, unknown>> {
+    return this.db.prepare("SELECT id, name, capabilities, last_seen_at, created_at FROM daemon ORDER BY created_at").all() as Array<Record<string, unknown>>;
+  }
+
+  enqueueJob(project: string, spec: unknown): number {
+    const ts = now();
+    const info = this.db.prepare("INSERT INTO job(project, spec_json, status, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?)").run(project, JSON.stringify(spec), ts, ts);
+    return Number(info.lastInsertRowid);
+  }
+
+  /** Atomically claim the oldest queued job for a daemon (dispatched). Returns it (spec parsed) or undefined. */
+  claimJob(daemonId: number): { id: number; project: string; spec: unknown } | undefined {
+    let claimed: { id: number; project: string; spec_json: string } | undefined;
+    this.transaction(() => {
+      const row = this.db.prepare("SELECT id, project, spec_json FROM job WHERE status = 'queued' ORDER BY created_at LIMIT 1").get() as
+        | { id: number; project: string; spec_json: string }
+        | undefined;
+      if (!row) return;
+      this.db.prepare("UPDATE job SET status = 'dispatched', daemon_id = ?, updated_at = ? WHERE id = ?").run(daemonId, now(), row.id);
+      claimed = row;
+    });
+    return claimed ? { id: claimed.id, project: claimed.project, spec: jsonParseOrNull(claimed.spec_json) } : undefined;
+  }
+
+  setJobRun(jobId: number, runId: number): void {
+    this.db.prepare("UPDATE job SET run_id = ?, status = 'running', updated_at = ? WHERE id = ?").run(runId, now(), jobId);
+  }
+
+  setJobStatus(jobId: number, status: string, error?: string): void {
+    this.db.prepare("UPDATE job SET status = ?, error = ?, updated_at = ? WHERE id = ?").run(status, error ?? null, now(), jobId);
+  }
+
+  requestJobCancel(jobId: number): void {
+    this.db.prepare("UPDATE job SET cancel = 1, updated_at = ? WHERE id = ?").run(now(), jobId);
+  }
+
+  getJob(jobId: number): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM job WHERE id = ?").get(jobId) as Record<string, unknown> | undefined;
+  }
+
+  /** Job ids flagged for cancel that a daemon is still working — daemons poll this to abort. */
+  canceledJobIds(): number[] {
+    return (this.db.prepare("SELECT id FROM job WHERE cancel = 1 AND status IN ('dispatched','running')").all() as Array<{ id: number }>).map((row) => row.id);
+  }
+
+  listJobs(limit = 100): Array<Record<string, unknown>> {
+    return this.db.prepare("SELECT * FROM job ORDER BY created_at DESC LIMIT ?").all(Math.max(1, Math.floor(limit))) as Array<Record<string, unknown>>;
+  }
+
   // --- internals ------------------------------------------------------------
 
   private transaction(fn: () => void): void {
@@ -525,6 +617,14 @@ function jsonOrNull(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (Array.isArray(value) && value.length === 0) return null;
   return JSON.stringify(value);
+}
+
+function jsonParseOrNull(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 // Build a parameterized WHERE clause for finding queries (status + text search).
