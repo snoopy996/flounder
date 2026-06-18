@@ -14,7 +14,7 @@ In audit mode, the profile is context, not a checklist. The agent still decides 
 ## Recommended Audit
 
 ```bash
-fsa run \
+flounder run \
   --config ./configs/solidity-contract-audit.default.json \
   --target protocol-contract-audit \
   --source <target>/src <target>/contracts \
@@ -34,14 +34,14 @@ Reproduction is part of the audit: the agent calls `bash` to write and run local
 - `forge test`
 - `npx hardhat test`
 
-During `fsa run` the command policy blocks public-network broadcast, transfer, credential, persistence, and exploit-optimization flows. Public RPC URLs, public Hardhat networks, and arguments that reference RPC or secret environment variables are blocked. Use local Anvil, Hardhat, or isolated devnet endpoints.
+During `flounder run` the command policy blocks public-network broadcast, transfer, credential, persistence, and exploit-optimization flows. Public RPC URLs, public Hardhat networks, and arguments that reference RPC or secret environment variables are blocked. Use local Anvil, Hardhat, or isolated devnet endpoints.
 
 ## Open-World Confirmation
 
-EVM is `fsa confirm`'s strongest path: a `forge test --fork-url <mainnet>` reproduces a finding against the **real deployed contract and its real configured components** at a chosen block. After a run, point confirm at it:
+EVM is `flounder confirm`'s strongest path: a `forge test --fork-url <mainnet>` reproduces a finding against the **real deployed contract and its real configured components** at a chosen block. After a run, point confirm at it:
 
 ```bash
-fsa confirm ./runs/protocol-contract-audit-<timestamp> \
+flounder confirm ./runs/protocol-contract-audit-<timestamp> \
   --source <target>/src --build-root <target> \
   --provider openai-codex
 ```

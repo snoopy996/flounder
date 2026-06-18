@@ -10,8 +10,8 @@ import { MetadataStore } from "../dist/db/store.js";
 // run's metadata is queryable and that status changes land on a timeline.
 
 async function tempDb() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "fsa-db-"));
-  return new MetadataStore(path.join(dir, "fsa.db"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "flounder-db-"));
+  return new MetadataStore(path.join(dir, "flounder.db"));
 }
 
 test("store: project + run lifecycle is recorded and queryable", async () => {

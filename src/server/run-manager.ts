@@ -1,6 +1,6 @@
 // Run-spec utilities shared by the control plane (server) and the execution plane (daemon):
 // the translation of a UI/agent LaunchSpec into an AuditorConfig (what the daemon runs) and
-// into equivalent `fsa` CLI argv (for display), plus the per-run ActivityBus the server uses
+// into equivalent `flounder` CLI argv (for display), plus the per-run ActivityBus the server uses
 // to fan a daemon's token-level activity out to the UI's live log. Execution itself lives in
 // the daemon (src/server/daemon.ts); this module holds no run state.
 
@@ -99,7 +99,7 @@ export function specToConfig(spec: LaunchSpec, out: string): AuditorConfig {
   return cfg;
 }
 
-// Translate a launch spec into `fsa` CLI argv — NOT used to run (the manager runs in-process),
+// Translate a launch spec into `flounder` CLI argv — NOT used to run (the manager runs in-process),
 // but handy for showing the equivalent terminal command. Pure and unit-tested.
 export function buildArgs(spec: LaunchSpec): string[] {
   const args: string[] = [spec.verb];

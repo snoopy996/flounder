@@ -293,7 +293,7 @@ const bashTool: AgentTool = {
     const normalized = normalizeBashCommand(args, ctx.cfg);
     if ("error" in normalized) return { observation: normalized.error };
     // CONFIRM mode swaps to the network-enabled policy (fork/read live networks, fetch,
-    // search — never broadcast); `fsa run` keeps the network-sealed local-only policy.
+    // search — never broadcast); `flounder run` keeps the network-sealed local-only policy.
     const blocked = ctx.cfg.confirmMode
       ? analyzeConfirmBashCommandSafety(normalized.command)
       : analyzeAgentBashCommandSafety(normalized.command);

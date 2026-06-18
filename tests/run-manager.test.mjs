@@ -20,7 +20,7 @@ test("ActivityBus: a subscriber replays backlog then receives live events", () =
   assert.equal(seen.length, 3); // no events after unsubscribe
 });
 
-// buildArgs is the pure core of launching: spec -> fsa CLI argv. The run-manager shells out
+// buildArgs is the pure core of launching: spec -> flounder CLI argv. The run-manager shells out
 // to the same CLI, and continue/restart map to the kernel's resume / --remap behavior.
 
 test("buildArgs: a full run spec maps to the expected verb + flags", () => {
@@ -109,8 +109,8 @@ test("specToConfig: posture per verb + unbounded budgets by default", () => {
 });
 
 test("store: a supervisor reconciles a dead process's still-running row", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "fsa-reconcile-"));
-  const db = new MetadataStore(path.join(dir, "fsa.db"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "flounder-reconcile-"));
+  const db = new MetadataStore(path.join(dir, "flounder.db"));
   const projectId = db.upsertProject({ name: "p" });
   db.startRun({ projectId, kind: "run", runDir: "/runs/p-1", pid: 4242 });
 

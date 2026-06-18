@@ -40,7 +40,7 @@ export const DEFAULT_COMMAND_SAFETY_POLICY: CommandSafetyPolicy = {
     /\bpoc\b/i,
   ],
   message:
-    "Blocked by full-stack-auditor white-hat guardrail: verification must stay local-only and must not broadcast to public networks.",
+    "Blocked by flounder white-hat guardrail: verification must stay local-only and must not broadcast to public networks.",
 };
 
 export function analyzeCommandSafety(
@@ -65,7 +65,7 @@ export function analyzeReproductionCommandSafety(command: StructuredReproduction
   if (!isAllowedLocalTestCommand(command.program.trim(), command.args.map((arg) => String(arg)))) {
     return {
       blocked: true,
-      reason: "Blocked by full-stack-auditor guardrail: reproduction execution is limited to local test commands.",
+      reason: "Blocked by flounder guardrail: reproduction execution is limited to local test commands.",
     };
   }
 
@@ -88,7 +88,7 @@ export function analyzeAgentBashCommandSafety(command: StructuredReproductionCom
   return {
     blocked: true,
     reason:
-      "Blocked by full-stack-auditor guardrail: agent bash is limited to local inspection, build/dependency, and local test commands.",
+      "Blocked by flounder guardrail: agent bash is limited to local inspection, build/dependency, and local test commands.",
   };
 }
 
@@ -144,10 +144,10 @@ export function analyzeConfirmBashCommandSafety(command: StructuredReproductionC
   const program = command.program.trim();
   const args = command.args.map((arg) => String(arg));
   if (program.length === 0 || program.includes("/") || program.includes("\\") || /[\s;&|`$<>]/.test(program)) {
-    return { blocked: true, reason: "Blocked by full-stack-auditor guardrail: confirm commands must use a plain program name (no shell operators)." };
+    return { blocked: true, reason: "Blocked by flounder guardrail: confirm commands must use a plain program name (no shell operators)." };
   }
   if (args.some((arg) => /[\0\r\n]/.test(arg))) {
-    return { blocked: true, reason: "Blocked by full-stack-auditor guardrail: confirm command arguments must be simple argv entries." };
+    return { blocked: true, reason: "Blocked by flounder guardrail: confirm command arguments must be simple argv entries." };
   }
   const workspaceDecision = analyzeWorkspacePathSafety(args);
   if (workspaceDecision.blocked) return workspaceDecision;
@@ -157,7 +157,7 @@ export function analyzeConfirmBashCommandSafety(command: StructuredReproductionC
     return {
       blocked: true,
       reason:
-        "Blocked by full-stack-auditor white-hat guardrail: confirm may FORK and READ a live network, but must never BROADCAST a transaction to one. Replay the exploit against a LOCAL fork (anvil/local RPC), not the live network.",
+        "Blocked by flounder white-hat guardrail: confirm may FORK and READ a live network, but must never BROADCAST a transaction to one. Replay the exploit against a LOCAL fork (anvil/local RPC), not the live network.",
       matchedAction: broadcast,
     };
   }
@@ -192,14 +192,14 @@ function analyzeStructuredCommandBaseSafety(command: StructuredReproductionComma
   if (program.length === 0 || program.includes("/") || program.includes("\\") || /[\s;&|`$<>]/.test(program)) {
     return {
       blocked: true,
-      reason: "Blocked by full-stack-auditor guardrail: reproduction commands must use a plain local test runner program name.",
+      reason: "Blocked by flounder guardrail: reproduction commands must use a plain local test runner program name.",
     };
   }
 
   if (args.some((arg) => /[\0\r\n]/.test(arg))) {
     return {
       blocked: true,
-      reason: "Blocked by full-stack-auditor guardrail: reproduction command arguments must be simple argv entries.",
+      reason: "Blocked by flounder guardrail: reproduction command arguments must be simple argv entries.",
     };
   }
 
@@ -212,7 +212,7 @@ function analyzeWorkspacePathSafety(args: string[]): CommandSafetyDecision {
     if (looksLikePathEscape(value)) {
       return {
         blocked: true,
-        reason: "Blocked by full-stack-auditor guardrail: agent bash paths must stay inside the copied workspace.",
+        reason: "Blocked by flounder guardrail: agent bash paths must stay inside the copied workspace.",
         matchedAction: arg,
       };
     }
@@ -230,7 +230,7 @@ function analyzeStructuredLocalNetworkSafety(args: string[]): CommandSafetyDecis
       if (!value || !isLocalNetworkValue(value)) {
         return {
           blocked: true,
-          reason: "Blocked by full-stack-auditor guardrail: reproduction RPC and fork targets must be local-only.",
+          reason: "Blocked by flounder guardrail: reproduction RPC and fork targets must be local-only.",
           matchedAction: arg,
         };
       }
@@ -240,7 +240,7 @@ function analyzeStructuredLocalNetworkSafety(args: string[]): CommandSafetyDecis
       if (value && !isLocalNetworkValue(value)) {
         return {
           blocked: true,
-          reason: "Blocked by full-stack-auditor guardrail: reproduction network targets must be local-only.",
+          reason: "Blocked by flounder guardrail: reproduction network targets must be local-only.",
           matchedAction: arg,
           matchedNetwork: value,
         };
@@ -249,14 +249,14 @@ function analyzeStructuredLocalNetworkSafety(args: string[]): CommandSafetyDecis
     if (looksLikeRemoteUrl(arg) && !isLocalUrl(arg)) {
       return {
         blocked: true,
-        reason: "Blocked by full-stack-auditor guardrail: reproduction commands must not use remote RPC URLs.",
+        reason: "Blocked by flounder guardrail: reproduction commands must not use remote RPC URLs.",
         matchedNetwork: arg,
       };
     }
     if (looksLikeRpcEnvReference(arg)) {
       return {
         blocked: true,
-        reason: "Blocked by full-stack-auditor guardrail: reproduction commands must not depend on RPC or secret environment references.",
+        reason: "Blocked by flounder guardrail: reproduction commands must not depend on RPC or secret environment references.",
         matchedNetwork: arg,
       };
     }

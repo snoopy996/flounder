@@ -49,11 +49,11 @@ export interface AuditorConfig {
   // Re-enumerate the scope inventory from scratch instead of resuming the
   // persisted one (which would otherwise continue with the next un-audited scopes).
   auditRemap: boolean;
-  // `fsa map`: run only the MAP phase (enumerate + persist the scope inventory) and
-  // stop — no dig. The resumable `fsa audit` then digs from the persisted inventory.
+  // `flounder map`: run only the MAP phase (enumerate + persist the scope inventory) and
+  // stop — no dig. The resumable `flounder audit` then digs from the persisted inventory.
   auditMapOnly: boolean;
-  // `fsa audit` (dig stage): require an existing scope inventory rather than auto-mapping.
-  // `fsa run` (the map -> audit one-stop) leaves this false so it enumerates first.
+  // `flounder audit` (dig stage): require an existing scope inventory rather than auto-mapping.
+  // `flounder run` (the map -> audit one-stop) leaves this false so it enumerates first.
   auditRequireInventory: boolean;
   // Manually pick specific scope ids from the persisted inventory to deep-audit
   // (the human-in-the-loop seam), instead of the automatic top-by-score selection.
@@ -63,8 +63,8 @@ export interface AuditorConfig {
   // enumeration; reuses the confirmation gate. The confirmation step the dig
   // produces on its own, runnable standalone against an existing suspected finding.
   auditVerify?: string;
-  // CONFIRM mode (`fsa confirm`): the open-world counterpart to the network-sealed
-  // `fsa run`. When set, the bash tool swaps to the network-enabled policy (fork/read
+  // CONFIRM mode (`flounder confirm`): the open-world counterpart to the network-sealed
+  // `flounder run`. When set, the bash tool swaps to the network-enabled policy (fork/read
   // live networks, fetch, search — never BROADCAST). This is the only capability
   // difference; the white-hat broadcast line and the confirmation gate are unchanged.
   confirmMode: boolean;

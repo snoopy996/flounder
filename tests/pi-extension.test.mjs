@@ -20,15 +20,15 @@ test("pi extension registers agentic audit tool", async () => {
   };
   extension(fakePi);
 
-  assert.ok(tools.has("fsa_run"));
-  assert.ok(tools.has("fsa_confirm"));
-  assert.ok(commands.has("fsa"));
+  assert.ok(tools.has("flounder_run"));
+  assert.ok(tools.has("flounder_confirm"));
+  assert.ok(commands.has("flounder"));
   assert.ok(handlers.has("tool_call"));
   assert.ok(handlers.has("user_bash"));
 
-  // fsa_confirm mirrors the `fsa confirm` CLI surface: it needs the prior run dir + the
+  // flounder_confirm mirrors the `flounder confirm` CLI surface: it needs the prior run dir + the
   // target code to reproduce against.
-  const confirmParams = tools.get("fsa_confirm").parameters;
+  const confirmParams = tools.get("flounder_confirm").parameters;
   assert.ok(confirmParams.required.includes("runDir"));
   assert.ok(confirmParams.required.includes("sourcePaths"));
 });
@@ -68,10 +68,10 @@ test("pi extension blocks live-network exploit-like bash commands", async () => 
   assert.equal(userResult.result.exitCode, 2);
 });
 
-// The `fsa_run` pi tool must default to the SAME unbounded budgets as the `fsa run` CLI
+// The `flounder_run` pi tool must default to the SAME unbounded budgets as the `flounder run` CLI
 // (cli.ts:33-35). Earlier it set only auditMaxSteps and left map/dig at the finite config
 // defaults (20/30), silently truncating a pi-tool-driven map→dig audit. Pin the fix.
-test("fsa_run defaults to UNBOUNDED map/dig/breadth budgets (matches the `fsa run` CLI)", () => {
+test("flounder_run defaults to UNBOUNDED map/dig/breadth budgets (matches the `flounder run` CLI)", () => {
   const base = defaultConfig();
   // the base config is deliberately finite and small; the unbounded default is layered on top
   assert.ok(Number.isFinite(base.auditMapSteps) && Number.isFinite(base.auditDigSteps));
@@ -83,7 +83,7 @@ test("fsa_run defaults to UNBOUNDED map/dig/breadth budgets (matches the `fsa ru
   assert.equal(cfg.auditDigSteps, Number.POSITIVE_INFINITY);
 });
 
-test("fsa_run maxSteps, when given, caps every phase (the one knob the tool exposes)", () => {
+test("flounder_run maxSteps, when given, caps every phase (the one knob the tool exposes)", () => {
   const cfg = defaultConfig();
   applyFsaRunBudgets(cfg, 55);
   assert.equal(cfg.auditMaxSteps, 55);

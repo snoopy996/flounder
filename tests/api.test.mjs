@@ -9,7 +9,7 @@ import { startUiServer } from "../dist/server/app.js";
 // the UI. This pins the catalog + a project CRUD round-trip over real HTTP.
 
 async function withServer(fn) {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-api-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-api-"));
   const server = startUiServer({ port: 0, out, host: "127.0.0.1" });
   await new Promise((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;

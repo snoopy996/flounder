@@ -1,4 +1,4 @@
-// fsa daemon — the EXECUTION plane. Connects to a control-plane server, claims queued
+// flounder daemon — the EXECUTION plane. Connects to a control-plane server, claims queued
 // jobs, runs runAudit/runConfirm LOCALLY (code, provider keys, and the sandbox stay on
 // this machine), and reports progress to the server over HTTP: SSE for dispatch + cancel
 // nudges, POST for run start / updates / activity. It can run on a different machine than
@@ -32,7 +32,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
 
   const reg = await fetch(base + "/api/daemon/register", { method: "POST", headers, body: JSON.stringify({ name: opts.name ?? "daemon", capabilities: {} }) }).catch(() => null);
   if (!reg || !reg.ok) throw new Error(`daemon: could not register with ${base} (status ${reg ? reg.status : "no response"}) — check --server and --token`);
-  console.log(`[fsa daemon] connected to ${base}  (out=${out}, concurrency=${maxConcurrent})`);
+  console.log(`[flounder daemon] connected to ${base}  (out=${out}, concurrency=${maxConcurrent})`);
 
   const claimLoop = async (): Promise<void> => {
     while (inflight.size < maxConcurrent) {

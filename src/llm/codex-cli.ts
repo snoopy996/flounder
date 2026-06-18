@@ -18,7 +18,7 @@ export class CodexCliClient implements LlmClient {
     agentic?: boolean;
   }): Promise<string> {
     if (!input.model) throw new Error("model is required");
-    const tmp = await mkdtemp(path.join(os.tmpdir(), "fsa-codex-cli-"));
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "flounder-codex-cli-"));
     const outputFile = path.join(tmp, "last-message.txt");
     const prompt = renderPrompt(input.system, input.user, input.agentic ?? false);
     const webSearch = readCodexWebSearchEnv();
@@ -47,7 +47,7 @@ export class CodexCliClient implements LlmClient {
       });
       await spawnCodex(args, prompt, {
         maxBuffer: 10 * 1024 * 1024,
-        timeout: Number(process.env.FSA_CODEX_TIMEOUT_MS ?? 900_000),
+        timeout: Number(process.env.FLOUNDER_CODEX_TIMEOUT_MS ?? 900_000),
         onJsonEvent: (event) => {
           enqueueEvent("codex_cli_event", {
             tag: input.tag,
@@ -130,7 +130,7 @@ export function buildCodexExecArgs(input: {
 }
 
 function readCodexWebSearchEnv(): "live" | "cached" | "disabled" | undefined {
-  const value = process.env.FSA_CODEX_WEB_SEARCH;
+  const value = process.env.FLOUNDER_CODEX_WEB_SEARCH;
   if (value === "live" || value === "cached" || value === "disabled") return value;
   return undefined;
 }

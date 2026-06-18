@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const LAST_RUN_FILE = ".fsa-last-run.json";
+const LAST_RUN_FILE = ".flounder-last-run.json";
 
 export interface LastRunPointer {
   version: 1;

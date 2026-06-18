@@ -1,4 +1,4 @@
-# fsa worked examples
+# flounder worked examples
 
 Two concrete end-to-end audits showing the discover → reproduce flow. Replace paths and target names with your own. See [reference/commands.md](commands.md) for every flag.
 
@@ -8,7 +8,7 @@ Audit a deployed Solidity rollup with only the real contracts and the official s
 
 ```bash
 # 1. Discover (sealed): map the decode/settlement surface, then deep-audit it.
-fsa run \
+flounder run \
   --target rollup-audit \
   --source ./contracts --build-root . \
   --corpus ./docs/specs \
@@ -20,7 +20,7 @@ The run enumerates a scored scope inventory, deep-audits the top scopes obligati
 
 ```bash
 # 2. Reproduce (open-world): take that run to a real-world standard.
-fsa confirm runs/rollup-audit-<timestamp> \
+flounder confirm runs/rollup-audit-<timestamp> \
   --source ./contracts --build-root . \
   --provider openai-codex
 ```
@@ -34,7 +34,7 @@ Audit a Rust ZK circuit crate for an under-constrained-witness bug.
 ```bash
 # Map enumerates the circuit's constraints (including operands the spec treats as given);
 # the dig writes a MockProver malicious-witness test.
-fsa run \
+flounder run \
   --target circuit-audit \
   --source ./crate --build-root ./workspace \
   --corpus ./docs/circuit-spec \
@@ -46,8 +46,8 @@ A subtle soundness gap often needs a pinned, repeated dig rather than blind brea
 
 ```bash
 # After a map, deep-audit one suspicious scope several times and union the findings.
-fsa map   --target circuit-audit --source ./crate --build-root ./workspace --corpus ./docs/circuit-spec --provider openai-codex
-fsa audit --scope <id> --source ./crate --build-root ./workspace --provider openai-codex --dig-samples 3
+flounder map   --target circuit-audit --source ./crate --build-root ./workspace --corpus ./docs/circuit-spec --provider openai-codex
+flounder audit --scope <id> --source ./crate --build-root ./workspace --provider openai-codex --dig-samples 3
 ```
 
 A crate-internal soundness bug can reach `confirmed-differential`: the model writes the exploit witness, the framework runs it through `MockProver`, then applies the model's constraint fix and re-runs to show the malicious witness no longer verifies.
@@ -59,7 +59,7 @@ When you already suspect a concrete bug and just want execution to settle it:
 ```bash
 # claims.json: [{ "title": "...", "location": "src/Foo.sol:120", "description": "...",
 #                "exploit_sketch": "...", "fix_patch": { ... } }]
-fsa audit --verify claims.json --source ./contracts --build-root . --provider openai-codex
+flounder audit --verify claims.json --source ./contracts --build-root . --provider openai-codex
 ```
 
 Each claim comes back `confirmed-differential`, `confirmed-executable`, or `REFUTED` — by execution, not argument.

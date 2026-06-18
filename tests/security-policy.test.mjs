@@ -53,7 +53,7 @@ test("reproduction command policy allows only structured local test commands", (
 });
 
 test("confirm-mode bash MAY fork and read live networks (the open-world difference from run)", () => {
-  // The exact things `fsa run` blocks for being network-bound, `fsa confirm` allows —
+  // The exact things `flounder run` blocks for being network-bound, `flounder confirm` allows —
   // because real-world reproduction forks the live chain and reads public sources.
   for (const c of [
     cmd("forge", "test", "--fork-url", "https://eth.llamarpc.com"),

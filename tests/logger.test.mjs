@@ -6,7 +6,7 @@ import test from "node:test";
 import { RunLogger } from "../dist/trace/logger.js";
 
 test("run logger rejects artifact paths outside the run directory", async () => {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-logger-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-logger-"));
   const logger = new RunLogger(out, "logger-paths");
   await logger.init();
 

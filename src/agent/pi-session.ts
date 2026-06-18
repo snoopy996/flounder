@@ -105,7 +105,7 @@ export async function runAuditSession(input: {
   let finalizeTurns = 0;
   let finalizeAborted = false;
   // Confirm-mode resume: checkpoint the model's decision sheet to the run dir each turn,
-  // so an interrupted `fsa confirm` keeps the rows reproduced so far (raw; the end-of-run
+  // so an interrupted `flounder confirm` keeps the rows reproduced so far (raw; the end-of-run
   // write replaces them with the consolidated set).
   const checkpointConfirm = async (): Promise<void> => {
     let raw: string | undefined;

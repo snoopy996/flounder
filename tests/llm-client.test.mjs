@@ -11,7 +11,7 @@ import { PiAiClient } from "../dist/llm/pi-ai.js";
 import { RunLogger } from "../dist/trace/logger.js";
 
 test("llm factory uses pi-ai by default and CLI fallbacks only when requested", async () => {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-llm-client-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-llm-client-"));
   const logger = new RunLogger(out, "factory-test");
   const cfg = defaultConfig();
 

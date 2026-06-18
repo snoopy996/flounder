@@ -1,13 +1,13 @@
 // SQLite metadata store — the system of record for run TRACKING.
 //
-// fsa writes here on every run (project, run lifecycle, scope coverage, findings, and
+// flounder writes here on every run (project, run lifecycle, scope coverage, findings, and
 // their status transitions, confirm decisions). The big evidentiary content stays on
 // disk (transcripts, PoCs, provenance, the JSON artifacts); the DB stores PATHS to it
 // plus the denormalized metadata a UI needs to list/filter/track across all projects.
 //
 // This is NOT a derived/rebuildable projection — it is written live alongside the run.
 // node:sqlite is used so the package stays dependency-free. WAL + a busy timeout let one
-// fsa process write while a UI (or other fsa processes) read concurrently.
+// flounder process write while a UI (or other flounder processes) read concurrently.
 
 import "./sqlite-quiet.js"; // must run before node:sqlite loads — filters its experimental warning
 import { createRequire } from "node:module";
@@ -212,7 +212,7 @@ export class MetadataStore {
     if (dbPath !== ":memory:") mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     // WAL + busy timeout: one writer at a time, concurrent readers, retries instead of
-    // SQLITE_BUSY when several fsa processes (multi-project) write the shared DB.
+    // SQLITE_BUSY when several flounder processes (multi-project) write the shared DB.
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
@@ -220,9 +220,9 @@ export class MetadataStore {
     this.db.prepare("INSERT INTO meta(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO NOTHING").run(String(SCHEMA_VERSION));
   }
 
-  /** Open the store for a config's output root (DB lives at <outputDir>/fsa.db). */
+  /** Open the store for a config's output root (DB lives at <outputDir>/flounder.db). */
   static openForOutput(outputDir: string): MetadataStore {
-    return new MetadataStore(path.join(outputDir, "fsa.db"));
+    return new MetadataStore(path.join(outputDir, "flounder.db"));
   }
 
   close(): void {

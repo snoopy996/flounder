@@ -15,8 +15,8 @@ capabilities, trust boundaries, invariants, and focus areas a known stack tends 
 
 ## Not used by default — and that's deliberate
 
-The framework **never loads these on its own.** A default `fsa run` / `fsa map` /
-`fsa audit` carries **no preset bug knowledge**: the run is blind and execution-grounded,
+The framework **never loads these on its own.** A default `flounder run` / `flounder map` /
+`flounder audit` carries **no preset bug knowledge**: the run is blind and execution-grounded,
 so the model has to enumerate the attack surface from the *actual* source before any
 audit trial can find anything. Handing the model a pre-written list of where bugs usually
 live biases it toward the listed areas and away from the unlisted, and risks turning the
@@ -29,7 +29,7 @@ needs a head start on focus/out-of-scope, or **quickly framing scope** for a fam
 stack. In those situations, opt in:
 
 ```bash
-fsa run --config ./configs/solidity-contract-audit.default.json \
+flounder run --config ./configs/solidity-contract-audit.default.json \
         --target my-protocol --source ./contracts --corpus ./docs
 ```
 

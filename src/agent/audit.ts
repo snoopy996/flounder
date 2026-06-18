@@ -190,8 +190,8 @@ export async function runAudit(
     steps = aggregatedSteps;
     stoppedReason = "finished";
   } else if (cfg.auditMapOnly) {
-    // MAP only (`fsa map`): enumerate and persist the scope inventory, then stop — no
-    // dig. The resumable `fsa audit` digs from this inventory afterwards.
+    // MAP only (`flounder map`): enumerate and persist the scope inventory, then stop — no
+    // dig. The resumable `flounder audit` digs from this inventory afterwards.
     const inventoryDir = projectHistoryDir(historyLocation(cfg));
     const mapPhase = await runPhase(withRole(cfg, "map"), { mode: "map", maxSteps: cfg.auditMapSteps });
     scopeInventory = readScratchScopes(session);
@@ -219,7 +219,7 @@ export async function runAudit(
     scopeInventory = cfg.auditRemap ? [] : await loadScopeInventory(inventoryDir);
     const resuming = scopeInventory.length > 0;
     if (!resuming && (picked.length > 0 || cfg.auditRequireInventory)) {
-      throw new Error("`fsa audit` needs an existing scope inventory; run `fsa map` first to enumerate scopes (then pick with `--scope` from audit_scopes.json), or `fsa run` to map and audit in one pass.");
+      throw new Error("`flounder audit` needs an existing scope inventory; run `flounder map` first to enumerate scopes (then pick with `--scope` from audit_scopes.json), or `flounder run` to map and audit in one pass.");
     }
     if (!resuming) {
       const mapPhase = await runPhase(withRole(cfg, "map"), { mode: "map", maxSteps: cfg.auditMapSteps });

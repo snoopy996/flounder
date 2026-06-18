@@ -1,7 +1,7 @@
 {
-  "name": "full-stack-auditor",
+  "name": "flounder-scanner",
   "version": "0.1.0",
-  "description": "White-hat full-stack security audit agent built on pi-mono primitives.",
+  "description": "Flounder — find vulnerabilities beneath the surface. A white-hat agentic security auditor built on pi-mono primitives.",
   "type": "module",
   "license": "MIT",
   "main": "./dist/index.js",
@@ -18,8 +18,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "full-stack-auditor": "./dist/cli.js",
-    "fsa": "./dist/cli.js"
+    "flounder": "./dist/cli.js"
   },
   "engines": {
     "node": ">=22"

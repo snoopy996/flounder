@@ -5,7 +5,7 @@
 // and calling them. The UI is just one client of this API.
 //
 // Execution is DECOUPLED: this server owns the SQLite DB and a job queue but never runs an
-// audit itself. One or more `fsa daemon` processes (possibly on other machines) connect,
+// audit itself. One or more `flounder daemon` processes (possibly on other machines) connect,
 // claim queued jobs, run runAudit/runConfirm locally (code + provider keys stay on the
 // daemon), and report progress back over HTTP. Server→daemon nudges (poll/cancel) ride an
 // SSE stream; daemon→server updates are POSTs. Zero-dependency: Node's built-in http + a
@@ -24,7 +24,7 @@ function loadUiHtml(): string {
   try {
     return readFileSync(UI_HTML_PATH, "utf8");
   } catch {
-    return "<!doctype html><meta charset=utf-8><body style='font-family:sans-serif;padding:2rem'>fsa UI asset missing — run <code>npm run build</code>.</body>";
+    return "<!doctype html><meta charset=utf-8><body style='font-family:sans-serif;padding:2rem'>flounder UI asset missing — run <code>npm run build</code>.</body>";
   }
 }
 
@@ -245,7 +245,7 @@ const ROUTES: Route[] = [
 
 function catalog(): unknown {
   return {
-    name: "full-stack-auditor",
+    name: "flounder",
     description: "REST API for tracking and driving white-hat audits. Resources: project (CRUD), run (launch/stop/read), scope, finding, confirm-decision. Runs execute on connected daemons; every UI operation is one of these calls.",
     resources: ["project", "run", "scope", "finding", "confirm-decision"],
     endpoints: ROUTES.filter((r) => !r.hidden).map((r) => ({
@@ -291,7 +291,7 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
     sendJson(res, 404, { error: "not found", hint: "GET /api lists every endpoint" });
   });
   server.listen(port, host, () => {
-    console.log(`[fsa ui] http://${host}:${port}  (API catalog: http://${host}:${port}/api · store: ${out}/fsa.db)`);
+    console.log(`[flounder ui] http://${host}:${port}  (API catalog: http://${host}:${port}/api · store: ${out}/flounder.db)`);
   });
   return server;
 }

@@ -31,14 +31,14 @@ async function main(argv: string[]): Promise<void> {
   if (cmd === "ui") {
     // Control-plane web app: track/drive audits across projects. Keeps running (the server
     // holds the event loop open) until interrupted. Runs execute on a DAEMON, not here — so
-    // by default we also spawn a co-located local daemon (mint a token + `fsa daemon`). Pass
+    // by default we also spawn a co-located local daemon (mint a token + `flounder daemon`). Pass
     // --no-daemon to run the control plane alone and connect your own daemon(s) elsewhere.
     const port = readIntFlag(rest, "--port") ?? 4500;
     const host = readFlag(rest, "--host") ?? "127.0.0.1";
     const out = readFlag(rest, "--out") ?? "runs";
     const server = startUiServer({ out, port, host });
     if (rest.includes("--no-daemon")) {
-      console.log("[fsa ui] --no-daemon: no executor started. Connect one with `fsa daemon --server <url> --token <token>`.");
+      console.log("[flounder ui] --no-daemon: no executor started. Connect one with `flounder daemon --server <url> --token <token>`.");
     } else {
       const concurrency = readIntFlag(rest, "--concurrency");
       server.on("listening", () => spawnLocalDaemon({ out, url: `http://${host}:${port}`, ...(concurrency !== undefined ? { concurrency } : {}) }));
@@ -53,7 +53,7 @@ async function main(argv: string[]): Promise<void> {
     // server. Reports progress back over HTTP; never touches the server's DB directly.
     const server = readFlag(rest, "--server");
     const token = readFlag(rest, "--token");
-    if (!server || !token) throw new Error("fsa daemon needs --server <url> and --token <token> (mint one with `fsa ui`, or via the store)");
+    if (!server || !token) throw new Error("flounder daemon needs --server <url> and --token <token> (mint one with `flounder ui`, or via the store)");
     const out = readFlag(rest, "--out") ?? "runs";
     const name = readFlag(rest, "--name");
     const concurrency = readIntFlag(rest, "--concurrency");
@@ -69,7 +69,7 @@ async function main(argv: string[]): Promise<void> {
     if (cfg.sourcePaths.length === 0) throw new Error("--source <paths...> is required");
     if (cfg.dryRun) throw new Error("agentic mode cannot run in --dry-run; use the mock model with --mock-llm for offline checks");
     applyAuditPosture(cmd, rest, cfg);
-    // Sealed audit verbs default to UNBOUNDED step budgets (like `fsa confirm`): a real
+    // Sealed audit verbs default to UNBOUNDED step budgets (like `flounder confirm`): a real
     // audit's decisive obligation can surface late, and a fixed budget silently truncates
     // it. The model finishes early by emitting done; the budget is only a ceiling. Pass
     // --max-steps / --map-steps / --dig-steps to cap a phase.
@@ -85,19 +85,19 @@ async function main(argv: string[]): Promise<void> {
     console.log(`[report] ${result.runDir}/audit_report.md  ← consolidated results (findings, hypotheses, scope coverage)`);
     if (result.scopeCoverage) {
       const { total, audited, pending } = result.scopeCoverage;
-      console.log(`[scopes] audited ${audited}/${total}` + (pending > 0 ? `, ${pending} pending — \`fsa audit\` again for the next batch (or --remap to re-enumerate).` : " — inventory fully audited."));
+      console.log(`[scopes] audited ${audited}/${total}` + (pending > 0 ? `, ${pending} pending — \`flounder audit\` again for the next batch (or --remap to re-enumerate).` : " — inventory fully audited."));
     }
     return;
   }
 
   if (cmd === "confirm") {
-    // Open-world confirmation pass over a prior `fsa run`: freeze its findings, then
+    // Open-world confirmation pass over a prior `flounder run`: freeze its findings, then
     // reproduce/consolidate them against real-world ground truth (network enabled) and
-    // emit a submit/no-submit decision sheet. Usage: fsa confirm <run-dir> --source <paths...>
+    // emit a submit/no-submit decision sheet. Usage: flounder confirm <run-dir> --source <paths...>
     const { cfg } = await parseConfig(rest);
     const positional = rest[0] && !rest[0].startsWith("--") ? rest[0] : undefined;
     const inputRunDir = positional ?? readFlag(rest, "--run") ?? readFlag(rest, "--input");
-    if (!inputRunDir) throw new Error("fsa confirm needs a prior run directory: fsa confirm <run-dir> --source <paths...>");
+    if (!inputRunDir) throw new Error("flounder confirm needs a prior run directory: flounder confirm <run-dir> --source <paths...>");
     if (cfg.sourcePaths.length === 0) throw new Error("--source <paths...> is required (the target code to reproduce against)");
     // Confirm is UNBOUNDED by default (run until the model finishes); --max-steps caps it only if given.
     // It auto-RESUMES a prior interrupted confirm of the same run dir (carries settled rows forward); --fresh ignores that.
@@ -168,7 +168,7 @@ function applyAuditPosture(cmd: string, rest: string[], cfg: AuditorConfig): voi
   if (cmd === "audit") {
     // The dig stage. `audit --verify <file>` confirms given claims; `audit <region>`
     // deep-audits a pinned region; `audit [--scope id,...]` digs the existing inventory
-    // (which requires a prior `fsa map`).
+    // (which requires a prior `flounder map`).
     const verifyFile = readFlag(rest, "--verify");
     if (verifyFile !== undefined) {
       cfg.auditVerify = verifyFile;
@@ -251,8 +251,8 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   if (typeof raw.dryRun === "boolean") cfg.dryRun = raw.dryRun;
 }
 
-// Spawn a co-located daemon for `fsa ui`: mint a fresh bearer token in the shared store,
-// then run `fsa daemon` as a child pointed at the just-started server. The child dies with
+// Spawn a co-located daemon for `flounder ui`: mint a fresh bearer token in the shared store,
+// then run `flounder daemon` as a child pointed at the just-started server. The child dies with
 // the parent. (A remote daemon is started the same way, by hand, on another machine.)
 function spawnLocalDaemon(opts: { out: string; url: string; concurrency?: number }): void {
   const store = MetadataStore.openForOutput(opts.out);
@@ -261,8 +261,8 @@ function spawnLocalDaemon(opts: { out: string; url: string; concurrency?: number
   const args = [fileURLToPath(import.meta.url), "daemon", "--server", opts.url, "--token", token, "--out", opts.out];
   if (opts.concurrency !== undefined) args.push("--concurrency", String(opts.concurrency));
   const child = spawn(process.execPath, args, { stdio: "inherit" });
-  child.on("error", (error) => console.error(`[fsa ui] could not start local daemon: ${error.message}`));
-  child.on("exit", (code) => console.log(`[fsa ui] local daemon exited (code ${code ?? "?"})`));
+  child.on("error", (error) => console.error(`[flounder ui] could not start local daemon: ${error.message}`));
+  child.on("exit", (code) => console.log(`[flounder ui] local daemon exited (code ${code ?? "?"})`));
   const kill = (): void => {
     try {
       child.kill();
@@ -318,7 +318,7 @@ function printCoverage(runDir: string, coverage: { itemsTotal: number; itemsWith
 async function runHistoryCommand(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (subcommand !== "import-run") {
-    throw new Error("Unknown history command. Use: fsa history import-run --target <name> --run <dir>");
+    throw new Error("Unknown history command. Use: flounder history import-run --target <name> --run <dir>");
   }
   const { cfg } = await parseConfig(rest);
   const runDir = readFlag(rest, "--run") ?? readFlag(rest, "--run-dir");
@@ -330,7 +330,7 @@ async function runHistoryCommand(args: string[]): Promise<void> {
 }
 
 // Read view over the SQLite tracking store (the UI's future backend; usable from the CLI
-// today). `fsa db projects` | `runs [<target>]` | `findings <target>`.
+// today). `flounder db projects` | `runs [<target>]` | `findings <target>`.
 function runDbCommand(args: string[]): void {
   const [subcommand = "projects", ...rest] = args;
   const out = readFlag(args, "--out") ?? "runs";
@@ -341,7 +341,7 @@ function runDbCommand(args: string[]): void {
     if (subcommand === "projects") {
       const projects = db.listProjects();
       if (projects.length === 0) {
-        console.log("(no projects tracked yet — run `fsa run` first, or check --out)");
+        console.log("(no projects tracked yet — run `flounder run` first, or check --out)");
         return;
       }
       for (const project of projects) {
@@ -360,7 +360,7 @@ function runDbCommand(args: string[]): void {
     if (subcommand === "daemons") {
       const daemons = db.listDaemons();
       if (daemons.length === 0) {
-        console.log("(no daemons registered — mint a token with `fsa db mint-token [name]`, then run `fsa daemon`)");
+        console.log("(no daemons registered — mint a token with `flounder db mint-token [name]`, then run `flounder daemon`)");
         return;
       }
       for (const d of daemons) console.log(`• [${d.id}] ${d.name}  last_seen=${d.last_seen_at ?? "never"}`);
@@ -373,7 +373,7 @@ function runDbCommand(args: string[]): void {
       const { id, token } = db.createDaemonToken(name);
       console.log(`[daemon ${id}] ${name}`);
       console.log(`token: ${token}`);
-      console.log(`run on the executor machine:\n  fsa daemon --server http://<this-server-host>:4500 --token ${token}`);
+      console.log(`run on the executor machine:\n  flounder daemon --server http://<this-server-host>:4500 --token ${token}`);
       return;
     }
     const projectId = resolveProjectId(db, target);
@@ -390,7 +390,7 @@ function runDbCommand(args: string[]): void {
       }
       return;
     }
-    throw new Error(`Unknown db command "${subcommand}". Use: fsa db projects | runs [--target <name>] | findings --target <name> | daemons | mint-token [name]`);
+    throw new Error(`Unknown db command "${subcommand}". Use: flounder db projects | runs [--target <name>] | findings --target <name> | daemons | mint-token [name]`);
   } finally {
     db.close();
   }
@@ -426,22 +426,22 @@ function projectHistoryLocation(cfg: AuditorConfig): { outputDir: string; target
 }
 
 function printHelp(): void {
-  console.log(`full-stack-auditor — white-hat agentic security audit.
+  console.log(`flounder — white-hat agentic security audit.
 
 Usage:
-  fsa run     --target <name> --source <paths...> [--corpus <paths...>]      sealed audit: map -> audit (--quick = one breadth pass)
-  fsa map     --target <name> --source <paths...> [--corpus <paths...>]      enumerate the scope inventory only (writes audit_scopes.json)
-  fsa audit   [<region> | --scope <id,...> | --verify <file>] --source ...   deep-audit a region, inventory scopes, or given claims
-  fsa confirm <run-dir> --source <paths...>                                  open-world: reproduce a run's findings on the real target
-  fsa history import-run --target <name> --run <dir>
-  fsa db      [projects | runs [<target>] | findings <target> | daemons | mint-token [name]]   read the tracking store; mint/list daemon tokens
-  fsa ui      [--port <n>] [--host <h>] [--out <dir>] [--no-daemon]           control-plane web dashboard + a co-located executor daemon (localhost)
-  fsa daemon  --server <url> --token <token> [--out <dir>] [--concurrency <n>]   execution plane: claim + run queued jobs (may be a different machine)
+  flounder run     --target <name> --source <paths...> [--corpus <paths...>]      sealed audit: map -> audit (--quick = one breadth pass)
+  flounder map     --target <name> --source <paths...> [--corpus <paths...>]      enumerate the scope inventory only (writes audit_scopes.json)
+  flounder audit   [<region> | --scope <id,...> | --verify <file>] --source ...   deep-audit a region, inventory scopes, or given claims
+  flounder confirm <run-dir> --source <paths...>                                  open-world: reproduce a run's findings on the real target
+  flounder history import-run --target <name> --run <dir>
+  flounder db      [projects | runs [<target>] | findings <target> | daemons | mint-token [name]]   read the tracking store; mint/list daemon tokens
+  flounder ui      [--port <n>] [--host <h>] [--out <dir>] [--no-daemon]           control-plane web dashboard + a co-located executor daemon (localhost)
+  flounder daemon  --server <url> --token <token> [--out <dir>] [--concurrency <n>]   execution plane: claim + run queued jobs (may be a different machine)
 
 Control plane vs execution plane:
-  fsa ui starts the CONTROL PLANE (the dashboard, REST API, SQLite store, and job queue) and,
+  flounder ui starts the CONTROL PLANE (the dashboard, REST API, SQLite store, and job queue) and,
   unless --no-daemon, a co-located DAEMON to execute jobs. The daemon is what actually runs the
-  audit — so code and provider keys stay on the daemon's machine. Run "fsa daemon" on another
+  audit — so code and provider keys stay on the daemon's machine. Run "flounder daemon" on another
   host (with a token minted by the server operator) to execute remotely; the server owns the DB
   and the daemon only reports progress back over HTTP.
 
@@ -482,12 +482,12 @@ run / map / audit deep-phase options:
   --max-scopes <n>        un-audited scopes the dig audits per run, default 10
   --remap                 re-enumerate scopes from scratch (default resumes the persisted inventory)
 
-fsa audit selectors (choose one; default digs the existing inventory):
+flounder audit selectors (choose one; default digs the existing inventory):
   <region>                deep-audit one pinned region, e.g. src/Foo.sol:120-180 (no map needed)
-  --scope <id[,id...]>    deep-audit specific scope id(s) from the inventory (run fsa map first)
+  --scope <id[,id...]>    deep-audit specific scope id(s) from the inventory (run flounder map first)
   --verify <file>         confirm-or-refute given suspected finding(s) by execution. <file> is JSON (one finding or an array; each: title, location, description, exploit_sketch?, fix_patch?). Writes a PoC, builds, runs it through the confirmation gate + differential, marking each confirmed-differential / confirmed-executable / REFUTED. Needs a buildable target.
 
-fsa confirm: unbounded by default (ends when the model finishes); --max-steps caps it. Auto-resumes an
+flounder confirm: unbounded by default (ends when the model finishes); --max-steps caps it. Auto-resumes an
 interrupted prior confirm of the same run dir (carries already-settled rows forward); --fresh ignores it.
 `);
 }

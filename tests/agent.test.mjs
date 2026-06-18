@@ -19,7 +19,7 @@ const root = path.resolve(".");
 const fixtures = path.join(root, "fixtures");
 
 async function tempDir() {
-  return mkdtemp(path.join(os.tmpdir(), "fsa-agent-"));
+  return mkdtemp(path.join(os.tmpdir(), "flounder-agent-"));
 }
 
 async function tempLogger(baseDir) {

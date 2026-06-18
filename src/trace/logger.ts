@@ -101,7 +101,7 @@ function formatEventLine(kind: string, data: Record<string, unknown>): string {
     .slice(0, 10)
     .map(([key, value]) => `${key}=${formatEventValue(value)}`)
     .join(" ");
-  return details ? `[fsa] ${kind} ${details}` : `[fsa] ${kind}`;
+  return details ? `[flounder] ${kind} ${details}` : `[flounder] ${kind}`;
 }
 
 function formatEventValue(value: unknown): string {

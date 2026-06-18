@@ -6,7 +6,7 @@ import path from "node:path";
 import { loadSettledFromPriorConfirm } from "../dist/agent/confirm.js";
 import { publicPath } from "../dist/util/paths.js";
 
-// `fsa confirm` auto-resumes a prior interrupted confirm of the same input run: it finds
+// `flounder confirm` auto-resumes a prior interrupted confirm of the same input run: it finds
 // the latest prior confirm dir (matched by frozen provenance) and carries its SETTLED rows
 // (reproduced yes/no) forward. This pins that detection.
 
@@ -19,7 +19,7 @@ async function mkConfirmRun(outDir, name, inputRunDir, rows) {
 }
 
 test("confirm resume: loads SETTLED rows from the latest prior confirm of the same input", async () => {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-confirm-resume-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-confirm-resume-"));
   const inputX = "/some/input-run-X";
   const inputY = "/some/input-run-Y";
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputX, [
@@ -38,12 +38,12 @@ test("confirm resume: loads SETTLED rows from the latest prior confirm of the sa
 });
 
 test("confirm resume: no prior confirm → empty (fresh start)", async () => {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-confirm-resume-none-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-confirm-resume-none-"));
   assert.deepEqual(await loadSettledFromPriorConfirm(out, "tgt", "/some/input", path.join(out, "tgt-confirm-X")), []);
 });
 
 test("confirm resume: skips a latest run with no decision sheet (killed before first checkpoint), falls back to an older one", async () => {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-confirm-resume-fallback-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-confirm-resume-fallback-"));
   const inputX = "/some/input-run-X";
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputX, [{ bug: "Bug A", reproduced: "yes" }]);
   await mkConfirmRun(out, "tgt-confirm-20260102T000000Z", inputX, null); // no decision yet

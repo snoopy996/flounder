@@ -1,6 +1,6 @@
 # Reports
 
-Vulnerability reports and incident analyses produced with `fsa`.
+Vulnerability reports and incident analyses produced with `flounder`.
 
 Each report lives in its own directory as a `README.md`. New findings are added here over time.
 

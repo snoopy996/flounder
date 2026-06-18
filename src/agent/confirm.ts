@@ -15,7 +15,7 @@ import { ProjectMemory } from "./memory.js";
 import { isPiSessionProvider, runAuditSession } from "./pi-session.js";
 import { buildTools, newSession, type AgentSession, type FixPatch, type ToolContext } from "./tools.js";
 
-// `fsa confirm` — the open-world counterpart to the network-sealed `fsa run`. It does
+// `flounder confirm` — the open-world counterpart to the network-sealed `flounder run`. It does
 // NOT discover: it takes a prior run's CONFIRMED findings, freezes their provenance
 // (found blind, no network), then runs one network-enabled session whose job is to
 // CONSOLIDATE the findings into distinct bugs, REPRODUCE each against real-world ground
@@ -43,10 +43,10 @@ export async function runConfirm(
   // mock/CLI fallbacks cannot, so this mode requires a pi-session provider.
   if (!isPiSessionProvider(cfg.provider)) {
     throw new Error(
-      `fsa confirm needs a pi-session provider (e.g. openai-codex) for real-world reproduction; provider "${cfg.provider}" cannot fork a live network. Set --provider openai-codex (and log pi in).`,
+      `flounder confirm needs a pi-session provider (e.g. openai-codex) for real-world reproduction; provider "${cfg.provider}" cannot fork a live network. Set --provider openai-codex (and log pi in).`,
     );
   }
-  if (cfg.sourcePaths.length === 0) throw new Error("fsa confirm needs --source (the target code to reproduce against)");
+  if (cfg.sourcePaths.length === 0) throw new Error("flounder confirm needs --source (the target code to reproduce against)");
   const inputRunDir = path.resolve(options.inputRunDir);
 
   // Confirm runs UNBOUNDED by default: reproduction on a real target is heavy, and the
@@ -69,7 +69,7 @@ export async function runConfirm(
   // 2. Load the prior run's confirmed findings as the work list.
   const priorFindings = await loadConfirmedFindings(inputRunDir);
   if (priorFindings.length === 0) {
-    throw new Error(`fsa confirm: no confirmed findings in ${path.join(inputRunDir, "audit_findings.json")} (point it at a completed run dir).`);
+    throw new Error(`flounder confirm: no confirmed findings in ${path.join(inputRunDir, "audit_findings.json")} (point it at a completed run dir).`);
   }
   // SQLite tracking: record a `confirm` run under the same project (failure-isolated).
   const recorder = (options.makeTracker ?? RunRecorder.start)(confirmCfg, logger.runDir, "confirm", logger);
@@ -87,7 +87,7 @@ export async function runConfirm(
   // 3. Workspace: copy the build root (reproducible) and the FROZEN report + per-finding
   // disclosures as corpus, so the model can read each finding's claimed exploit/fix.
   const source = await loadSource(confirmCfg.sourcePaths);
-  if (source.length === 0) throw new Error("fsa confirm requires at least one readable source file (use --source)");
+  if (source.length === 0) throw new Error("flounder confirm requires at least one readable source file (use --source)");
   const workspaceRoots = confirmCfg.buildRoot ? [confirmCfg.buildRoot] : confirmCfg.sourcePaths;
   const workspace = await prepareSandboxWorkspace(workspaceRoots, logger.runDir, "confirm/workspace");
   const frozenDocs = await loadFrozenReportDocs(inputRunDir);
@@ -195,7 +195,7 @@ async function freezeInputRun(runDir: string): Promise<ConfirmProvenance> {
   try {
     names = await readdir(runDir);
   } catch (error) {
-    throw new Error(`fsa confirm: cannot read run dir ${runDir}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`flounder confirm: cannot read run dir ${runDir}: ${error instanceof Error ? error.message : String(error)}`);
   }
   const frozenFiles: ConfirmProvenance["frozenFiles"] = [];
   for (const name of names.filter((n) => FROZEN_FILE.test(n)).sort()) {
@@ -217,7 +217,7 @@ async function loadConfirmedFindings(runDir: string): Promise<Array<Record<strin
   try {
     raw = JSON.parse(await readFile(file, "utf8"));
   } catch (error) {
-    throw new Error(`fsa confirm: cannot read or parse ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`flounder confirm: cannot read or parse ${file}: ${error instanceof Error ? error.message : String(error)}`);
   }
   const list = Array.isArray(raw)
     ? raw

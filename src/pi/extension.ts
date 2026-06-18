@@ -5,7 +5,7 @@ import { runAudit } from "../agent/audit.js";
 import { runConfirm } from "../agent/confirm.js";
 import { analyzeCommandSafety } from "../security/policy.js";
 
-// Budget policy for the `fsa_run` pi tool, kept in step with the `fsa run` CLI
+// Budget policy for the `flounder_run` pi tool, kept in step with the `flounder run` CLI
 // (cli.ts:33-35): UNBOUNDED by default — a real map→dig audit's decisive obligation can
 // surface late, and a fixed budget silently truncates it, so the run ends when the model
 // emits done, not at a step count. A finite maxSteps caps every phase (the tool exposes
@@ -25,7 +25,7 @@ export function applyFsaRunBudgets(cfg: AuditorConfig, maxSteps?: number): void 
 
 export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
   pi.registerTool({
-    name: "fsa_run",
+    name: "flounder_run",
     label: "Autonomous Security Audit",
     description:
       "Run the thin agentic audit: the model drives its own investigation with pi-style read/write/edit/bash tools. The framework supplies capability and verification, not a checklist. Verification is local-only; a finding only reaches confirmed-executable when a sandboxed local command passes. Requires a live model provider.",
@@ -35,7 +35,7 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
       corpusPaths: Type.Optional(Type.Array(Type.String(), { description: "Local spec/reference files or directories." })),
       provider: Type.Optional(Type.String({ description: "pi-ai provider, for example openai; use codex-cli or claude-code only as explicit local CLI fallbacks." })),
       model: Type.Optional(Type.String({ description: "Model id used to drive the agent loop." })),
-      maxSteps: Type.Optional(Type.Number({ description: "Cap on agent actions per phase. Default: unbounded — the run ends when the model emits done (matching the `fsa run` CLI). When set, caps each of the map, dig, and breadth phases." })),
+      maxSteps: Type.Optional(Type.Number({ description: "Cap on agent actions per phase. Default: unbounded — the run ends when the model emits done (matching the `flounder run` CLI). When set, caps each of the map, dig, and breadth phases." })),
       scopeNote: Type.Optional(Type.String({ description: "One-line authorized-scope hint surfaced to the agent." })),
       outputDir: Type.Optional(Type.String({ description: "Artifact output directory." })),
       historyDir: Type.Optional(Type.String({ description: "Project history directory. Defaults to outputDir/history." })),
@@ -51,7 +51,7 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
       if (params.scopeNote) cfg.auditScopeNote = params.scopeNote;
       cfg.outputDir = params.outputDir ?? cfg.outputDir;
       if (params.historyDir !== undefined) cfg.historyDir = params.historyDir;
-      cfg.auditDeep = true; // fsa_run = map -> audit, matching the `fsa run` CLI verb
+      cfg.auditDeep = true; // flounder_run = map -> audit, matching the `flounder run` CLI verb
 
       const result = await runAudit(cfg, { kind: "run" });
       const confirmed = result.summary.findings.filter((finding) => finding.confirmationStatus === "confirmed-executable").length;
@@ -68,13 +68,13 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "fsa_confirm",
+    name: "flounder_confirm",
     label: "Open-World Confirmation",
     description:
-      "Open-world counterpart to fsa_run: take a finished run's findings to a real-world standard. Freeze + fingerprint the findings (before any network access), reproduce each against real ground truth (e.g. a mainnet fork of the deployed contract), consolidate duplicates by fix-equivalence, check novelty online, and emit a submit/no-submit decision sheet. Networked, but white-hat: it may fork and read live networks/data, and NEVER broadcasts to a live one. Unbounded by default (ends when the model is done); auto-resumes an interrupted prior confirm of the same run. Requires a pi-session provider (e.g. openai-codex) — it cannot run on a mock/CLI fallback.",
+      "Open-world counterpart to flounder_run: take a finished run's findings to a real-world standard. Freeze + fingerprint the findings (before any network access), reproduce each against real ground truth (e.g. a mainnet fork of the deployed contract), consolidate duplicates by fix-equivalence, check novelty online, and emit a submit/no-submit decision sheet. Networked, but white-hat: it may fork and read live networks/data, and NEVER broadcasts to a live one. Unbounded by default (ends when the model is done); auto-resumes an interrupted prior confirm of the same run. Requires a pi-session provider (e.g. openai-codex) — it cannot run on a mock/CLI fallback.",
     parameters: Type.Object({
       target: Type.String({ description: "Target name; should match the run being confirmed (names the confirm dir and enables resume)." }),
-      runDir: Type.String({ description: "Directory of the finished fsa_run to confirm (it must contain audit_findings.json with confirmed findings)." }),
+      runDir: Type.String({ description: "Directory of the finished flounder_run to confirm (it must contain audit_findings.json with confirmed findings)." }),
       sourcePaths: Type.Array(Type.String(), { description: "Local authorized source/target code to reproduce the findings against." }),
       buildRoot: Type.Optional(Type.String({ description: "Directory copied into the sandbox so the target is buildable (e.g. a Foundry/cargo workspace root). Defaults to sourcePaths." })),
       corpusPaths: Type.Optional(Type.Array(Type.String(), { description: "Local spec/reference files or directories." })),
@@ -116,10 +116,10 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("fsa", {
-    description: "Show full-stack-auditor usage.",
+  pi.registerCommand("flounder", {
+    description: "Show flounder usage.",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Tools: fsa_run (sealed map→dig audit) and fsa_confirm (open-world reproduction of a run's findings). Or run `fsa run` / `fsa confirm` from the terminal.", "info");
+      ctx.ui.notify("Tools: flounder_run (sealed map→dig audit) and flounder_confirm (open-world reproduction of a run's findings). Or run `flounder run` / `flounder confirm` from the terminal.", "info");
     },
   });
 
@@ -129,7 +129,7 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
     if (decision.blocked) {
       return {
         block: true,
-        reason: decision.reason ?? "Blocked by full-stack-auditor.",
+        reason: decision.reason ?? "Blocked by flounder.",
       };
     }
     return undefined;
@@ -140,7 +140,7 @@ export default function fullStackAuditorExtension(pi: ExtensionAPI): void {
     if (!decision.blocked) return undefined;
     return {
       result: {
-        output: decision.reason ?? "Blocked by full-stack-auditor.",
+        output: decision.reason ?? "Blocked by flounder.",
         exitCode: 2,
         cancelled: false,
         truncated: false,

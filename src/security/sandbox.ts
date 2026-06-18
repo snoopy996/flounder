@@ -55,17 +55,17 @@ export function analyzeSandboxFileSafety(file: ReproductionFile): string | undef
   const content = file.content;
   for (const url of content.match(/\bhttps?:\/\/[^\s"'`<>]+/gi) ?? []) {
     if (!isLocalUrl(url)) {
-      return `Blocked by full-stack-auditor guardrail: generated test file ${file.path} must not reference remote URLs.`;
+      return `Blocked by flounder guardrail: generated test file ${file.path} must not reference remote URLs.`;
     }
   }
   if (/\b(?:child_process|Deno\.Command|Bun\.spawn|spawnSync|execFileSync|execSync)\b/.test(content)) {
-    return `Blocked by full-stack-auditor guardrail: generated test file ${file.path} must not spawn subprocesses.`;
+    return `Blocked by flounder guardrail: generated test file ${file.path} must not spawn subprocesses.`;
   }
   if (/\b(?:PRIVATE_KEY|MNEMONIC|SECRET|TOKEN|ALCHEMY|INFURA|QUICKNODE|MORALIS|ETHERSCAN|RPC_URL)\b/.test(content)) {
-    return `Blocked by full-stack-auditor guardrail: generated test file ${file.path} must not read secret or RPC environment variables.`;
+    return `Blocked by flounder guardrail: generated test file ${file.path} must not read secret or RPC environment variables.`;
   }
   if (/\b(?:sendRawTransaction|broadcast|transferFrom|withdraw|drain)\b/i.test(content) && /\b(?:mainnet|testnet|public\s+rpc|production)\b/i.test(content)) {
-    return `Blocked by full-stack-auditor guardrail: generated test file ${file.path} combines live-network and value-moving terms.`;
+    return `Blocked by flounder guardrail: generated test file ${file.path} combines live-network and value-moving terms.`;
   }
   return undefined;
 }

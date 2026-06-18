@@ -250,7 +250,7 @@ ${input.fileManifest}
 Verify the claim: read the cited code and its bindings, then write and run a PoC test that either reproduces the bug (-> confirmed, with fix_patch + patched_success_patterns) or, after genuine effort, demonstrates it cannot reproduce (-> write a "REFUTED:" info finding citing the mitigating code). Respond with one JSON tool action or done object.`;
 }
 
-// CONFIRM mode (`fsa confirm`): the open-world counterpart to the network-sealed
+// CONFIRM mode (`flounder confirm`): the open-world counterpart to the network-sealed
 // audit. It does NOT discover; it takes the prior audit's CONFIRMED findings to a
 // real-world standard of certainty and emits a submit/no-submit decision sheet. The
 // network is available now, governed by three rules. Like every other prompt it

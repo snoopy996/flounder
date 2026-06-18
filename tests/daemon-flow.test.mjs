@@ -12,9 +12,9 @@ import { MetadataStore } from "../dist/db/store.js";
 // /api/daemon/* protocol), pinning the whole handoff without spawning a real audit.
 
 async function withServerAndToken(fn) {
-  const out = await mkdtemp(path.join(os.tmpdir(), "fsa-daemon-"));
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-daemon-"));
   // Mint a daemon token directly in the store (the server has no token-minting endpoint;
-  // `fsa ui` mints one for its co-located daemon, an operator mints them for remote ones).
+  // `flounder ui` mints one for its co-located daemon, an operator mints them for remote ones).
   const minting = MetadataStore.openForOutput(out);
   const { token } = minting.createDaemonToken("test-daemon");
   minting.close();

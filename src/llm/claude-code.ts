@@ -18,10 +18,10 @@ export class ClaudeCodeClient implements LlmClient {
     agentic?: boolean;
   }): Promise<string> {
     if (!input.model) throw new Error("model is required");
-    const tmp = await mkdtemp(path.join(os.tmpdir(), "fsa-claude-code-"));
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "flounder-claude-code-"));
     const system = renderSystemPrompt(input.system, input.agentic ?? false);
     // NOTE: keep these flags aligned with the installed `claude` CLI. The provider
-    // is a pure text-completion backend: fsa parses the model's JSON action and runs
+    // is a pure text-completion backend: flounder parses the model's JSON action and runs
     // the tool itself inside its sandbox, so the spawned `claude` must NOT use its own
     // tools (that would emit non-JSON output and bypass the sandbox/confirmation gate).
     // `--permission-mode default` (NOT bypassPermissions) is correct here — there are no
@@ -47,7 +47,7 @@ export class ClaudeCodeClient implements LlmClient {
       const stdout = await spawnClaude(args, input.user, {
         cwd: tmp,
         maxBuffer: 20 * 1024 * 1024,
-        timeout: Number(process.env.FSA_CLAUDE_CODE_TIMEOUT_MS ?? 900_000),
+        timeout: Number(process.env.FLOUNDER_CLAUDE_CODE_TIMEOUT_MS ?? 900_000),
       });
       const { text, meta } = parseClaudeOutput(stdout);
       await this.logger?.call({
@@ -101,7 +101,7 @@ ${system}
 }
 
 // Built-in Claude Code tools to disable so the spawned `claude -p` is a pure
-// text completion that only emits the JSON action fsa expects (fsa executes the
+// text completion that only emits the JSON action flounder expects (flounder executes the
 // real tool itself inside its sandbox).
 const DISABLED_CLAUDE_TOOLS =
   "Bash Edit Write Read Glob Grep WebFetch WebSearch Task NotebookEdit TodoWrite SlashCommand KillShell BashOutput";
