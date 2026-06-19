@@ -107,8 +107,9 @@
   .box-row:last-child { border-bottom: 0; }
   .box-row:hover { background: var(--canvas-subtle); }
   .box-row.sel { background: var(--sel-bg); box-shadow: inset 3px 0 0 var(--accent); }
-  .box-row .top { display: flex; align-items: center; gap: 8px; }
-  .box-row .name { font-weight: 600; font-size: 15px; color: var(--fg); }
+  .box-row .top { display: flex; align-items: flex-start; gap: 8px; }
+  .box-row .name { font-weight: 600; font-size: 15px; color: var(--fg); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .box-row .top .state { flex-shrink: 0; }
   .box-row:hover .name { color: var(--accent); }
   .muted { color: var(--fg-muted); font-size: 12px; }
 
@@ -562,7 +563,7 @@ function renderList() {
     const labels = Object.entries(p.findingCounts || {}).map(([s, n]) => labelWithCount(s, n)).join(" ");
     const st = p.activeRuns > 0 ? "running" : (p.latestRun ? p.latestRun.status : "");
     return '<div class="box-row ' + (state.selected === p.name ? "sel" : "") + '" data-name="' + esc(p.name) + '">'
-      + '<div class="top"><span class="name">' + esc(p.name) + '</span><span style="flex:1"></span>' + stateBadge(st) + '</div>'
+      + '<div class="top"><span class="name">' + esc(p.name) + '</span>' + stateBadge(st) + '</div>'
       + '<div class="muted" style="margin-top:6px">scopes ' + pr.audited + '/' + pr.total + ' audited · ' + pr.pending + ' pending' + (pr.deferred ? ' · ' + pr.deferred + ' skipped' : '') + ' · ' + p.runCount + ' run' + (p.runCount === 1 ? "" : "s")
         + (p.confirmedBugs ? ' · <span class="confirmed-tag">✓ ' + p.confirmedBugs + ' confirmed</span>' : '') + '</div>'
       + '<div class="progress"><span class="audited" style="width:' + pct(pr.audited, pr.total) + '%"></span><span class="pending" style="width:' + pct(pr.pending, pr.total) + '%"></span><span class="deferred" style="width:' + pct(pr.deferred || 0, pr.total) + '%"></span></div>'
