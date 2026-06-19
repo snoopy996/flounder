@@ -281,6 +281,7 @@ export async function runAudit(
     const checkpointFindings = async (): Promise<void> => {
       const confirmedSoFar = aggregated.filter((finding) => isConfirmed(finding.confirmationStatus)).map((finding, idx) => ({ ...finding, id: `f${idx + 1}` }));
       await logger.artifact("audit_findings.json", confirmedSoFar);
+      recorder.findings(aggregated, logger.runDir, "dig checkpoint"); // persist live so the UI shows findings as each scope lands (content-keyed, so statuses update in place later)
     };
     const samples = Math.max(1, Math.floor(cfg.auditDigSamples));
     const concurrency = Math.max(1, Math.floor(cfg.auditDigConcurrency));
@@ -351,6 +352,7 @@ export async function runAudit(
         // on the next run (concurrent digs' findings live in their isolated workspaces).
         await saveScopeInventory(inventoryDir, scopeInventory);
         recorder.scopes(scopeInventory);
+        recorder.findings(unioned, logger.runDir, "dig checkpoint"); // persist this scope's findings live (content-keyed upsert)
         recorder.runScopes(++digDone, toDig.length);
         return { findings: unioned, steps: digSteps, commandRuns: scopedRuns };
       };
@@ -434,6 +436,7 @@ export async function runAudit(
       if (result.confirmed) finding.confirmationStatus = "confirmed-differential";
     }
     if (differentials.length > 0) await logger.artifact("audit_differential.json", differentials);
+    recorder.findings(session.findings, logger.runDir, "differential"); // push status upgrades (confirmed-differential) to the UI live
   }
 
   // Independent refutation: a fresh-context skeptic re-derives the invariant and
@@ -517,10 +520,12 @@ export async function runAudit(
               : reConfirmed?.refutation?.reason ?? "no faithful PoC produced on appeal",
           };
           await logger.event("audit_appeal", { findingId: finding.id, upheld });
+          recorder.findings(session.findings, logger.runDir, "appeal"); // reflect this finding's appeal outcome live
         }
         clearScratchFindings(session);
       }
     }
+    recorder.findings(session.findings, logger.runDir, "refutation"); // push refutation downgrades (suspected/refuted) to the UI
   }
 
   // Hard artifact semantics: only an execution-confirmed candidate is a finding.

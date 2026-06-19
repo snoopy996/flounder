@@ -163,15 +163,28 @@ function isConfirmedLike(status: string): boolean {
   return status === "confirmed-source" || status === "confirmed-executable" || status === "confirmed-differential";
 }
 
+// A CONTENT-stable dedup key: the display id (f1..fN) is renumbered at finalize, so keying the DB
+// row on it would orphan rows when findings are persisted incrementally (per scope, then re-persisted
+// with updated statuses through differential / refutation / appeal). Hashing scope+location+title
+// keeps the SAME row across those updates, so the UI shows a finding appear once and then change
+// status in place. Falls back to the id when content is somehow empty.
+function stableFindingKey(finding: AgentFinding): string {
+  const basis = `${finding.scopeId ?? ""}|${finding.location ?? ""}|${finding.title ?? ""}`;
+  if (!basis.replace(/\|/g, "")) return finding.id;
+  let h = 5381;
+  for (let i = 0; i < basis.length; i += 1) h = (((h << 5) + h) ^ basis.charCodeAt(i)) | 0;
+  return "k" + (h >>> 0).toString(36);
+}
+
 export function toFindingRow(finding: AgentFinding, runDir: string): FindingRow {
   return {
-    findingKey: finding.id,
+    findingKey: stableFindingKey(finding),
     title: finding.title,
     location: finding.location,
     severity: finding.severity,
     status: toFindingStatus(finding),
-    // Only confirmed findings get a disclosure report artifact written to the run dir.
-    reportPath: isConfirmedLike(finding.confirmationStatus) ? path.join(runDir, reportArtifactName(finding.id)) : undefined,
+    // Only confirmed findings get a disclosure report artifact (written at finalize under the final id).
+    reportPath: finding.id && isConfirmedLike(finding.confirmationStatus) ? path.join(runDir, reportArtifactName(finding.id)) : undefined,
     scopeId: finding.scopeId,
   };
 }

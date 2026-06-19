@@ -813,6 +813,7 @@ function renderDetail() {
         + '<button class="btn primary" id="continueBtn"' + dis + '>' + icon("play") + (d.runsTotal > 0 ? "Continue audit" : "Start audit") + '</button>'
         + (d.runsTotal > 0 ? '<button class="btn" id="restartBtn"' + dis + '>' + icon("sync") + 'Restart (re-map)</button>' : "")
         + '<button class="btn" id="runBtn"' + dis + '>' + icon("play") + 'Run…</button>'
+        + (d.runs.some((r) => (r.kind === "run" || r.kind === "audit") && r.status === "done" && r.run_dir) ? '<button class="btn" id="confirmBtn"' + dis + '>' + icon("shieldcheck") + 'Confirm on real target</button>' : "")
         + '<button class="btn" id="editBtn">' + icon("gear") + 'Edit config</button>'
         + '<button class="btn danger" id="deleteBtn"' + dis + '>' + icon("trash") + 'Delete</button>'
         + runningRuns.map((r) => '<button class="btn danger" data-runid="' + r.id + '">' + icon("x") + 'Stop ' + r.kind + ' · run ' + r.id + '</button>').join("")
@@ -824,6 +825,15 @@ function renderDetail() {
   $("#continueBtn").onclick = () => command("continue");
   const rb = $("#restartBtn"); if (rb) rb.onclick = () => command("restart");
   $("#runBtn").onclick = openRun;
+  // Confirm = reproduce the latest finished dig's findings on the real target (mainnet fork). This
+  // is the SAME daemon runConfirm the CLI's `flounder confirm <run-dir>` triggers — the button just
+  // auto-picks the newest finished run's dir. (For a robust fork it can want an archive RPC; the
+  // Run… dialog or the CLI's --endpoint set that.)
+  const cfb = $("#confirmBtn");
+  if (cfb) cfb.onclick = () => {
+    const r = d.runs.find((x) => (x.kind === "run" || x.kind === "audit") && x.status === "done" && x.run_dir);
+    if (r && confirm('Confirm on the real target — reproduce run ' + r.id + "'s findings on a mainnet fork (reads/forks live state, never broadcasts)?")) launchRun({ verb: "confirm", inputRunDir: r.run_dir });
+  };
   $("#editBtn").onclick = openEdit;
   $("#deleteBtn").onclick = async () => {
     if (!confirm('Delete project "' + d.project.name + '" and all its runs, scopes & findings?\nOn-disk run artifacts are kept.')) return;
