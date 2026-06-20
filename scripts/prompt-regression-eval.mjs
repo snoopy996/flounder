@@ -21,8 +21,8 @@ Options:
   --fixture-set <set>  positive | negative | control | all. Default: positive.
   --samples <n>        Independent samples per case. Default: 1.
   --variant <name>     Label for A/B comparison output. Default: current.
-  --mode <mode>        breadth | deep | map-dig. Default: deep.
-  --synthesize         Enable the post-dig synthesis phase. Requires --mode map-dig.
+  --mode <mode>        breadth | deep | map-dig. Default: deep. map-dig runs synthesis by default.
+  --no-synthesize      Disable the post-dig synthesis phase for isolated dig testing. Requires --mode map-dig.
   --provider <name>    Live provider. Default: openai-codex.
   --model <name>       Live model. Default: config default.
   --thinking <level>   minimal | low | medium | high | xhigh. Default: xhigh.
@@ -68,6 +68,16 @@ function readIntFlag(name, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
+}
+
+function resolveSynthesize(mode) {
+  const forceSynthesize = hasFlag("--synthesize");
+  const noSynthesize = hasFlag("--no-synthesize");
+  if (forceSynthesize && noSynthesize) throw new Error("--synthesize and --no-synthesize cannot be combined");
+  if ((forceSynthesize || noSynthesize) && mode !== "map-dig") {
+    throw new Error(`${forceSynthesize ? "--synthesize" : "--no-synthesize"} requires --mode map-dig`);
+  }
+  return mode === "map-dig" && !noSynthesize;
 }
 
 function validateMode(value) {
@@ -321,14 +331,15 @@ function printHelpAndExit() {
 
 async function main() {
   if (hasFlag("--help") || hasFlag("-h")) printHelpAndExit();
+  const mode = validateMode(readFlag("--mode") ?? "deep");
 
   const options = {
     dryRun: hasFlag("--dry-run"),
     live: hasFlag("--live"),
     mockLlm: hasFlag("--mock-llm"),
     variant: validateLabel("--variant", readFlag("--variant") ?? "current"),
-    mode: validateMode(readFlag("--mode") ?? "deep"),
-    synthesize: hasFlag("--synthesize"),
+    mode,
+    synthesize: resolveSynthesize(mode),
     fixtureSet: validateFixtureSet(readFlag("--fixture-set") ?? "positive"),
     provider: readFlag("--provider") ?? "openai-codex",
     model: readFlag("--model"),
@@ -344,10 +355,6 @@ async function main() {
   if (!options.dryRun && !options.live && !options.mockLlm) {
     throw new Error("refusing to call a model without --live or --mock-llm; use --dry-run to inspect the plan");
   }
-  if (options.synthesize && options.mode !== "map-dig") {
-    throw new Error("--synthesize requires --mode map-dig");
-  }
-
   const registry = await loadRegistry();
   const cases = selectCases(registry, readFlags("--case"));
   const plan = [];

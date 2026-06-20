@@ -240,7 +240,7 @@ test("prompt regression eval runner expands dry-run plans without model calls", 
   assert.ok(plan.runs.every((run) => run.sourcePaths.length === 1));
 });
 
-test("prompt regression eval runner can plan map-dig synthesis runs", async () => {
+test("prompt regression eval runner enables synthesis by default for map-dig runs", async () => {
   const { stdout } = await execFileAsync(
     "node",
     [
@@ -252,7 +252,6 @@ test("prompt regression eval runner can plan map-dig synthesis runs", async () =
       "positive",
       "--mode",
       "map-dig",
-      "--synthesize",
       "--variant",
       "candidate",
     ],
@@ -262,6 +261,30 @@ test("prompt regression eval runner can plan map-dig synthesis runs", async () =
   assert.equal(plan.runs.length, 1);
   assert.equal(plan.runs[0].mode, "map-dig");
   assert.equal(plan.runs[0].synthesize, true);
+});
+
+test("prompt regression eval runner can disable map-dig synthesis for isolated dig checks", async () => {
+  const { stdout } = await execFileAsync(
+    "node",
+    [
+      "scripts/prompt-regression-eval.mjs",
+      "--dry-run",
+      "--case",
+      "aztec-2026-06-17-recursive-verifier-boundary",
+      "--fixture-set",
+      "positive",
+      "--mode",
+      "map-dig",
+      "--no-synthesize",
+      "--variant",
+      "candidate",
+    ],
+    { cwd: root },
+  );
+  const plan = JSON.parse(stdout);
+  assert.equal(plan.runs.length, 1);
+  assert.equal(plan.runs[0].mode, "map-dig");
+  assert.equal(plan.runs[0].synthesize, false);
 });
 
 test("prompt regression eval runner can plan positive, negative, and control fixtures", async () => {
