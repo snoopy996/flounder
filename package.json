@@ -29,6 +29,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "check:public": "node scripts/check-public-surface.mjs",
     "verify": "npm run check && npm test && npm run mock-audit && npm run check:public",
+    "sandbox:build": "docker build -f docker/flounder-sandbox.Dockerfile -t flounder-sandbox:latest .",
     "prepack": "npm run build",
     "start": "node ./dist/cli.js",
     "mock-audit": "node scripts/mock-audit.mjs"
@@ -66,6 +67,7 @@
     "skills/**",
     "prompts/**",
     "configs/**",
+    "docker/**",
     "docs/**",
     "fixtures/**",
     "scripts/**",

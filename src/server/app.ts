@@ -302,6 +302,7 @@ const ROUTES: Route[] = [
       sourcePaths: "string[] — ABSOLUTE code paths the daemon reads", corpusPaths: "string[]? — ABSOLUTE design/reference paths", buildRoot: "string? — ABSOLUTE buildable root",
       provider: "string?", model: "string?", thinking: "string?",
       maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
+      sandboxBackend: "'auto'|'oci'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
       remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
       inputRunDir: "string? — confirm", fresh: "boolean? — confirm",
       clue: "string? — prepare", posture: "string? — prepare", matchDeployed: "boolean? — prepare", endpoint: "string? — prepare",
@@ -614,6 +615,8 @@ function normalizeLaunchSpec(body: Record<string, unknown>, target: string, verb
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const bool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
   const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const backend = (v: unknown): "auto" | "oci" | "host" | undefined => (v === "auto" || v === "oci" || v === "host" ? v : undefined);
+  const network = (v: unknown): "none" | "enabled" | undefined => (v === "none" || v === "enabled" ? v : undefined);
   return {
     verb,
     target,
@@ -629,6 +632,13 @@ function normalizeLaunchSpec(body: Record<string, unknown>, target: string, verb
     maxSteps: num(body.maxSteps),
     digSamples: num(body.digSamples),
     digConcurrency: num(body.digConcurrency),
+    sandboxBackend: backend(body.sandboxBackend),
+    sandboxImage: str(body.sandboxImage),
+    sandboxAllowHostFallback: bool(body.sandboxAllowHostFallback),
+    sandboxPrepareNetwork: network(body.sandboxPrepareNetwork),
+    sandboxConfirmNetwork: network(body.sandboxConfirmNetwork),
+    sandboxMemoryMb: num(body.sandboxMemoryMb),
+    sandboxCpus: num(body.sandboxCpus),
     remap: bool(body.remap),
     fresh: bool(body.fresh),
     quick: bool(body.quick),
@@ -649,7 +659,7 @@ function normalizeLaunchSpec(body: Record<string, unknown>, target: string, verb
 // The project-row config_json for a launched ad-hoc run (display only; the daemon runs the spec).
 function launchDisplayConfig(spec: LaunchSpec): Record<string, unknown> {
   const cfg: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries({ provider: spec.provider, model: spec.model, thinking: spec.thinking, maxScopes: spec.maxScopes, mapSteps: spec.mapSteps, digSteps: spec.digSteps, digSamples: spec.digSamples, digConcurrency: spec.digConcurrency })) {
+  for (const [k, v] of Object.entries({ provider: spec.provider, model: spec.model, thinking: spec.thinking, maxScopes: spec.maxScopes, mapSteps: spec.mapSteps, digSteps: spec.digSteps, digSamples: spec.digSamples, digConcurrency: spec.digConcurrency, sandboxBackend: spec.sandboxBackend, sandboxImage: spec.sandboxImage, sandboxAllowHostFallback: spec.sandboxAllowHostFallback, sandboxPrepareNetwork: spec.sandboxPrepareNetwork, sandboxConfirmNetwork: spec.sandboxConfirmNetwork, sandboxMemoryMb: spec.sandboxMemoryMb, sandboxCpus: spec.sandboxCpus })) {
     if (v !== undefined) cfg[k] = v;
   }
   return cfg;
@@ -987,6 +997,8 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
   const merged = { ...cfg, ...((overrides.config as Record<string, unknown>) ?? {}) };
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+  const backend = (v: unknown): "auto" | "oci" | "host" | undefined => (v === "auto" || v === "oci" || v === "host" ? v : undefined);
+  const network = (v: unknown): "none" | "enabled" | undefined => (v === "none" || v === "enabled" ? v : undefined);
   const list = (v: unknown, fallback: unknown): string[] => {
     const arr = Array.isArray(v) ? v : (safeParse(fallback) as unknown[]) ?? [];
     return arr.filter((x): x is string => typeof x === "string");
@@ -1031,6 +1043,13 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
     maxSteps: num(merged.maxSteps),
     digSamples: num(merged.digSamples),
     digConcurrency: num(merged.digConcurrency),
+    sandboxBackend: backend(merged.sandboxBackend),
+    sandboxImage: str(merged.sandboxImage),
+    sandboxAllowHostFallback: typeof merged.sandboxAllowHostFallback === "boolean" ? merged.sandboxAllowHostFallback : undefined,
+    sandboxPrepareNetwork: network(merged.sandboxPrepareNetwork),
+    sandboxConfirmNetwork: network(merged.sandboxConfirmNetwork),
+    sandboxMemoryMb: num(merged.sandboxMemoryMb),
+    sandboxCpus: num(merged.sandboxCpus),
     remap: Boolean(body.remap),
     fresh: Boolean(body.fresh),
     quick: Boolean(body.quick),

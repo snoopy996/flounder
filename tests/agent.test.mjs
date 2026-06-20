@@ -15,6 +15,9 @@ import { isPiSessionProvider, mapThinkingLevel } from "../dist/agent/pi-session.
 import { MockAuditLlmClient } from "../dist/llm/mock.js";
 import { RunLogger } from "../dist/trace/logger.js";
 
+process.env.FLOUNDER_SANDBOX_BACKEND = "host";
+process.env.FLOUNDER_ALLOW_HOST_EXECUTION = "1";
+
 const root = path.resolve(".");
 const fixtures = path.join(root, "fixtures");
 

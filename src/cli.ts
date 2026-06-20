@@ -113,7 +113,7 @@ async function main(argv: string[]): Promise<void> {
     // Name the staged project after the clue when --target wasn't given, so each prepare is its
     // own UI project rather than colliding on the default "target".
     if (cfg.targetName === "target") cfg.targetName = `prepare-${slugifyClue(clue)}`;
-    const spec: LaunchSpec = { verb: "prepare", target: cfg.targetName, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir };
+    const spec: LaunchSpec = { verb: "prepare", target: cfg.targetName, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (endpoint !== undefined) spec.endpoint = endpoint;
     if (maxSteps !== undefined) spec.maxSteps = maxSteps;
     const run = await launchViaApi(resolveServer(readFlag(rest, "--server")), spec);
@@ -134,7 +134,7 @@ async function main(argv: string[]): Promise<void> {
     // It auto-RESUMES a prior interrupted confirm of the same run dir (carries settled rows forward); --fresh ignores that.
     const maxSteps = readIntFlag(rest, "--max-steps");
     const fresh = rest.includes("--fresh");
-    const spec: LaunchSpec = { verb: "confirm", target: cfg.targetName, sourcePaths: cfg.sourcePaths, corpusPaths: cfg.corpusPaths, provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, inputRunDir, out: cfg.outputDir };
+    const spec: LaunchSpec = { verb: "confirm", target: cfg.targetName, sourcePaths: cfg.sourcePaths, corpusPaths: cfg.corpusPaths, provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, inputRunDir, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (cfg.buildRoot) spec.buildRoot = cfg.buildRoot;
     if (fresh) spec.fresh = true;
     if (maxSteps !== undefined) spec.maxSteps = maxSteps;
@@ -174,6 +174,18 @@ async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig }> {
   cfg.auditModel = readFlag(args, "--audit-model") ?? readFlag(args, "--model") ?? cfg.auditModel;
   cfg.maxTokens = readIntFlag(args, "--max-tokens") ?? cfg.maxTokens;
   cfg.reproductionCommandTimeoutMs = readIntFlag(args, "--repro-timeout-ms") ?? cfg.reproductionCommandTimeoutMs;
+  const sandboxBackend = readFlag(args, "--sandbox-backend");
+  if (sandboxBackend === "auto" || sandboxBackend === "oci" || sandboxBackend === "host") cfg.sandboxBackend = sandboxBackend;
+  cfg.sandboxImage = readFlag(args, "--sandbox-image") ?? cfg.sandboxImage;
+  if (args.includes("--allow-host-execution")) cfg.sandboxAllowHostFallback = true;
+  const prepareNetwork = readFlag(args, "--prepare-network");
+  if (prepareNetwork === "none" || prepareNetwork === "enabled") cfg.sandboxPrepareNetwork = prepareNetwork;
+  const confirmNetwork = readFlag(args, "--confirm-network");
+  if (confirmNetwork === "none" || confirmNetwork === "enabled") cfg.sandboxConfirmNetwork = confirmNetwork;
+  const memoryMb = readIntFlag(args, "--sandbox-memory-mb");
+  if (memoryMb !== undefined) cfg.sandboxMemoryMb = memoryMb;
+  const cpus = readFloatFlag(args, "--sandbox-cpus");
+  if (cpus !== undefined) cfg.sandboxCpus = cpus;
   cfg.auditMaxSteps = readIntFlag(args, "--max-steps") ?? cfg.auditMaxSteps;
   const scopeNote = readFlag(args, "--scope-note");
   if (scopeNote !== undefined) cfg.auditScopeNote = scopeNote;
@@ -216,6 +228,20 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   if (typeof rawReproductionCommandTimeoutMs === "number" && Number.isFinite(rawReproductionCommandTimeoutMs)) {
     cfg.reproductionCommandTimeoutMs = Math.max(1000, Math.floor(rawReproductionCommandTimeoutMs));
   }
+  const rawSandboxBackend = raw.sandboxBackend ?? raw.sandbox_backend;
+  if (rawSandboxBackend === "auto" || rawSandboxBackend === "oci" || rawSandboxBackend === "host") cfg.sandboxBackend = rawSandboxBackend;
+  const rawSandboxImage = raw.sandboxImage ?? raw.sandbox_image;
+  if (typeof rawSandboxImage === "string" && rawSandboxImage.trim()) cfg.sandboxImage = rawSandboxImage.trim();
+  const rawAllowHost = raw.sandboxAllowHostFallback ?? raw.sandbox_allow_host_fallback ?? raw.allowHostExecution ?? raw.allow_host_execution;
+  if (typeof rawAllowHost === "boolean") cfg.sandboxAllowHostFallback = rawAllowHost;
+  const rawPrepareNetwork = raw.sandboxPrepareNetwork ?? raw.sandbox_prepare_network;
+  if (rawPrepareNetwork === "none" || rawPrepareNetwork === "enabled") cfg.sandboxPrepareNetwork = rawPrepareNetwork;
+  const rawConfirmNetwork = raw.sandboxConfirmNetwork ?? raw.sandbox_confirm_network;
+  if (rawConfirmNetwork === "none" || rawConfirmNetwork === "enabled") cfg.sandboxConfirmNetwork = rawConfirmNetwork;
+  const rawSandboxMemoryMb = raw.sandboxMemoryMb ?? raw.sandbox_memory_mb;
+  if (typeof rawSandboxMemoryMb === "number" && Number.isFinite(rawSandboxMemoryMb)) cfg.sandboxMemoryMb = Math.max(64, Math.floor(rawSandboxMemoryMb));
+  const rawSandboxCpus = raw.sandboxCpus ?? raw.sandbox_cpus;
+  if (typeof rawSandboxCpus === "number" && Number.isFinite(rawSandboxCpus)) cfg.sandboxCpus = Math.max(0.1, rawSandboxCpus);
   const rawAuditMaxSteps = raw.auditMaxSteps ?? raw.audit_max_steps;
   if (typeof rawAuditMaxSteps === "number" && Number.isFinite(rawAuditMaxSteps)) cfg.auditMaxSteps = Math.max(1, Math.floor(rawAuditMaxSteps));
   const rawAuditScopeNote = raw.auditScopeNote ?? raw.audit_scope_note;
@@ -307,6 +333,7 @@ function buildAuditSpec(cmd: "run" | "map" | "audit", rest: string[], cfg: Audit
     model: cfg.auditModel,
     thinking: cfg.thinkingLevel,
     out: cfg.outputDir,
+    ...sandboxSpec(cfg),
   };
   if (cfg.buildRoot) spec.buildRoot = cfg.buildRoot;
   if (cfg.auditScopeNote && cfg.auditScopeNote.trim()) spec.scopeNote = cfg.auditScopeNote.trim(); // --scope-note, or the pipeline's prepare-derived focus
@@ -330,6 +357,18 @@ function buildAuditSpec(cmd: "run" | "map" | "audit", rest: string[], cfg: Audit
   cap("--dig-samples", (n) => (spec.digSamples = n));
   cap("--dig-concurrency", (n) => (spec.digConcurrency = n));
   return spec;
+}
+
+function sandboxSpec(cfg: AuditorConfig): Pick<LaunchSpec, "sandboxBackend" | "sandboxImage" | "sandboxAllowHostFallback" | "sandboxPrepareNetwork" | "sandboxConfirmNetwork" | "sandboxMemoryMb" | "sandboxCpus"> {
+  return {
+    sandboxBackend: cfg.sandboxBackend,
+    sandboxImage: cfg.sandboxImage,
+    sandboxAllowHostFallback: cfg.sandboxAllowHostFallback,
+    sandboxPrepareNetwork: cfg.sandboxPrepareNetwork,
+    sandboxConfirmNetwork: cfg.sandboxConfirmNetwork,
+    ...(cfg.sandboxMemoryMb !== undefined ? { sandboxMemoryMb: cfg.sandboxMemoryMb } : {}),
+    ...(cfg.sandboxCpus !== undefined ? { sandboxCpus: cfg.sandboxCpus } : {}),
+  };
 }
 
 /** A short, filesystem/UI-safe slug from a prepare clue (tx / address / url), for the project name. */
@@ -360,7 +399,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
 
   // Phase 1 — prepare (open-world acquisition + deployment match) stages the source.
   console.log("\n── phase 1 · prepare (acquire the target) ──");
-  const prepSpec: LaunchSpec = { verb: "prepare", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir };
+  const prepSpec: LaunchSpec = { verb: "prepare", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
   if (endpoint !== undefined) prepSpec.endpoint = endpoint;
   const prep = await launchViaApi(server, prepSpec);
   if (!ran(prep)) { console.error("[pipeline] prepare did not finish — stopping."); process.exitCode = 1; return; }
@@ -392,7 +431,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
   else if (findings <= 0) console.log("\n[pipeline] the dig surfaced no findings — nothing to reproduce.");
   else {
     console.log("\n── phase 3 · confirm (reproduce on the real target) ──");
-    const confSpec: LaunchSpec = { verb: "confirm", target, sourcePaths: [staged], inputRunDir: String(audit!.run_dir), provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, out: cfg.outputDir };
+    const confSpec: LaunchSpec = { verb: "confirm", target, sourcePaths: [staged], inputRunDir: String(audit!.run_dir), provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (!ran(await launchViaApi(server, confSpec))) process.exitCode = 1;
   }
   console.log(`\n=== pipeline done · UI project "${target}" has the full prepare → dig${noConfirm ? "" : " → confirm"} trail ===`);
@@ -409,6 +448,13 @@ function readIntFlag(args: string[], name: string): number | undefined {
   const value = readFlag(args, name);
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readFloatFlag(args: string[], name: string): number | undefined {
+  const value = readFlag(args, name);
+  if (!value) return undefined;
+  const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
@@ -645,6 +691,13 @@ Shared options:
   --max-steps <n>         cap agent turns for a breadth pass / pinned audit (default: UNBOUNDED — the model stops when done)
   --no-prepare            skip the toolchain warm-up (deps fetch/build)
   --prepare-timeout-ms <n>  per-command timeout for the warm-up, default 600000
+  --sandbox-backend <b>   auto|oci|host; default auto uses the OCI sandbox and refuses implicit host fallback
+  --sandbox-image <img>   OCI image for sandboxed commands (default flounder-sandbox:latest; build with npm run sandbox:build)
+  --allow-host-execution  trusted-local opt-in only: let auto fall back to host execution when no OCI sandbox is available
+  --prepare-network <m>   none|enabled; dependency warm-up/build commands default to enabled
+  --confirm-network <m>   none|enabled; open-world prepare/confirm bash commands default to enabled
+  --sandbox-memory-mb <n> memory limit for OCI sandbox commands
+  --sandbox-cpus <n>      CPU limit for OCI sandbox commands
   --no-refute / --no-appeal  skip the independent-refutation / one-appeal passes on confirmed findings
   --server <url>          control plane the CLI drives (default --server > FLOUNDER_SERVER > config 'server' > http://127.0.0.1:4500)
   --mock-llm              run with the deterministic mock model (no provider needed); the daemon executes it like any run

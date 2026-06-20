@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { AuditorConfig } from "../config.js";
+import { sandboxExecutionOptions, type AuditorConfig } from "../config.js";
 import {
   matchSuccessPatterns,
   normalizeRelativePath,
@@ -79,7 +79,14 @@ export async function runDifferentialConfirmation(input: {
   let patchedRun;
   try {
     await writeSandboxFiles(input.workspace.absolute, [{ path: rel, content: patchedContent }]);
-    patchedRun = await runSandboxCommand(exploitRun.commandSpec, input.workspace.absolute, input.cfg.reproductionMaxLogBytes, input.cfg.sourcePaths, input.cacheDir);
+    patchedRun = await runSandboxCommand(
+      exploitRun.commandSpec,
+      input.workspace.absolute,
+      input.cfg.reproductionMaxLogBytes,
+      input.cfg.sourcePaths,
+      input.cacheDir,
+      sandboxExecutionOptions(input.cfg, input.cfg.confirmMode ? input.cfg.sandboxConfirmNetwork : "none"),
+    );
   } finally {
     // Always restore the pristine target source so other findings see a clean tree.
     await writeSandboxFiles(input.workspace.absolute, [{ path: rel, content: original }]);

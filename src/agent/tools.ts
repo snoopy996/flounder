@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { AuditorConfig } from "../config.js";
+import { sandboxExecutionOptions, sandboxNetworkForPurpose, type AuditorConfig } from "../config.js";
 import { analyzeAgentBashCommandSafety, analyzeConfirmBashCommandSafety, isAgentBuildCommand, isAgentConfirmCommand } from "../security/policy.js";
 import { prepareWorkspaceToolchain } from "./prepare.js";
 import {
@@ -332,7 +332,14 @@ const bashTool: AgentTool = {
     if (isAgentConfirmCommand(normalized.command) || isAgentBuildCommand(normalized.command)) await ensurePrepared(ctx, workspace);
     ctx.session.counters.command += 1;
     const runId = `cmd${ctx.session.counters.command}`;
-    const result = await runSandboxCommand(normalized.command, workspace.absolute, ctx.cfg.reproductionMaxLogBytes, ctx.cfg.sourcePaths, ctx.session.buildCacheDir);
+    const result = await runSandboxCommand(
+      normalized.command,
+      workspace.absolute,
+      ctx.cfg.reproductionMaxLogBytes,
+      ctx.cfg.sourcePaths,
+      ctx.session.buildCacheDir,
+      sandboxExecutionOptions(ctx.cfg, sandboxNetworkForPurpose(ctx.cfg, normalized.purpose)),
+    );
     const exitMatched = result.exitCode === result.expectedExitCode && !result.timedOut;
     const isConfirm = normalized.purpose === "confirm";
     const eligibleByType = isAgentConfirmCommand(normalized.command);

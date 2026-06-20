@@ -62,6 +62,10 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     };
     try {
       const cfg = specToConfig(spec, out, workspace);
+      if (spec.mockLlm) {
+        cfg.sandboxBackend = "host";
+        cfg.sandboxAllowHostFallback = true;
+      }
       if (spec.verb === "confirm") {
         if (!spec.inputRunDir) throw new Error("confirm requires inputRunDir");
         await runConfirm(cfg, { inputRunDir: spec.inputRunDir, signal: abort.signal, makeTracker, onActivity: sink.push, ...(spec.inputRunDirs ? { inputRunDirs: spec.inputRunDirs } : {}), ...(spec.confirmKeys ? { confirmKeys: spec.confirmKeys } : {}), ...(spec.maxSteps !== undefined ? { maxSteps: spec.maxSteps } : {}), ...(spec.fresh ? { fresh: true } : {}) });

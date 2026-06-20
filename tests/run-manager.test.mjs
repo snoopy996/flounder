@@ -74,6 +74,40 @@ test("buildArgs: confirm without a run dir is rejected", () => {
   assert.throws(() => buildArgs({ verb: "confirm", target: "p", sourcePaths: ["./s"] }), /inputRunDir/);
 });
 
+test("buildArgs/specToConfig: sandbox isolation settings round-trip through launch specs", () => {
+  const spec = {
+    verb: "run",
+    target: "p",
+    sourcePaths: ["./s"],
+    sandboxBackend: "oci",
+    sandboxImage: "audit-sandbox:v1",
+    sandboxAllowHostFallback: true,
+    sandboxPrepareNetwork: "enabled",
+    sandboxConfirmNetwork: "none",
+    sandboxMemoryMb: 2048,
+    sandboxCpus: 1.5,
+  };
+  assert.deepEqual(buildArgs(spec).slice(-15), [
+    "--sandbox-backend", "oci",
+    "--sandbox-image", "audit-sandbox:v1",
+    "--allow-host-execution",
+    "--prepare-network", "enabled",
+    "--confirm-network", "none",
+    "--sandbox-memory-mb", "2048",
+    "--sandbox-cpus", "1.5",
+    "--out", "runs",
+  ]);
+
+  const cfg = specToConfig(spec, "runs");
+  assert.equal(cfg.sandboxBackend, "oci");
+  assert.equal(cfg.sandboxImage, "audit-sandbox:v1");
+  assert.equal(cfg.sandboxAllowHostFallback, true);
+  assert.equal(cfg.sandboxPrepareNetwork, "enabled");
+  assert.equal(cfg.sandboxConfirmNetwork, "none");
+  assert.equal(cfg.sandboxMemoryMb, 2048);
+  assert.equal(cfg.sandboxCpus, 1.5);
+});
+
 // The manager runs the library in-process; specToConfig is the spec -> AuditorConfig
 // translation (the in-process equivalent of the CLI's parseConfig + applyAuditPosture).
 test("specToConfig: posture per verb + unbounded budgets by default", () => {

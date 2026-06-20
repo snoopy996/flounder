@@ -1,4 +1,5 @@
 import type { ProjectContext } from "./types.js";
+import type { SandboxBackend, SandboxExecutionOptions, SandboxNetworkMode } from "./security/sandbox.js";
 
 export interface AuditorConfig {
   targetName: string;
@@ -20,6 +21,16 @@ export interface AuditorConfig {
   reproductionCommandTimeoutMs: number;
   reproductionMaxFileBytes: number;
   reproductionMaxLogBytes: number;
+  // Execution isolation for build/test/confirm commands. `auto` uses an OCI
+  // container when available and refuses to fall back to host execution unless
+  // explicitly allowed (tests/mock runs may opt in).
+  sandboxBackend: SandboxBackend;
+  sandboxImage: string;
+  sandboxAllowHostFallback: boolean;
+  sandboxPrepareNetwork: SandboxNetworkMode;
+  sandboxConfirmNetwork: SandboxNetworkMode;
+  sandboxMemoryMb?: number;
+  sandboxCpus?: number;
   // Audit controls.
   auditMaxSteps: number;
   auditScopeNote?: string;
@@ -149,6 +160,11 @@ export function defaultConfig(): AuditorConfig {
     reproductionCommandTimeoutMs: 120_000,
     reproductionMaxFileBytes: 200_000,
     reproductionMaxLogBytes: 40_000,
+    sandboxBackend: readSandboxBackend(process.env.FLOUNDER_SANDBOX_BACKEND) ?? "auto",
+    sandboxImage: process.env.FLOUNDER_SANDBOX_IMAGE || "flounder-sandbox:latest",
+    sandboxAllowHostFallback: process.env.FLOUNDER_ALLOW_HOST_EXECUTION === "1",
+    sandboxPrepareNetwork: readSandboxNetwork(process.env.FLOUNDER_PREPARE_NETWORK) ?? "enabled",
+    sandboxConfirmNetwork: readSandboxNetwork(process.env.FLOUNDER_CONFIRM_NETWORK) ?? "enabled",
     auditMaxSteps: 40,
     auditPrepare: true,
     auditPrepareTimeoutMs: 600_000,
@@ -167,6 +183,31 @@ export function defaultConfig(): AuditorConfig {
     prepareMode: false,
     dryRun: false,
   };
+}
+
+export function sandboxExecutionOptions(cfg: AuditorConfig, network: SandboxNetworkMode): SandboxExecutionOptions {
+  return {
+    backend: cfg.sandboxBackend,
+    image: cfg.sandboxImage,
+    allowHostFallback: cfg.sandboxAllowHostFallback,
+    network,
+    ...(cfg.sandboxMemoryMb !== undefined ? { memoryMb: cfg.sandboxMemoryMb } : {}),
+    ...(cfg.sandboxCpus !== undefined ? { cpus: cfg.sandboxCpus } : {}),
+  };
+}
+
+export function sandboxNetworkForPurpose(cfg: AuditorConfig, purpose: "inspect" | "build" | "confirm"): SandboxNetworkMode {
+  if (cfg.prepareMode || cfg.confirmMode) return cfg.sandboxConfirmNetwork;
+  if (purpose === "build") return cfg.sandboxPrepareNetwork;
+  return "none";
+}
+
+function readSandboxBackend(value: unknown): SandboxBackend | undefined {
+  return value === "auto" || value === "oci" || value === "host" ? value : undefined;
+}
+
+function readSandboxNetwork(value: unknown): SandboxNetworkMode | undefined {
+  return value === "none" || value === "enabled" ? value : undefined;
 }
 
 const MAX_CONTEXT_LIST_ITEMS = 24;

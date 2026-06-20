@@ -64,9 +64,22 @@ The framework checks the recorded command result. The model cannot upgrade a fin
 npm install
 npm run build
 npm test
+npm run sandbox:build  # optional, but required for default OCI execution
 ```
 
 For live model runs, configure provider credentials in your shell or secret manager according to the pi-ai provider documentation. Do not commit credentials, local environment files, private corpora, or machine-specific paths.
+
+## Execution Sandbox
+
+Model-generated commands run in a copied workspace through `src/security/sandbox.ts`. The default backend is `auto`: Flounder runs commands in the OCI image `flounder-sandbox:latest` when that image is available, and otherwise refuses to execute on the host. Build the default image with:
+
+```bash
+npm run sandbox:build
+```
+
+Use `--sandbox-image <image>` to provide a target-specific image with extra toolchains. Use `--sandbox-backend oci` to require OCI, or `--sandbox-backend host --allow-host-execution` only for trusted local smoke tests and fixtures. Host execution keeps the isolated `HOME` and package-cache environment, but it cannot provide kernel-level network or filesystem isolation.
+
+Network policy is phase-specific. Sealed `run` / `map` / `audit` inspection and confirmation commands use `--network none` in OCI. Dependency warm-up and explicit `purpose=build` commands default to `--prepare-network enabled` so package registries can be used. `flounder prepare` and `flounder confirm` default to `--confirm-network enabled` because they are the open-world phases; the command-safety policy still forbids broadcast, value-moving, destructive, credential, and persistence behavior.
 
 ## Materials
 

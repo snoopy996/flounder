@@ -7,6 +7,7 @@
 import path from "node:path";
 import { defaultConfig, type AuditorConfig } from "../config.js";
 import type { RunKind, ProviderRoles } from "../db/store.js";
+import type { SandboxBackend, SandboxNetworkMode } from "../security/sandbox.js";
 
 const DEFAULT_OUT = "runs";
 const THINKING = new Set(["minimal", "low", "medium", "high", "xhigh"]);
@@ -69,6 +70,13 @@ export interface LaunchSpec {
   dir?: string | undefined; // project subdir under the daemon workspace; materials resolve under it
   models?: ProviderRoles | undefined; // per-phase provider/model/thinking overrides (from the selected profile)
   scopeNote?: string | undefined; // map/audit: the "authorized scope note" prior — focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest; --scope-note also sets it)
+  sandboxBackend?: SandboxBackend | undefined;
+  sandboxImage?: string | undefined;
+  sandboxAllowHostFallback?: boolean | undefined;
+  sandboxPrepareNetwork?: SandboxNetworkMode | undefined;
+  sandboxConfirmNetwork?: SandboxNetworkMode | undefined;
+  sandboxMemoryMb?: number | undefined;
+  sandboxCpus?: number | undefined;
   out?: string | undefined;
 }
 
@@ -89,6 +97,13 @@ export function specToConfig(spec: LaunchSpec, out: string, workspace?: string):
   if (spec.model) cfg.auditModel = spec.model;
   if (spec.thinking && THINKING.has(spec.thinking)) cfg.thinkingLevel = spec.thinking as AuditorConfig["thinkingLevel"];
   if (spec.models) cfg.models = spec.models as NonNullable<AuditorConfig["models"]>;
+  if (spec.sandboxBackend) cfg.sandboxBackend = spec.sandboxBackend;
+  if (spec.sandboxImage) cfg.sandboxImage = spec.sandboxImage;
+  if (spec.sandboxAllowHostFallback !== undefined) cfg.sandboxAllowHostFallback = spec.sandboxAllowHostFallback;
+  if (spec.sandboxPrepareNetwork) cfg.sandboxPrepareNetwork = spec.sandboxPrepareNetwork;
+  if (spec.sandboxConfirmNetwork) cfg.sandboxConfirmNetwork = spec.sandboxConfirmNetwork;
+  if (spec.sandboxMemoryMb !== undefined) cfg.sandboxMemoryMb = spec.sandboxMemoryMb;
+  if (spec.sandboxCpus !== undefined) cfg.sandboxCpus = spec.sandboxCpus;
   cfg.outputDir = out;
   cfg.auditMaxSteps = spec.maxSteps ?? Number.POSITIVE_INFINITY;
   cfg.auditMapSteps = spec.mapSteps ?? Number.POSITIVE_INFINITY;
@@ -156,6 +171,13 @@ export function buildArgs(spec: LaunchSpec): string[] {
     if (spec.model) out.push("--model", spec.model);
     if (spec.thinking) out.push("--thinking", spec.thinking);
     if (spec.maxSteps !== undefined) out.push("--max-steps", String(spec.maxSteps));
+    if (spec.sandboxBackend) out.push("--sandbox-backend", spec.sandboxBackend);
+    if (spec.sandboxImage) out.push("--sandbox-image", spec.sandboxImage);
+    if (spec.sandboxAllowHostFallback) out.push("--allow-host-execution");
+    if (spec.sandboxPrepareNetwork) out.push("--prepare-network", spec.sandboxPrepareNetwork);
+    if (spec.sandboxConfirmNetwork) out.push("--confirm-network", spec.sandboxConfirmNetwork);
+    if (spec.sandboxMemoryMb !== undefined) out.push("--sandbox-memory-mb", String(spec.sandboxMemoryMb));
+    if (spec.sandboxCpus !== undefined) out.push("--sandbox-cpus", String(spec.sandboxCpus));
     out.push("--out", spec.out ?? DEFAULT_OUT);
     return out;
   }
@@ -185,6 +207,13 @@ export function buildArgs(spec: LaunchSpec): string[] {
   if (spec.fresh && spec.verb === "confirm") args.push("--fresh");
   if (spec.quick && spec.verb === "run") args.push("--quick");
   if (spec.mockLlm) args.push("--mock-llm");
+  if (spec.sandboxBackend) args.push("--sandbox-backend", spec.sandboxBackend);
+  if (spec.sandboxImage) args.push("--sandbox-image", spec.sandboxImage);
+  if (spec.sandboxAllowHostFallback) args.push("--allow-host-execution");
+  if (spec.sandboxPrepareNetwork) args.push("--prepare-network", spec.sandboxPrepareNetwork);
+  if (spec.sandboxConfirmNetwork) args.push("--confirm-network", spec.sandboxConfirmNetwork);
+  if (spec.sandboxMemoryMb !== undefined) args.push("--sandbox-memory-mb", String(spec.sandboxMemoryMb));
+  if (spec.sandboxCpus !== undefined) args.push("--sandbox-cpus", String(spec.sandboxCpus));
   args.push("--out", spec.out ?? DEFAULT_OUT);
   return args;
 }
