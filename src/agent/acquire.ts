@@ -58,7 +58,7 @@ export async function runPrepare(
   // Prepare fetches source and reads live chains, so it needs a real network-capable agent.
   if (!isPiSessionProvider(cfg.provider)) {
     throw new Error(
-      `flounder prepare needs a pi-session provider (e.g. openai-codex) — it fetches source and reads live chains. Set --provider openai-codex (and log pi in).`,
+      `flounder prepare needs a session provider (e.g. openai-codex) because it fetches source and reads live chains. Set --provider openai-codex and run \`flounder daemon provider login openai-codex\` on the daemon machine first.`,
     );
   }
 

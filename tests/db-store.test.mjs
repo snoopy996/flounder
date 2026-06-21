@@ -17,6 +17,10 @@ async function tempDb() {
 test("store: project + run lifecycle is recorded and queryable", async () => {
   const db = await tempDb();
   const projectId = db.upsertProject({ name: "acme", sourcePaths: ["./src"], buildRoot: ".", config: { model: "gpt-5.5", thinking: "xhigh" } });
+  const project = db.getProject("acme");
+  assert.match(String(project.uuid), /^[0-9a-f-]{36}$/);
+  assert.equal(db.getProjectByRef(String(project.uuid)).id, projectId);
+  assert.equal(db.getProjectByRef("acme"), undefined); // public project refs are UUID-only
   const runId = db.startRun({ projectId, kind: "run", runDir: "/runs/acme-1", provider: "openai-codex", model: "gpt-5.5" });
 
   let runs = db.listRuns(projectId);
@@ -32,7 +36,9 @@ test("store: project + run lifecycle is recorded and queryable", async () => {
   assert.ok(runs[0].ended_at);
 
   // upsertProject is idempotent by name (refreshes config, keeps the id)
+  const uuid = String(project.uuid);
   assert.equal(db.upsertProject({ name: "acme", config: { model: "opus" } }), projectId);
+  assert.equal(db.getProjectById(projectId).uuid, uuid);
   assert.equal(db.listProjects().length, 1);
   db.close();
 });
@@ -147,11 +153,14 @@ test("store: setScopeStatus marks a scope deferred (skipped) and counts it", asy
 test("store: daemon tokens + job queue (claim is FIFO and one-shot; cancel is observable)", async () => {
   const db = await tempDb();
   const { token } = db.createDaemonToken("local");
+  const { token: otherToken } = db.createDaemonToken("remote");
   assert.ok(db.getDaemonByToken(token)); // valid token authenticates
   assert.equal(db.getDaemonByToken("nope"), undefined); // unknown token rejected
   const daemonId = Number(db.getDaemonByToken(token).id);
+  const otherDaemonId = Number(db.getDaemonByToken(otherToken).id);
 
   const j1 = db.enqueueJob("proj", { verb: "run" });
+  const pinned = db.enqueueJob("proj", { verb: "audit" }, otherDaemonId);
   const j2 = db.enqueueJob("proj", { verb: "map" });
   const claim1 = db.claimJob(daemonId);
   assert.equal(claim1.id, j1); // FIFO
@@ -159,6 +168,7 @@ test("store: daemon tokens + job queue (claim is FIFO and one-shot; cancel is ob
   assert.equal(db.getJob(j1).status, "dispatched");
   assert.equal(db.claimJob(daemonId).id, j2);
   assert.equal(db.claimJob(daemonId), undefined); // queue drained
+  assert.equal(db.claimJob(otherDaemonId).id, pinned); // pinned work waits for its selected daemon
 
   db.requestJobCancel(j1);
   assert.deepEqual(db.canceledJobIds(), [j1]); // a daemon polls this to abort

@@ -5,12 +5,12 @@
 // the daemon (src/server/daemon.ts); this module holds no run state.
 
 import path from "node:path";
-import { defaultConfig, type AuditorConfig } from "../config.js";
+import { defaultConfig, THINKING_LEVELS, type AuditorConfig } from "../config.js";
 import type { RunKind, ProviderRoles } from "../db/store.js";
 import type { SandboxBackend, SandboxNetworkMode } from "../security/sandbox.js";
 
 const DEFAULT_OUT = "runs";
-const THINKING = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const THINKING = new Set<string>(THINKING_LEVELS);
 
 export type Activity = { kind: string; delta?: string; tool?: string; step?: number };
 

@@ -15,7 +15,7 @@ export interface AuditorConfig {
   provider: string;
   auditModel: string;
   maxTokens: number;
-  thinkingLevel: "minimal" | "low" | "medium" | "high" | "xhigh";
+  thinkingLevel: ThinkingLevel;
   projectContext: ProjectContext;
   // Sandbox limits shared with the bash tool and warm-up.
   reproductionCommandTimeoutMs: number;
@@ -108,7 +108,8 @@ export interface RoleModel {
   thinking: AuditorConfig["thinkingLevel"];
 }
 
-const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 /** Resolve the effective model for a phase: role entry → `default` entry → top-level config. */
 export function resolveRole(cfg: AuditorConfig, role: AuditRole): RoleModel {
@@ -173,7 +174,7 @@ export function defaultConfig(): AuditorConfig {
     auditDeep: false,
     auditMapSteps: 20,
     auditDigSteps: 30,
-    auditMaxScopes: 10,
+    auditMaxScopes: 30,
     auditDigSamples: 1,
     auditDigConcurrency: 1,
     auditRemap: false,

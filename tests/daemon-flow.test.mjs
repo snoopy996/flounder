@@ -51,8 +51,9 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
     await asDaemon(base, token, "POST", "/api/daemon/register", { name: "d1" });
 
     // UI creates a project and queues a run.
-    await ui(base, "POST", "/api/projects", { name: "acme", sourcePaths: ["./src"], config: { model: "m" } });
-    const launch = await j(await ui(base, "POST", "/api/projects/acme/runs", { verb: "run", mockLlm: true }));
+    const created = await j(await ui(base, "POST", "/api/projects", { name: "acme", sourcePaths: ["./src"], config: { model: "m" } }));
+    const projectPath = "/api/projects/" + created.uuid;
+    const launch = await j(await ui(base, "POST", projectPath + "/runs", { verb: "run", mockLlm: true }));
     assert.equal(launch.queued, true);
     assert.equal(typeof launch.jobId, "number");
 
@@ -71,7 +72,7 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
 
     // Daemon reports the scope inventory; the run's live coverage updates.
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { scopes: [{ scopeId: "s1", title: "decode", status: "audited" }, { scopeId: "s2", title: "settle", status: "pending" }] });
-    const afterScopes = await j(await ui(base, "GET", "/api/projects/acme"));
+    const afterScopes = await j(await ui(base, "GET", projectPath));
     assert.deepEqual(afterScopes.progress, { total: 2, audited: 1, pending: 1, deferred: 0 });
 
     // Daemon reports findings (with a status reason for the timeline) and a confirm decision.
@@ -79,11 +80,11 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { findings: [{ findingKey: "f1", title: "unbound input", location: "src/x:10", status: "confirmed-differential" }], reason: "differential passed" });
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { confirmDecisions: [{ bug: "unbound input", reproduced: "yes", recommendation: "submit-candidate" }], decisionPath: "/tmp/acme-run-1/confirm_report.md" });
 
-    const findings = await j(await ui(base, "GET", "/api/projects/acme/findings"));
+    const findings = await j(await ui(base, "GET", projectPath + "/findings"));
     assert.equal(findings.findings.length, 1);
     assert.equal(findings.findings[0].status, "confirmed-differential");
     assert.deepEqual(findings.findings[0].timeline.map((e) => e.to_status), ["suspected", "confirmed-differential"]);
-    const detail = await j(await ui(base, "GET", "/api/projects/acme"));
+    const detail = await j(await ui(base, "GET", projectPath));
     assert.equal(detail.confirmedBugs, 1); // reproduced=yes surfaced as a confirmed bug
 
     // Daemon finishes the run; status + final coverage/finding-count persist.
@@ -98,8 +99,8 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
 test("daemon: activity POSTs surface on the run's live SSE log", async () => {
   await withServerAndToken(async ({ base, token }) => {
     await asDaemon(base, token, "POST", "/api/daemon/register", { name: "d1" });
-    await ui(base, "POST", "/api/projects", { name: "p" });
-    const { jobId } = await j(await ui(base, "POST", "/api/projects/p/runs", { verb: "run", mockLlm: true }));
+    const created = await j(await ui(base, "POST", "/api/projects", { name: "p" }));
+    const { jobId } = await j(await ui(base, "POST", `/api/projects/${created.uuid}/runs`, { verb: "run", mockLlm: true }));
     await asDaemon(base, token, "POST", "/api/daemon/claim");
     const { runId } = await j(await asDaemon(base, token, "POST", "/api/daemon/runs", { jobId, project: "p", kind: "run", runDir: "/tmp/p-1", budgets: {} }));
 
@@ -117,8 +118,8 @@ test("daemon: activity POSTs surface on the run's live SSE log", async () => {
 test("daemon: stopping a run flags its job for cancel and reconciles on the daemon's report", async () => {
   await withServerAndToken(async ({ base, token, out }) => {
     await asDaemon(base, token, "POST", "/api/daemon/register", { name: "d1" });
-    await ui(base, "POST", "/api/projects", { name: "p" });
-    const { jobId } = await j(await ui(base, "POST", "/api/projects/p/runs", { verb: "run", mockLlm: true }));
+    const created = await j(await ui(base, "POST", "/api/projects", { name: "p" }));
+    const { jobId } = await j(await ui(base, "POST", `/api/projects/${created.uuid}/runs`, { verb: "run", mockLlm: true }));
     await asDaemon(base, token, "POST", "/api/daemon/claim");
     const { runId } = await j(await asDaemon(base, token, "POST", "/api/daemon/runs", { jobId, project: "p", kind: "run", runDir: "/tmp/p-1", budgets: {} }));
 

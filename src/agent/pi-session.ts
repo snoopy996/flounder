@@ -6,6 +6,7 @@ import type { RunLogger } from "../trace/logger.js";
 import type { LlmClient } from "../types.js";
 import { AUDIT_CONFIRM_SYSTEM, AUDIT_PREPARE_SYSTEM, POC_TRUST_RULE, type TranscriptStep } from "./prompts.js";
 import { describeAction, readScratchScopes, scratchHasFindings, type AgentTool, type ToolContext } from "./tools.js";
+import { flounderAgentDir } from "../provider-auth.js";
 
 // Continuous-session driver (point 5). Instead of re-driving a stateless
 // complete() once per step — which re-sends the whole transcript every turn and
@@ -79,6 +80,7 @@ export async function runAuditSession(input: {
     noTools: "builtin",
     customTools,
     cwd: input.cwd,
+    agentDir: flounderAgentDir(),
     sessionManager: SessionManager.inMemory(),
   });
 
@@ -254,7 +256,7 @@ export async function runAuditSession(input: {
         // loudly and actionably instead of silently producing zero findings.
         if (looksLikeAuthError(message)) {
           throw new Error(
-            `audit session could not authenticate provider "${input.cfg.provider}". Log pi into the provider (e.g. \`pi\` then /login for ${input.cfg.provider}), or run with --mock-llm for an offline check. Underlying: ${message.slice(0, 300)}`,
+            `audit session could not authenticate provider "${input.cfg.provider}". Run \`flounder daemon provider login ${input.cfg.provider}\` on the daemon machine, or start the daemon with that provider's credentials in the environment. For an offline check, run with --mock-llm. Underlying: ${message.slice(0, 300)}`,
           );
         }
         steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: message.slice(0, 500) });
@@ -499,6 +501,7 @@ export class SessionLlmClient implements LlmClient {
       noTools: "all",
       customTools: [],
       cwd: process.cwd(),
+      agentDir: flounderAgentDir(),
       sessionManager: SessionManager.inMemory(),
     });
     let text = "";
@@ -518,7 +521,7 @@ export class SessionLlmClient implements LlmClient {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (looksLikeAuthError(message)) {
-        throw new Error(`session completion could not authenticate provider "${this.cfg.provider}". Run \`pi\` /login for ${this.cfg.provider}. Underlying: ${message.slice(0, 200)}`);
+        throw new Error(`session completion could not authenticate provider "${this.cfg.provider}". Run \`flounder daemon provider login ${this.cfg.provider}\` on the daemon machine, or start the daemon with that provider's credentials in the environment. Underlying: ${message.slice(0, 200)}`);
       }
       throw error;
     } finally {

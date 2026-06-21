@@ -8,8 +8,9 @@
 // audit itself. One or more `flounder daemon` processes (possibly on other machines) connect,
 // claim queued jobs, run runAudit/runConfirm locally (code + provider keys stay on the
 // daemon), and report progress back over HTTP. Server→daemon nudges (poll/cancel) ride an
-// SSE stream; daemon→server updates are POSTs. Zero-dependency: Node's built-in http + a
-// vanilla SPA. Bind to localhost unless a per-daemon bearer token is configured.
+// SSE stream; daemon→server updates are POSTs. The server stays dependency-light (Node's
+// built-in http) and serves the compiled React/Vite dashboard bundle. Bind to localhost
+// unless a per-daemon bearer token is configured.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
@@ -17,12 +18,14 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MetadataStore, type RunKind, type Coverage, type ProviderInput, type ProviderProfile, type ProjectInput, type ProviderRoles, type RoleOverride } from "../db/store.js";
-import { getProviders, getModels } from "@earendil-works/pi-ai";
+import { getProviders, getModels, getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type LaunchSpec, ActivityBus } from "./run-manager.js";
+import { THINKING_LEVELS } from "../config.js";
 import { projectHistoryDir } from "../trace/history.js";
 import { loadScopeInventory, saveScopeInventory } from "../agent/scope-store.js";
 
 const UI_HTML_PATH = fileURLToPath(new URL("./public/index.html", import.meta.url));
+const UI_PUBLIC_DIR = path.dirname(UI_HTML_PATH);
 function loadUiHtml(): string {
   try {
     return readFileSync(UI_HTML_PATH, "utf8");
@@ -42,17 +45,20 @@ export interface UiServerOptions {
 // a per-run activity bus (fed by daemon activity POSTs, read by the UI's SSE log stream).
 // It holds NO execution state — the DB job queue is the system of record for dispatch.
 class ControlPlane {
-  private readonly daemons = new Set<ServerResponse>();
+  private readonly daemons = new Map<ServerResponse, number>();
   private readonly buses = new Map<number, ActivityBus>();
 
-  addDaemon(res: ServerResponse): void {
-    this.daemons.add(res);
+  addDaemon(res: ServerResponse, daemonId: number): void {
+    this.daemons.set(res, daemonId);
   }
   removeDaemon(res: ServerResponse): void {
     this.daemons.delete(res);
   }
-  daemonCount(): number {
-    return this.daemons.size;
+  daemonCount(daemonId?: number): number {
+    if (daemonId === undefined) return this.daemons.size;
+    let count = 0;
+    for (const id of this.daemons.values()) if (id === daemonId) count++;
+    return count;
   }
 
   /** Nudge every connected daemon to (re)claim queued jobs. */
@@ -65,7 +71,7 @@ class ControlPlane {
   }
   private broadcast(ev: unknown): void {
     const frame = `data: ${JSON.stringify(ev)}\n\n`;
-    for (const res of this.daemons) {
+    for (const res of this.daemons.keys()) {
       try {
         res.write(frame);
       } catch {
@@ -98,7 +104,7 @@ interface Ctx {
 
 interface Route {
   method: string;
-  path: string; // template, e.g. /api/projects/:name/runs
+  path: string; // template, e.g. /api/projects/:uuid/runs
   summary: string;
   params?: Record<string, string>;
   query?: Record<string, string>;
@@ -136,39 +142,39 @@ const ROUTES: Route[] = [
   route({
     method: "POST", path: "/api/projects",
     summary: "Create a project (no run starts). Rejects a duplicate name.",
-    body: { name: "string (required, unique)", sourcePaths: "string[] — code to audit", buildRoot: "string? — buildable root", corpusPaths: "string[]? — specs/docs", config: "object? — { provider, model, thinking, maxScopes, mapSteps, digSteps, digSamples, digConcurrency }" },
+    body: { name: "string (required, unique)", sourcePaths: "string[] — code to audit", buildRoot: "string? — buildable root", corpusPaths: "string[]? — specs/docs", config: "object? — { scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency }" },
     handler: projectCreate,
   }),
   route({
-    method: "GET", path: "/api/projects/:name",
+    method: "GET", path: "/api/projects/:uuid",
     summary: "Project detail: config, scope coverage, finding/run/confirmed counts, recent runs, confirm decisions.",
-    params: { name: "project name" },
+    params: { uuid: "project UUID" },
     handler: projectGet,
   }),
   route({
-    method: "PATCH", path: "/api/projects/:name",
+    method: "PATCH", path: "/api/projects/:uuid",
     summary: "Update a project's materials and/or config (no run starts). Used by Continue/Restart/Run afterwards.",
-    params: { name: "project name" },
+    params: { uuid: "project UUID" },
     body: { sourcePaths: "string[]?", buildRoot: "string?", corpusPaths: "string[]?", config: "object?" },
     handler: projectUpdate,
   }),
   route({
-    method: "DELETE", path: "/api/projects/:name",
+    method: "DELETE", path: "/api/projects/:uuid",
     summary: "Delete a project and everything under it (runs, scopes, findings, confirm decisions). On-disk run artifacts are left untouched.",
-    params: { name: "project name" },
+    params: { uuid: "project UUID" },
     handler: projectDelete,
   }),
 
   route({
-    method: "GET", path: "/api/projects/:name/runs",
+    method: "GET", path: "/api/projects/:uuid/runs",
     summary: "List a project's runs (newest first).",
-    params: { name: "project name" }, query: { limit: "number? — cap rows" },
+    params: { uuid: "project UUID" }, query: { limit: "number? — cap rows" },
     handler: (c) => withProject(c, (id) => sendJson(c.res, 200, { runs: c.store.listRuns(id, clampInt(c.url.searchParams.get("limit"), 200, 1, 1000)) })),
   }),
   route({
-    method: "POST", path: "/api/projects/:name/runs",
+    method: "POST", path: "/api/projects/:uuid/runs",
     summary: "Queue a run on the project (start/continue an audit, restart, map, audit a region/scope, confirm, or prepare). The job is dispatched to a connected daemon, which executes it and reports back. Uses the project's stored materials + config unless overridden. This is the single action behind the UI's Start/Continue/Restart/Run buttons.",
-    params: { name: "project name" },
+    params: { uuid: "project UUID" },
     body: {
       verb: "'run' | 'map' | 'audit' | 'confirm' | 'prepare' (default 'run'; run = map→dig, resumes)",
       remap: "boolean? — re-enumerate scopes (restart)", fresh: "boolean? — confirm: ignore a prior interrupted confirm",
@@ -182,29 +188,29 @@ const ROUTES: Route[] = [
     handler: runLaunch,
   }),
   route({
-    method: "GET", path: "/api/projects/:name/scopes",
+    method: "GET", path: "/api/projects/:uuid/scopes",
     summary: "List the project's scope inventory (audited / pending / deferred) — the map output.",
-    params: { name: "project name" },
+    params: { uuid: "project UUID" },
     handler: (c) => withProject(c, (id) => sendJson(c.res, 200, { scopes: c.store.listScopes(id), progress: c.store.scopeProgress(id) })),
   }),
   route({
-    method: "PATCH", path: "/api/projects/:name/scopes/:scopeId",
+    method: "PATCH", path: "/api/projects/:uuid/scopes/:scopeId",
     summary: "Set a scope's status — mark it `deferred` to skip it in auto-dig (or `pending` to resume). Updates the persisted inventory the audit reads, so the next run honors it.",
-    params: { name: "project name", scopeId: "scope id from the inventory" },
+    params: { uuid: "project UUID", scopeId: "scope id from the inventory" },
     body: { status: "'deferred' (skip) | 'pending' (resume) | 'audited'" },
     handler: scopeSetStatus,
   }),
   route({
-    method: "GET", path: "/api/projects/:name/findings",
+    method: "GET", path: "/api/projects/:uuid/findings",
     summary: "List findings, paginated + filterable, each with its status timeline (suspect→confirm→refute).",
-    params: { name: "project name" },
+    params: { uuid: "project UUID" },
     query: { status: "string? — exact status filter", q: "string? — text search (title/location)", limit: "number? (default 50)", offset: "number? (default 0)" },
     handler: findingsList,
   }),
   route({
-    method: "GET", path: "/api/projects/:name/confirm-decisions",
+    method: "GET", path: "/api/projects/:uuid/confirm-decisions",
     summary: "List confirm decisions (one per distinct bug). Filter ?reproduced=yes for the bugs actually reproduced on the real target (the audit's payoff).",
-    params: { name: "project name" }, query: { reproduced: "string? — e.g. 'yes' for confirmed bugs" },
+    params: { uuid: "project UUID" }, query: { reproduced: "string? — e.g. 'yes' for confirmed bugs" },
     handler: confirmDecisionsList,
   }),
 
@@ -216,7 +222,7 @@ const ROUTES: Route[] = [
   route({
     method: "POST", path: "/api/providers",
     summary: "Create a provider profile.",
-    body: { name: "string (unique)", provider: "pi-ai provider id, or claude-code / codex-cli / mock", model: "string? — default model", thinking: "minimal|low|medium|high|xhigh?", roles: "object? — per-phase overrides { map|dig|refute: { provider?, model?, thinking? } }" },
+    body: { name: "string (unique)", provider: "pi-ai provider id, or claude-code / codex-cli / mock", model: "string? — default model", thinking: "off|minimal|low|medium|high|xhigh?", roles: "object? — per-phase overrides { map|dig|refute: { provider?, model?, thinking? } }" },
     handler: providerCreate,
   }),
   route({
@@ -226,7 +232,7 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "GET", path: "/api/pi/models/:provider",
-    summary: "Models pi-ai exposes for a provider (id, name, reasoning) — for the model dropdown.",
+    summary: "Models pi-ai exposes for a provider (id, name, reasoning, thinkingLevels) — for the model dropdown.",
     params: { provider: "provider id" },
     handler: (c) => sendJson(c.res, 200, { models: availableModels(c.params.provider ?? "") }),
   }),
@@ -296,12 +302,12 @@ const ROUTES: Route[] = [
 
   route({
     method: "POST", path: "/api/launch",
-    summary: "Queue an ad-hoc run from a full launch spec (absolute materials, no project staging) — the entry point the CLI drives. Upserts a project row keyed by `target` so the run is grouped + visible, enqueues the job, and nudges daemons. Use POST /api/projects/:name/runs instead to launch a UI-configured project.",
+    summary: "Queue an ad-hoc run from a full launch spec (absolute materials, no project staging) — the entry point the CLI drives. Upserts a project row keyed by `target` so the run is grouped + visible, enqueues the job, and nudges daemons. Use POST /api/projects/:uuid/runs instead to launch a UI-configured project.",
     body: {
       verb: "'run' | 'map' | 'audit' | 'confirm' | 'prepare' (required)", target: "string (required) — run/project name",
       sourcePaths: "string[] — ABSOLUTE code paths the daemon reads", corpusPaths: "string[]? — ABSOLUTE design/reference paths", buildRoot: "string? — ABSOLUTE buildable root",
       provider: "string?", model: "string?", thinking: "string?",
-      maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
+      scopeCoverageMode: "focused|standard|half|full|custom?", maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
       sandboxBackend: "'auto'|'oci'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
       remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
       inputRunDir: "string? — confirm", fresh: "boolean? — confirm",
@@ -418,7 +424,15 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
         .catch((error) => {
           if (!res.headersSent) sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
           else res.end();
-        });
+      });
+      return;
+    }
+    if (method === "GET" && isUiAssetPath(url.pathname)) {
+      if (operatorToken && !operatorAuth(req, operatorToken)) {
+        sendJson(res, 401, { error: "unauthorized: a valid operator bearer token is required" });
+        return;
+      }
+      serveUiAsset(url.pathname, res);
       return;
     }
     sendJson(res, 404, { error: "not found", hint: "GET /api lists every endpoint" });
@@ -453,12 +467,62 @@ function operatorAuth(req: IncomingMessage, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const UI_ASSET_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+function isUiAssetPath(pathname: string): boolean {
+  return pathname === "/favicon.svg" || pathname === "/favicon.png" || pathname === "/flounder-black.png" || pathname === "/flounder-white.png" || pathname.startsWith("/assets/");
+}
+
+function serveUiAsset(pathname: string, res: ServerResponse): void {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    sendJson(res, 400, { error: "bad asset path" });
+    return;
+  }
+  if (decoded.includes("\0")) {
+    sendJson(res, 400, { error: "bad asset path" });
+    return;
+  }
+  const file = path.resolve(UI_PUBLIC_DIR, `.${decoded}`);
+  const root = path.resolve(UI_PUBLIC_DIR);
+  if (file !== root && !file.startsWith(`${root}${path.sep}`)) {
+    sendJson(res, 400, { error: "bad asset path" });
+    return;
+  }
+  const type = UI_ASSET_TYPES[path.extname(file).toLowerCase()];
+  if (!type) {
+    sendJson(res, 404, { error: "asset not found" });
+    return;
+  }
+  try {
+    const data = readFileSync(file);
+    res.writeHead(200, { "content-type": type, "cache-control": "public, max-age=31536000, immutable" });
+    res.end(data);
+  } catch {
+    sendJson(res, 404, { error: "asset not found" });
+  }
+}
+
 // ---- handlers -------------------------------------------------------------------------
 
 function withProject(c: Ctx, fn: (projectId: number, project: Record<string, unknown>) => void): void {
-  const project = c.store.getProject(c.params.name ?? "");
+  const uuid = c.params.uuid ?? "";
+  const project = c.store.getProjectByRef(uuid);
   if (!project) {
-    sendJson(c.res, 404, { error: `no project named ${c.params.name}` });
+    sendJson(c.res, 404, { error: `no project with uuid ${uuid}` });
     return;
   }
   fn(Number(project.id), project);
@@ -472,6 +536,7 @@ interface ProjectBody {
   corpusPaths?: string[];
   config?: unknown;
   providerId?: number | null;
+  daemonId?: number | null;
   dir?: string;
 }
 function projectFields(body: ProjectBody): Omit<ProjectInput, "name"> {
@@ -481,6 +546,7 @@ function projectFields(body: ProjectBody): Omit<ProjectInput, "name"> {
     corpusPaths: body.corpusPaths,
     config: body.config,
     providerId: typeof body.providerId === "number" ? body.providerId : undefined,
+    daemonId: typeof body.daemonId === "number" ? body.daemonId : undefined,
     dir: typeof body.dir === "string" && body.dir.trim() ? body.dir.trim() : undefined,
   };
 }
@@ -490,8 +556,9 @@ async function projectCreate(c: Ctx): Promise<void> {
   const name = (body.name ?? "").trim();
   if (!name) return sendJson(c.res, 400, { error: "project name is required" });
   if (c.store.getProject(name)) return sendJson(c.res, 409, { error: `a project named "${name}" already exists` });
-  c.store.upsertProject({ name, ...projectFields(body) });
-  sendJson(c.res, 200, { ok: true, name });
+  const id = c.store.upsertProject({ name, ...projectFields(body) });
+  const project = c.store.getProjectById(id);
+  sendJson(c.res, 200, { ok: true, id, uuid: project?.uuid, name });
 }
 
 function projectGet(c: Ctx): void {
@@ -505,26 +572,41 @@ function projectGet(c: Ctx): void {
       runs: c.store.listRuns(id, 50),
       runsTotal: c.store.countRuns(id),
       confirmDecisions: c.store.listConfirmDecisions(id),
+      scopes: c.store.listScopes(id),
+      allFindings: c.store.listFindings(id),
     });
   });
 }
 
 async function projectUpdate(c: Ctx): Promise<void> {
-  const project = c.store.getProject(c.params.name ?? "");
-  if (!project) return sendJson(c.res, 404, { error: `no project named ${c.params.name}` });
+  const uuid = c.params.uuid ?? "";
+  const project = c.store.getProjectByRef(uuid);
+  if (!project) return sendJson(c.res, 404, { error: `no project with uuid ${uuid}` });
   const body = (await readBody(c.req)) as ProjectBody;
-  c.store.upsertProject({ name: String(project.name), ...projectFields(body) });
+  const fields = projectFields(body);
+  c.store.upsertProject({
+    name: String(project.name),
+    sourcePaths: fields.sourcePaths ?? ((safeParse(project.source_paths) as string[] | null) ?? []),
+    buildRoot: fields.buildRoot ?? (typeof project.build_root === "string" ? project.build_root : undefined),
+    corpusPaths: fields.corpusPaths ?? ((safeParse(project.corpus_paths) as string[] | null) ?? []),
+    config: fields.config ?? ((safeParse(project.config_json) as Record<string, unknown> | null) ?? {}),
+    providerId: fields.providerId ?? (typeof project.provider_id === "number" ? project.provider_id : undefined),
+    daemonId: fields.daemonId ?? (typeof project.daemon_id === "number" ? project.daemon_id : undefined),
+    dir: fields.dir ?? (typeof project.dir === "string" ? project.dir : undefined),
+  });
   sendJson(c.res, 200, { ok: true });
 }
 
 function projectDelete(c: Ctx): void {
-  const removed = c.store.deleteProject(c.params.name ?? "");
-  removed ? sendJson(c.res, 200, { ok: true, deleted: c.params.name }) : sendJson(c.res, 404, { error: `no project named ${c.params.name}` });
+  const uuid = c.params.uuid ?? "";
+  const removed = c.store.deleteProject(uuid);
+  removed ? sendJson(c.res, 200, { ok: true, deleted: uuid }) : sendJson(c.res, 404, { error: `no project with uuid ${uuid}` });
 }
 
 async function scopeSetStatus(c: Ctx): Promise<void> {
-  const project = c.store.getProject(c.params.name ?? "");
-  if (!project) return sendJson(c.res, 404, { error: `no project named ${c.params.name}` });
+  const uuid = c.params.uuid ?? "";
+  const project = c.store.getProjectByRef(uuid);
+  if (!project) return sendJson(c.res, 404, { error: `no project with uuid ${uuid}` });
   const body = (await readBody(c.req)) as { status?: string; prioritize?: boolean };
   const scopeId = c.params.scopeId ?? "";
   // Both branches must write the persisted inventory the AUDIT reads (history-dir scopes.json) AND
@@ -559,11 +641,13 @@ async function scopeSetStatus(c: Ctx): Promise<void> {
 // Queue a run for the project. The job lands in the DB queue; connected daemons are nudged
 // to claim it. Returns the job id (the run id appears once a daemon starts it).
 async function runLaunch(c: Ctx): Promise<void> {
-  const project = c.store.getProject(c.params.name ?? "");
-  if (!project) return sendJson(c.res, 404, { error: `no project named ${c.params.name}` });
+  const uuid = c.params.uuid ?? "";
+  const project = c.store.getProjectByRef(uuid);
+  if (!project) return sendJson(c.res, 404, { error: `no project with uuid ${uuid}` });
   const body = (await readBody(c.req)) as Record<string, unknown>;
   const profile = project.provider_id != null ? c.store.getProvider(Number(project.provider_id)) : undefined;
-  const spec = launchSpec(project, body, c.out, profile);
+  const phaseProfiles = phaseProviderProfiles(project, c.store);
+  const spec = launchSpec(project, body, c.out, profile, c.store.scopeProgress(Number(project.id)), phaseProfiles);
   // Confirm is FINDING-grained + resumable: when no explicit run dir is given, resolve the work set
   // from finding STATUS — a specific finding (body.findingId) or all pending-confirmable findings
   // (confirmed by the audit, not yet decided on the real target). The confirm then updates each
@@ -582,9 +666,10 @@ async function runLaunch(c: Ctx): Promise<void> {
       spec.confirmKeys = pending.map((p) => p.finding_key);
     }
   }
-  const jobId = c.store.enqueueJob(spec.target, spec);
+  const daemonId = project.daemon_id != null ? Number(project.daemon_id) : undefined;
+  const jobId = c.store.enqueueJob(spec.target, spec, daemonId);
   c.plane.nudge();
-  sendJson(c.res, 200, { jobId, verb: spec.verb, queued: true, daemons: c.plane.daemonCount() });
+  sendJson(c.res, 200, { jobId, verb: spec.verb, queued: true, daemons: c.plane.daemonCount(daemonId), daemonId });
 }
 
 // Queue an ad-hoc run from a full launch spec — the CLI's enqueue entry point. Unlike
@@ -687,7 +772,7 @@ function confirmDecisionsList(c: Ctx): void {
 
 // ---- providers (model-strategy profiles) ----------------------------------
 
-const THINKING = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const THINKING = new Set<string>(THINKING_LEVELS);
 const CLI_FALLBACK_PROVIDERS = ["claude-code", "codex-cli", "mock"];
 
 // The providers pi-ai can drive (discovered at runtime) + our CLI fallbacks, for the editor.
@@ -701,10 +786,15 @@ function availableProviders(): string[] {
   return [...new Set([...pi, ...CLI_FALLBACK_PROVIDERS])].sort();
 }
 
-function availableModels(provider: string): Array<{ id: string; name: string; reasoning: boolean }> {
+function availableModels(provider: string): Array<{ id: string; name: string; reasoning: boolean; thinkingLevels: ModelThinkingLevel[] }> {
   try {
-    const models = getModels(provider as never) as unknown as Array<Record<string, unknown>>;
-    return (models ?? []).map((m) => ({ id: String(m.id), name: String(m.name ?? m.id), reasoning: Boolean(m.reasoning) }));
+    const models = getModels(provider as never);
+    return (models ?? []).map((m) => ({
+      id: String((m as { id: unknown }).id),
+      name: String((m as { name?: unknown; id: unknown }).name ?? (m as { id: unknown }).id),
+      reasoning: Boolean((m as { reasoning?: unknown }).reasoning),
+      thinkingLevels: getSupportedThinkingLevels(m),
+    }));
   } catch {
     return [];
   }
@@ -842,7 +932,7 @@ function daemonStream(c: Ctx): void {
   if (!daemon) return;
   c.store.touchDaemon(Number(daemon.id));
   c.res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  c.plane.addDaemon(c.res);
+  c.plane.addDaemon(c.res, Number(daemon.id));
   c.res.write(`data: ${JSON.stringify({ type: "poll" })}\n\n`); // drain any backlog on connect
   const keepalive = setInterval(() => {
     try {
@@ -960,7 +1050,12 @@ function projectSnapshots(store: MetadataStore): Array<Record<string, unknown>> 
   return store.listProjects().map((project) => {
     const id = Number(project.id);
     return {
+      id,
+      uuid: project.uuid,
       name: project.name,
+      provider_id: project.provider_id ?? null,
+      daemon_id: project.daemon_id ?? null,
+      dir: project.dir ?? null,
       config: safeParse(project.config_json),
       progress: store.scopeProgress(id),
       findingCounts: store.findingStatusCounts(id),
@@ -991,7 +1086,24 @@ function streamSnapshots(res: ServerResponse, store: MetadataStore): void {
 // Build a launch spec from the project's stored materials/config + the request body
 // (verb + run-shape flags + optional one-off overrides). Unbounded (null) budgets stay
 // undefined so the kernel's unbounded default applies.
-function launchSpec(project: Record<string, unknown>, body: Record<string, unknown>, out: string, profile?: ProviderProfile): LaunchSpec {
+type PhaseProfiles = Partial<Record<"prepare" | "map" | "dig" | "confirm", ProviderProfile>>;
+
+function phaseProviderProfiles(project: Record<string, unknown>, store: MetadataStore): PhaseProfiles {
+  const cfg = (safeParse(project.config_json) as Record<string, unknown>) ?? {};
+  const phaseProviders = cfg.phaseProviders && typeof cfg.phaseProviders === "object"
+    ? cfg.phaseProviders as Partial<Record<"prepare" | "map" | "dig" | "confirm", unknown>>
+    : {};
+  const out: PhaseProfiles = {};
+  for (const phase of ["prepare", "map", "dig", "confirm"] as const) {
+    const id = phaseProviders[phase];
+    if (typeof id !== "number" || !Number.isFinite(id)) continue;
+    const provider = store.getProvider(id);
+    if (provider) out[phase] = provider;
+  }
+  return out;
+}
+
+function launchSpec(project: Record<string, unknown>, body: Record<string, unknown>, out: string, profile?: ProviderProfile, progress?: Coverage, phaseProfiles: PhaseProfiles = {}): LaunchSpec {
   const cfg = (safeParse(project.config_json) as Record<string, unknown>) ?? {};
   const overrides = (body.overrides as Record<string, unknown>) ?? {};
   const merged = { ...cfg, ...((overrides.config as Record<string, unknown>) ?? {}) };
@@ -1014,9 +1126,13 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
   const primaryPhase = verb === "prepare" ? "prepare" : verb === "map" ? "map" : verb === "confirm" ? "confirm" : "dig";
   const phaseModel = (ph: string): string | undefined => str(phases[ph]?.model);
   const phaseThinking = (ph: string): string | undefined => str(phases[ph]?.thinking);
+  const phaseProfile = (ph: "prepare" | "map" | "dig" | "confirm"): ProviderProfile | undefined => phaseProfiles[ph] ?? profile;
   const roleEntry = (ph: string): RoleOverride | undefined => {
-    const model = phaseModel(ph), thinking = phaseThinking(ph);
-    return model || thinking ? { ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) } : undefined;
+    const profileForPhase = phaseProfile(ph === "map" ? "map" : "dig");
+    const provider = profileForPhase?.provider;
+    const model = phaseModel(ph) ?? str(profileForPhase?.model);
+    const thinking = phaseThinking(ph) ?? str(profileForPhase?.thinking);
+    return provider || model || thinking ? { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) } : undefined;
   };
   const roles: ProviderRoles = {};
   if (verb === "run" || verb === "audit" || verb === "map") {
@@ -1026,6 +1142,7 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
     }
   }
   const legacyRoles = profile && Object.keys(profile.roles).length > 0 ? profile.roles : undefined;
+  const primaryProfile = phaseProfile(primaryPhase as "prepare" | "map" | "dig" | "confirm");
   return {
     verb,
     target: String(project.name),
@@ -1033,11 +1150,11 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
     sourcePaths: list(overrides.sourcePaths, project.source_paths),
     buildRoot: str(overrides.buildRoot) ?? str(project.build_root),
     corpusPaths: list(overrides.corpusPaths, project.corpus_paths),
-    provider: profile?.provider ?? str(merged.provider),
-    model: phaseModel(primaryPhase) ?? str(profile?.model) ?? str(merged.model),
-    thinking: phaseThinking(primaryPhase) ?? str(profile?.thinking) ?? str(merged.thinking),
+    provider: primaryProfile?.provider ?? str(merged.provider),
+    model: phaseModel(primaryPhase) ?? str(primaryProfile?.model) ?? str(merged.model),
+    thinking: phaseThinking(primaryPhase) ?? str(primaryProfile?.thinking) ?? str(merged.thinking),
     models: Object.keys(roles).length > 0 ? roles : legacyRoles,
-    maxScopes: num(merged.maxScopes),
+    maxScopes: resolveMaxScopes(merged, progress),
     mapSteps: num(merged.mapSteps),
     digSteps: num(merged.digSteps),
     maxSteps: num(merged.maxSteps),
@@ -1065,6 +1182,20 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
     endpoint: str(body.endpoint),
     out,
   };
+}
+
+function resolveMaxScopes(cfg: Record<string, unknown>, progress?: Coverage): number | undefined {
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? Math.max(1, Math.floor(v)) : undefined);
+  const explicit = num(cfg.maxScopes);
+  const mode = typeof cfg.scopeCoverageMode === "string" ? cfg.scopeCoverageMode : "";
+  const total = Math.max(0, Math.floor(progress?.total ?? 0));
+  const pending = Math.max(0, Math.floor(progress?.pending ?? 0));
+  if (mode === "focused") return 10;
+  if (mode === "standard") return 30;
+  if (mode === "half") return total > 0 ? Math.max(1, Math.ceil(pending / 2)) : 30;
+  if (mode === "full") return total > 0 ? Math.max(1, pending) : 1_000_000;
+  if (mode === "custom") return explicit;
+  return explicit;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

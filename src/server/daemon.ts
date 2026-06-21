@@ -16,6 +16,7 @@ import { toScopeRow, toFindingRow, configSnapshot, type RunTracker, type Confirm
 import type { AuditorConfig } from "../config.js";
 import type { Coverage, RunStatus } from "../db/store.js";
 import type { AgentFinding, AuditScope } from "../agent/tools.js";
+import { assertProviderAuthenticated, knownRuntimeProviders, providerAuthStatus } from "../provider-auth.js";
 
 export interface DaemonOptions {
   server: string;
@@ -36,7 +37,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
   const maxConcurrent = Math.max(1, opts.concurrency ?? 2);
   const inflight = new Map<number, AbortController>(); // jobId -> abort
 
-  const reg = await fetch(base + "/api/daemon/register", { method: "POST", headers, body: JSON.stringify({ name: opts.name ?? "daemon", capabilities: {}, workspace }) }).catch(() => null);
+  const reg = await fetch(base + "/api/daemon/register", { method: "POST", headers, body: JSON.stringify({ name: opts.name ?? "daemon", capabilities: await daemonCapabilities(), workspace }) }).catch(() => null);
   if (!reg || !reg.ok) throw new Error(`daemon: could not register with ${base} (status ${reg ? reg.status : "no response"}) — check --server and --token`);
   console.log(`[flounder daemon] connected to ${base}  (out=${out}, workspace=${workspace}, concurrency=${maxConcurrent})`);
 
@@ -66,6 +67,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
         cfg.sandboxBackend = "host";
         cfg.sandboxAllowHostFallback = true;
       }
+      if (!spec.mockLlm) await assertProviderAuthenticated(cfg.provider);
       if (spec.verb === "confirm") {
         if (!spec.inputRunDir) throw new Error("confirm requires inputRunDir");
         await runConfirm(cfg, { inputRunDir: spec.inputRunDir, signal: abort.signal, makeTracker, onActivity: sink.push, ...(spec.inputRunDirs ? { inputRunDirs: spec.inputRunDirs } : {}), ...(spec.confirmKeys ? { confirmKeys: spec.confirmKeys } : {}), ...(spec.maxSteps !== undefined ? { maxSteps: spec.maxSteps } : {}), ...(spec.fresh ? { fresh: true } : {}) });
@@ -134,6 +136,26 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
+}
+
+async function daemonCapabilities(): Promise<Record<string, unknown>> {
+  const providers = await Promise.all(
+    knownRuntimeProviders().map(async (provider) => {
+      try {
+        const status = await providerAuthStatus(provider);
+        return {
+          provider,
+          required: status.required,
+          configured: status.configured,
+          oauthLogin: status.oauthLogin,
+          expectedEnvVars: status.expectedEnvVars,
+        };
+      } catch {
+        return { provider, required: true, configured: false };
+      }
+    }),
+  );
+  return { providers };
 }
 
 // Reports a run's progress to the server. Serializes calls on one chain so the run is

@@ -45,6 +45,7 @@ test("driver routing: real pi providers use the continuous session, mock/CLI fal
 
 test("pi session preserves the configured xhigh thinking level", () => {
   assert.equal(defaultConfig().thinkingLevel, "xhigh");
+  assert.equal(mapThinkingLevel("off"), "off");
   assert.equal(mapThinkingLevel("minimal"), "minimal");
   assert.equal(mapThinkingLevel("xhigh"), "xhigh");
 });
@@ -306,16 +307,16 @@ test("per-role model config: role entry overrides default overrides top-level, n
   cfg.models = normalizeRoleModels({
     default: { thinking: "high" },
     dig: { thinking: "xhigh" },
+    map: { thinking: "off" },
     refute: { provider: "openai-codex", model: "gpt-5.5" },
     bogus: { provider: "x" }, // ignored — not a known role
-    map: { thinking: "not-a-level" }, // invalid thinking dropped, entry has no fields → omitted
   });
+  assert.deepEqual(resolveRole(cfg, "map"), { provider: "claude-code", model: "claude-opus-4-8", thinking: "off" });
+  assert.equal(normalizeRoleModels({ map: { thinking: "not-a-level" } }), undefined);
   // dig bumps thinking to xhigh, keeps inherited provider/model.
   assert.deepEqual(resolveRole(cfg, "dig"), { provider: "claude-code", model: "claude-opus-4-8", thinking: "xhigh" });
   // refute switches provider+model (the claude-code → codex switch the user wants), inherits thinking from default.
   assert.deepEqual(resolveRole(cfg, "refute"), { provider: "openai-codex", model: "gpt-5.5", thinking: "high" });
-  // map's only field was an invalid thinking → entry omitted → falls back to default/top-level.
-  assert.equal(resolveRole(cfg, "map").thinking, "high");
   assert.equal(cfg.models.bogus, undefined);
 
   // withRole specializes the config in place for role-agnostic callers.

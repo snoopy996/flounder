@@ -12,6 +12,7 @@ import { importRunToProjectHistory, projectHistoryManifestPath } from "./trace/h
 import { MetadataStore } from "./db/store.js";
 import { startUiServer } from "./server/app.js";
 import { runDaemon } from "./server/daemon.js";
+import { knownRuntimeProviders, loginProvider, printProviderCheck, providerAuthStatus } from "./provider-auth.js";
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
@@ -25,8 +26,8 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  if (cmd === "db") {
-    runDbCommand(rest);
+  if (cmd === "server") {
+    runServerCommand(rest);
     return;
   }
 
@@ -56,12 +57,16 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (cmd === "daemon") {
+    if (rest[0] === "provider" || rest[0] === "providers") {
+      await runProviderCommand(rest.slice(1));
+      return;
+    }
     // Execution plane: connect to a control-plane server, claim queued jobs, and run them
     // LOCALLY (code + provider keys stay here). May run on a different machine than the
     // server. Reports progress back over HTTP; never touches the server's DB directly.
     const server = readFlag(rest, "--server");
     const token = readFlag(rest, "--token");
-    if (!server || !token) throw new Error("flounder daemon needs --server <url> and --token <token> (mint one with `flounder ui`, or via the store)");
+    if (!server || !token) throw new Error("flounder daemon needs --server <url> and --token <token> (create one with `flounder server daemon-token mint [name]`)");
     const out = resolveOut(rest);
     const name = readFlag(rest, "--name");
     const workspace = readFlag(rest, "--workspace");
@@ -204,7 +209,7 @@ async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig }> {
   if (args.includes("--remap")) cfg.auditRemap = true;
   if (args.includes("--dry-run")) cfg.dryRun = true;
   const thinking = readFlag(args, "--thinking");
-  if (thinking === "minimal" || thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "xhigh") {
+  if (thinking === "off" || thinking === "minimal" || thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "xhigh") {
     cfg.thinkingLevel = thinking;
   }
   return { cfg };
@@ -271,7 +276,7 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   if (typeof rawDigSamples === "number" && Number.isFinite(rawDigSamples)) cfg.auditDigSamples = Math.max(1, Math.floor(rawDigSamples));
   const rawDigConcurrency = raw.auditDigConcurrency ?? raw.audit_dig_concurrency;
   if (typeof rawDigConcurrency === "number" && Number.isFinite(rawDigConcurrency)) cfg.auditDigConcurrency = Math.max(1, Math.floor(rawDigConcurrency));
-  if (raw.thinkingLevel === "minimal" || raw.thinkingLevel === "low" || raw.thinkingLevel === "medium" || raw.thinkingLevel === "high" || raw.thinkingLevel === "xhigh") {
+  if (raw.thinkingLevel === "off" || raw.thinkingLevel === "minimal" || raw.thinkingLevel === "low" || raw.thinkingLevel === "medium" || raw.thinkingLevel === "high" || raw.thinkingLevel === "xhigh") {
     cfg.thinkingLevel = raw.thinkingLevel;
   }
   const rawModels = normalizeRoleModels(raw.models);
@@ -318,6 +323,78 @@ function spawnLocalDaemon(opts: { out: string; url: string; workspace?: string; 
  * consistent across the CLI, the control plane, and the daemon when set once via config. */
 function resolveOut(args: string[]): string {
   return readFlag(args, "--out") ?? loadCliConfig().values.out ?? "runs";
+}
+
+async function runProviderCommand(args: string[]): Promise<void> {
+  const subcommand = args[0] ?? "list";
+  const positional = (i = 0): string | undefined => args.filter((token) => !token.startsWith("--")).slice(1)[i];
+  const provider = positional() ?? readFlag(args, "--provider") ?? loadCliConfig().values.provider ?? defaultConfig().provider;
+
+  if (subcommand === "list") {
+    const rows = await Promise.all(knownRuntimeProviders().map(async (name) => providerAuthStatus(name)));
+    for (const row of rows) {
+      const auth = !row.required ? "local" : row.configured ? `ok:${row.source ?? "configured"}` : row.oauthLogin ? "login-needed" : "env-needed";
+      console.log(`${namePad(row.provider)} ${auth}`);
+    }
+    return;
+  }
+
+  if (subcommand === "check") {
+    const ok = await printProviderCheck(provider);
+    if (!ok) process.exitCode = 1;
+    return;
+  }
+
+  if (subcommand === "login") {
+    await loginProvider(provider);
+    return;
+  }
+
+  throw new Error(`Unknown daemon provider command "${subcommand}". Use: flounder daemon provider list | check [provider] | login [provider]`);
+}
+
+function runMintTokenCommand(args: string[]): void {
+  const out = resolveOut(args);
+  const positional = args.find((token) => !token.startsWith("--"));
+  const name = readFlag(args, "--name") ?? positional ?? "daemon";
+  const server = readFlag(args, "--server") ?? "http://<this-server-host>:4500";
+  const db = MetadataStore.openForOutput(out);
+  try {
+    const { id, token } = db.createDaemonToken(name);
+    console.log(`[daemon ${id}] ${name}`);
+    console.log(`token: ${token}`);
+    console.log(`run on the executor machine:\n  flounder daemon --server ${server} --token ${token}`);
+  } finally {
+    db.close();
+  }
+}
+
+function runDaemonTokenCommand(args: string[]): void {
+  const [subcommand = "mint", ...rest] = args;
+  if (subcommand === "mint" || subcommand === "create") {
+    runMintTokenCommand(rest);
+    return;
+  }
+  throw new Error("Unknown server daemon-token command. Use: flounder server daemon-token mint [name]");
+}
+
+function runDaemonListCommand(args: string[]): void {
+  const out = resolveOut(args);
+  const db = MetadataStore.openForOutput(out);
+  try {
+    const daemons = db.listDaemons();
+    if (daemons.length === 0) {
+      console.log("(no daemons registered — create a connection token with `flounder server daemon-token mint [name]`, then run `flounder daemon --server <url> --token <token>`)");
+      return;
+    }
+    for (const d of daemons) console.log(`• [${d.id}] ${d.name}  last_seen=${d.last_seen_at ?? "never"}`);
+  } finally {
+    db.close();
+  }
+}
+
+function namePad(value: string): string {
+  return value.padEnd(28);
 }
 
 /** Build the launch spec for a sealed audit verb (run/map/audit). Materials come from cfg
@@ -484,16 +561,46 @@ async function runHistoryCommand(args: string[]): Promise<void> {
   console.log(`[history] runs=${manifest.aggregate.totalRuns} materials=${manifest.aggregate.materialsTotal} findings=${manifest.aggregate.findingsTotal}`);
 }
 
-// Read view over the SQLite tracking store (the UI's future backend; usable from the CLI
-// today). `flounder db projects` | `runs [<target>]` | `findings <target>`.
-function runDbCommand(args: string[]): void {
-  const [subcommand = "projects", ...rest] = args;
+// Read/write views over the control-plane server state. These are product resources, not
+// database commands: project inventory, global run history, global findings, daemon registry,
+// and daemon connection tokens.
+function runServerCommand(args: string[]): void {
+  const [resource, ...rest] = args;
+  if (!resource || resource === "help" || resource === "--help" || resource === "-h") {
+    printServerHelp();
+    return;
+  }
+  if (resource === "project") {
+    runProjectCommand(rest);
+    return;
+  }
+  if (resource === "run") {
+    runServerRunCommand(rest);
+    return;
+  }
+  if (resource === "finding") {
+    runFindingCommand(rest);
+    return;
+  }
+  if (resource === "daemon") {
+    const [subcommand = "list", ...daemonRest] = rest;
+    if (subcommand !== "list") throw new Error(`Unknown server daemon command "${subcommand}". Use: flounder server daemon list`);
+    runDaemonListCommand(daemonRest);
+    return;
+  }
+  if (resource === "daemon-token") {
+    runDaemonTokenCommand(rest);
+    return;
+  }
+  throw new Error(`Unknown server resource "${resource}". Use: flounder server project|run|finding|daemon|daemon-token`);
+}
+
+function runProjectCommand(args: string[]): void {
+  const [subcommand = "list"] = args;
   const out = resolveOut(args);
-  const positional = rest.find((token) => !token.startsWith("--"));
-  const target = readFlag(args, "--target") ?? positional;
   const db = MetadataStore.openForOutput(out);
   try {
-    if (subcommand === "projects") {
+    if (subcommand === "list") {
       const projects = db.listProjects();
       if (projects.length === 0) {
         console.log("(no projects tracked yet — run `flounder run` first, or check --out)");
@@ -512,43 +619,82 @@ function runDbCommand(args: string[]): void {
       }
       return;
     }
-    if (subcommand === "daemons") {
-      const daemons = db.listDaemons();
-      if (daemons.length === 0) {
-        console.log("(no daemons registered — mint a token with `flounder db mint-token [name]`, then run `flounder daemon`)");
-        return;
-      }
-      for (const d of daemons) console.log(`• [${d.id}] ${d.name}  last_seen=${d.last_seen_at ?? "never"}`);
-      return;
-    }
-    if (subcommand === "mint-token") {
-      // Mint a bearer token for a (remote) daemon. Must run on the SERVER machine — the
-      // server owns this DB; the daemon authenticates with the printed token over HTTP.
-      const name = readFlag(args, "--name") ?? positional ?? "daemon";
-      const { id, token } = db.createDaemonToken(name);
-      console.log(`[daemon ${id}] ${name}`);
-      console.log(`token: ${token}`);
-      console.log(`run on the executor machine:\n  flounder daemon --server http://<this-server-host>:4500 --token ${token}`);
-      return;
-    }
-    const projectId = resolveProjectId(db, target);
-    if (subcommand === "runs") {
-      for (const run of db.listRuns(projectId)) {
-        console.log(`${run.started_at}  ${run.kind} [${run.status}]  scopes ${run.scopes_audited ?? "-"}/${run.scopes_total ?? "-"}  findings ${run.findings_total ?? "-"}  ${run.run_dir ?? ""}`);
-      }
-      return;
-    }
-    if (subcommand === "findings") {
-      for (const finding of db.listFindings(projectId)) {
-        const timeline = db.findingTimeline(Number(finding.id)).map((event) => event.to_status).join(" → ");
-        console.log(`[${finding.status}] ${finding.title} (${finding.location ?? "?"})  ${timeline}`);
-      }
-      return;
-    }
-    throw new Error(`Unknown db command "${subcommand}". Use: flounder db projects | runs [--target <name>] | findings --target <name> | daemons | mint-token [name]`);
+    throw new Error(`Unknown server project command "${subcommand}". Use: flounder server project list`);
   } finally {
     db.close();
   }
+}
+
+function runServerRunCommand(args: string[]): void {
+  const [subcommand = "list", ...rest] = args;
+  if (subcommand !== "list") throw new Error(`Unknown server run command "${subcommand}". Use: flounder server run list [--project <name>]`);
+  const out = resolveOut(args);
+  const positional = rest.find((token) => !token.startsWith("--"));
+  const target = readFlag(args, "--project") ?? readFlag(args, "--target") ?? positional;
+  const db = MetadataStore.openForOutput(out);
+  try {
+    const projectId = target ? resolveProjectId(db, target) : undefined;
+    const projects = db.listProjects();
+    const projectNameById = new Map(projects.map((project) => [Number(project.id), String(project.name)]));
+    const runs = db.listRuns(projectId);
+    if (runs.length === 0) {
+      console.log(target ? `(no runs tracked for ${target})` : "(no runs tracked yet)");
+      return;
+    }
+    for (const run of runs) {
+      const projectName = projectNameById.get(Number(run.project_id)) ?? "unknown-project";
+      console.log(`${run.started_at}  ${projectName}  ${run.kind} [${run.status}]  scopes ${run.scopes_audited ?? "-"}/${run.scopes_total ?? "-"}  findings ${run.findings_total ?? "-"}  ${run.run_dir ?? ""}`);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function runFindingCommand(args: string[]): void {
+  const [subcommand = "list", ...rest] = args;
+  if (subcommand !== "list") throw new Error(`Unknown server finding command "${subcommand}". Use: flounder server finding list [--project <name>]`);
+  const out = resolveOut(args);
+  const positional = rest.find((token) => !token.startsWith("--"));
+  const target = readFlag(args, "--project") ?? readFlag(args, "--target") ?? positional;
+  const status = readFlag(args, "--status");
+  const tracking = readFlag(args, "--tracking");
+  const db = MetadataStore.openForOutput(out);
+  try {
+    const findings = target
+      ? db.listFindings(resolveProjectId(db, target)).filter((finding) => matchesFindingFilters(finding, status, tracking))
+      : db.listGlobalFindings({ status, tracking });
+    if (findings.length === 0) {
+      console.log(target ? `(no findings tracked for ${target})` : "(no findings tracked yet)");
+      return;
+    }
+    for (const finding of findings) {
+      const project = finding.project_name ? `${finding.project_name}  ` : "";
+      const timeline = db.findingTimeline(Number(finding.id)).map((event) => event.to_status).join(" → ");
+      console.log(`${project}[${finding.status}] ${finding.title} (${finding.location ?? "?"})  ${timeline}`);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function matchesFindingFilters(finding: Record<string, unknown>, status: string | undefined, tracking: string | undefined): boolean {
+  if (status && finding.status !== status) return false;
+  if (tracking && String(finding.tracking_status ?? "open") !== tracking) return false;
+  return true;
+}
+
+function printServerHelp(): void {
+  console.log(`flounder server — control-plane resources.
+
+Usage:
+  flounder server project list
+  flounder server run list [--project <name>]
+  flounder server finding list [--project <name>] [--status <s>] [--tracking <s>]
+  flounder server daemon list
+  flounder server daemon-token mint [name] [--server <url>]
+
+These commands read or write the server/control-plane state. Daemon-machine local
+operations stay under "flounder daemon ...", for example "flounder daemon provider login".`);
 }
 
 function resolveProjectId(db: MetadataStore, target: string | undefined): number {
@@ -644,10 +790,26 @@ Usage:
   flounder audit   [<region> | --scope <id,...> | --verify <file>] --source ...   deep-audit a region, inventory scopes, or given claims
   flounder confirm <run-dir> --source <paths...>                                  open-world: reproduce a run's findings on the real target
   flounder history import-run --target <name> --run <dir>
-  flounder db      [projects | runs [<target>] | findings <target> | daemons | mint-token [name]]   read the tracking store; mint/list daemon tokens
+  flounder server project list                                                   list tracked projects
+  flounder server run list [--project <name>]                                    list run history globally or for one project
+  flounder server finding list [--project <name>] [--status <s>] [--tracking <s>] list findings globally or for one project
+  flounder server daemon list                                                    list registered execution daemons
+  flounder server daemon-token mint [name] [--server <url>]                      create a daemon connection token
   flounder config  [list | get <key> | set <key> <value> | unset <key> | path] [--global|--local]   persisted CLI defaults (server, provider, model, thinking, out, posture)
+  flounder daemon provider [list | check [provider] | login [provider]]          manage provider auth on this daemon machine
   flounder ui      [--port <n>] [--host <h>] [--out <dir>] [--no-daemon]           control-plane web dashboard + a co-located executor daemon (localhost)
   flounder daemon  --server <url> --token <token> [--out <dir>] [--concurrency <n>]   execution plane: claim + run queued jobs (may be a different machine)
+
+CLI layout:
+  Workflow verbs stay top-level. Control-plane resource operations live under
+  "flounder server ...". Daemon-machine local operations live under "flounder daemon ...".
+  In practice:
+    flounder server project list        reads the project collection
+    flounder server run list            reads global run history without colliding with "flounder run"
+    flounder server finding list        reads the global finding index, optionally filtered by project
+    flounder server daemon-token mint   creates a daemon connection token on the control-plane side
+    flounder daemon --token ...    runs the executor on the daemon machine
+    flounder daemon provider ...   logs in/checks provider auth on the daemon machine
 
 Control plane vs execution plane:
   flounder ui starts the CONTROL PLANE (the dashboard, REST API, SQLite store, and job queue) and,
@@ -655,6 +817,10 @@ Control plane vs execution plane:
   audit — so code and provider keys stay on the daemon's machine. Run "flounder daemon" on another
   host (with a token minted by the server operator) to execute remotely; the server owns the DB
   and the daemon only reports progress back over HTTP.
+
+  Provider auth is local to each daemon machine. Use "flounder daemon provider login openai-codex" for
+  subscription/OAuth providers, or set the provider's API-key environment variables before
+  starting "flounder daemon". Use "flounder daemon provider check <provider>" to verify the daemon host.
 
 How CLI runs execute (the API is the single entry point):
   run / map / audit / confirm / prepare are thin clients of the control plane: the CLI builds a
@@ -682,9 +848,9 @@ Shared options:
   --build-root <path>     directory copied into the sandbox so it is buildable (e.g. a workspace root); defaults to --source
   --target <name>         run/artifact name and durable-memory key
   --config <file>         JSON config with project context, models, and paths
-  --provider <name>       pi-ai provider (default openai-codex); codex-cli/claude-code are CLI fallbacks
+  --provider <name>       Flounder provider id (default openai-codex); codex-cli/claude-code are explicit local fallbacks
   --model <name>          set the audit model
-  --thinking <level>      minimal|low|medium|high|xhigh
+  --thinking <level>      off|minimal|low|medium|high|xhigh
   --out <dir>             artifact output directory (default runs)
   --history-dir <dir>     project history directory, default <out>/history
   --scope-note <text>     one-line authorized-scope hint for the agent
@@ -708,7 +874,7 @@ run / map / audit deep-phase options:
   --dig-steps <n>         cap each scope's dig (default: UNBOUNDED; the dig stops when its obligations are discharged)
   --dig-samples <n>       independent dig passes per scope, findings unioned (raises recall), default 1
   --dig-concurrency <n>   scopes deep-audited in parallel (isolated workspaces), default 1
-  --max-scopes <n>        un-audited scopes the dig audits per run, default 10
+  --max-scopes <n>        un-audited scopes the dig audits per run, default 30
   --remap                 re-enumerate scopes from scratch (default resumes the persisted inventory)
 
 flounder audit selectors (choose one; default digs the existing inventory):

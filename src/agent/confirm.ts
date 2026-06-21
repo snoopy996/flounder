@@ -44,7 +44,7 @@ export async function runConfirm(
   // mock/CLI fallbacks cannot, so this mode requires a pi-session provider.
   if (!isPiSessionProvider(cfg.provider)) {
     throw new Error(
-      `flounder confirm needs a pi-session provider (e.g. openai-codex) for real-world reproduction; provider "${cfg.provider}" cannot fork a live network. Set --provider openai-codex (and log pi in).`,
+      `flounder confirm needs a session provider (e.g. openai-codex) for real-world reproduction; provider "${cfg.provider}" cannot fork a live network. Set --provider openai-codex and run \`flounder daemon provider login openai-codex\` on the daemon machine first.`,
     );
   }
   if (cfg.sourcePaths.length === 0) throw new Error("flounder confirm needs --source (the target code to reproduce against)");

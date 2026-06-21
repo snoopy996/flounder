@@ -1,5 +1,6 @@
 import type { LlmClient } from "../types.js";
 import type { RunLogger } from "../trace/logger.js";
+import type { ThinkingLevel } from "../config.js";
 
 export class MockAuditLlmClient implements LlmClient {
   constructor(private logger?: RunLogger) {}
@@ -14,7 +15,7 @@ export class MockAuditLlmClient implements LlmClient {
     user: string;
     model?: string;
     maxTokens?: number;
-    thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh";
+    thinkingLevel?: ThinkingLevel;
   }): Promise<string> {
     const response = responseFor(input.tag, input.user);
     await this.logger?.call({

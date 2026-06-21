@@ -11,7 +11,7 @@
 
 import "./sqlite-quiet.js"; // must run before node:sqlite loads — filters its experimental warning
 import { createRequire } from "node:module";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -32,6 +32,7 @@ export interface ProjectInput {
   corpusPaths?: string[] | undefined; // relative to the project dir
   config?: unknown; // budgets/max_scopes snapshot the UI can edit (provider/model/thinking now live on the provider profile)
   providerId?: number | undefined; // selected provider profile
+  daemonId?: number | undefined; // selected executor daemon; jobs for this project are pinned to it
   dir?: string | undefined; // project subdir under the daemon workspace (default = name)
 }
 
@@ -137,12 +138,14 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS project(
   id INTEGER PRIMARY KEY,
+  uuid TEXT NOT NULL,
   name TEXT UNIQUE NOT NULL,
   source_paths TEXT,              -- now RELATIVE to the project dir (was absolute)
   build_root TEXT,                -- relative to the project dir
   corpus_paths TEXT,              -- relative to the project dir
   config_json TEXT,               -- budgets only now (provider/model/thinking moved to provider profiles)
   provider_id INTEGER,            -- selected provider profile (plain ref; nulled if the profile is deleted)
+  daemon_id INTEGER REFERENCES daemon(id), -- selected executor daemon; null = legacy/unpinned
   dir TEXT,                       -- project subdir relative to the daemon's workspace root (default = name)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -259,8 +262,8 @@ CREATE TABLE IF NOT EXISTS job(
 CREATE INDEX IF NOT EXISTS idx_job_status ON job(status);
 
 -- A reusable "model strategy" profile a project selects (provider + model + thinking,
--- with optional per-phase overrides for map/dig/refute). No secrets: API keys stay on the
--- daemon (pi /login); this is just the model-selection part of the config, lifted out.
+-- with optional per-phase overrides for map/dig/refute). No secrets: credentials stay on the
+-- daemon via Flounder daemon-local auth; this is just the model-selection part of the config.
 CREATE TABLE IF NOT EXISTS provider(
   id INTEGER PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
@@ -293,7 +296,9 @@ export class MetadataStore {
     // won't add them). Each is a no-op if the column is already present.
     for (const alter of [
       "ALTER TABLE project ADD COLUMN provider_id INTEGER",
+      "ALTER TABLE project ADD COLUMN daemon_id INTEGER",
       "ALTER TABLE project ADD COLUMN dir TEXT",
+      "ALTER TABLE project ADD COLUMN uuid TEXT",
       "ALTER TABLE daemon ADD COLUMN workspace TEXT",
       "ALTER TABLE run ADD COLUMN run_scopes_target INTEGER",
       "ALTER TABLE run ADD COLUMN run_scopes_done INTEGER",
@@ -315,7 +320,15 @@ export class MetadataStore {
         // column already exists
       }
     }
+    this.ensureProjectUuids();
     this.db.prepare("INSERT INTO meta(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO NOTHING").run(String(SCHEMA_VERSION));
+  }
+
+  private ensureProjectUuids(): void {
+    const rows = this.db.prepare("SELECT id FROM project WHERE uuid IS NULL OR uuid = ''").all() as Array<{ id: number }>;
+    const update = this.db.prepare("UPDATE project SET uuid = ? WHERE id = ?");
+    for (const row of rows) update.run(randomUUID(), row.id);
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_project_uuid ON project(uuid)");
   }
 
   /** Open the store for a config's output root (DB lives at <outputDir>/flounder.db). */
@@ -334,26 +347,29 @@ export class MetadataStore {
     const ts = now();
     this.db
       .prepare(
-        `INSERT INTO project(name, source_paths, build_root, corpus_paths, config_json, provider_id, dir, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO project(uuid, name, source_paths, build_root, corpus_paths, config_json, provider_id, daemon_id, dir, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            source_paths = excluded.source_paths,
            build_root   = excluded.build_root,
            corpus_paths = excluded.corpus_paths,
            config_json  = excluded.config_json,
-           -- provider_id / dir are COALESCE-preserved: a run (which upserts with only name+config)
+           -- provider_id / daemon_id / dir are COALESCE-preserved: a run (which upserts with only name+config)
            -- must not wipe the selection the UI made.
            provider_id  = COALESCE(excluded.provider_id, project.provider_id),
+           daemon_id    = COALESCE(excluded.daemon_id, project.daemon_id),
            dir          = COALESCE(excluded.dir, project.dir),
            updated_at   = excluded.updated_at`,
       )
       .run(
+        randomUUID(),
         input.name,
         jsonOrNull(input.sourcePaths),
         input.buildRoot ?? null,
         jsonOrNull(input.corpusPaths),
         jsonOrNull(input.config),
         input.providerId ?? null,
+        input.daemonId ?? null,
         input.dir ?? null,
         ts,
         ts,
@@ -370,10 +386,23 @@ export class MetadataStore {
     return this.db.prepare("SELECT * FROM project WHERE name = ?").get(name) as Record<string, unknown> | undefined;
   }
 
+  getProjectById(id: number): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM project WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  }
+
+  getProjectByUuid(uuid: string): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM project WHERE uuid = ?").get(uuid) as Record<string, unknown> | undefined;
+  }
+
+  /** Resolve public UI/API project refs. Project URLs are UUID-only; names are display text. */
+  getProjectByRef(ref: string): Record<string, unknown> | undefined {
+    return this.getProjectByUuid(ref);
+  }
+
   /** Delete a project and everything under it (runs, scopes, findings + their status
    * events, confirm decisions). Returns true if a project was removed. */
-  deleteProject(name: string): boolean {
-    const project = this.getProject(name);
+  deleteProject(ref: string): boolean {
+    const project = this.getProjectByRef(ref);
     if (!project) return false;
     const id = Number(project.id);
     this.transaction(() => {
@@ -661,7 +690,7 @@ export class MetadataStore {
     const limit = Math.max(1, Math.floor(opts.limit ?? 200));
     const offset = Math.max(0, Math.floor(opts.offset ?? 0));
     return this.db
-      .prepare("SELECT f.*, p.name AS project_name FROM finding f JOIN project p ON p.id = f.project_id " + where + " ORDER BY f.updated_at DESC LIMIT ? OFFSET ?")
+      .prepare("SELECT f.*, p.name AS project_name, p.uuid AS project_uuid FROM finding f JOIN project p ON p.id = f.project_id " + where + " ORDER BY f.updated_at DESC LIMIT ? OFFSET ?")
       .all(...params, limit, offset) as Array<Record<string, unknown>>;
   }
 
@@ -814,14 +843,17 @@ export class MetadataStore {
     let removed = false;
     this.transaction(() => {
       this.db.prepare("UPDATE job SET daemon_id = NULL WHERE daemon_id = ?").run(id);
+      this.db.prepare("UPDATE project SET daemon_id = NULL WHERE daemon_id = ?").run(id);
       removed = this.db.prepare("DELETE FROM daemon WHERE id = ?").run(id).changes > 0;
     });
     return removed;
   }
 
-  enqueueJob(project: string, spec: unknown): number {
+  enqueueJob(project: string, spec: unknown, daemonId?: number): number {
     const ts = now();
-    const info = this.db.prepare("INSERT INTO job(project, spec_json, status, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?)").run(project, JSON.stringify(spec), ts, ts);
+    const info = this.db
+      .prepare("INSERT INTO job(project, spec_json, status, daemon_id, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?)")
+      .run(project, JSON.stringify(spec), daemonId ?? null, ts, ts);
     return Number(info.lastInsertRowid);
   }
 
@@ -829,7 +861,7 @@ export class MetadataStore {
   claimJob(daemonId: number): { id: number; project: string; spec: unknown } | undefined {
     let claimed: { id: number; project: string; spec_json: string } | undefined;
     this.transaction(() => {
-      const row = this.db.prepare("SELECT id, project, spec_json FROM job WHERE status = 'queued' ORDER BY created_at LIMIT 1").get() as
+      const row = this.db.prepare("SELECT id, project, spec_json FROM job WHERE status = 'queued' AND (daemon_id IS NULL OR daemon_id = ?) ORDER BY created_at LIMIT 1").get(daemonId) as
         | { id: number; project: string; spec_json: string }
         | undefined;
       if (!row) return;

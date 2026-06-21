@@ -133,7 +133,7 @@ async function streamAndAwait(server: string, runId: number): Promise<Record<str
   let stopping = false;
   const onSigint = (): void => {
     if (stopping) {
-      console.log(`\n[detached] leaving run #${runId} to the daemon. Track it: flounder db runs  ·  or the UI.`);
+      console.log(`\n[detached] leaving run #${runId} to the daemon. Track it in the UI or with: flounder server run list`);
       process.exit(130);
     }
     stopping = true;

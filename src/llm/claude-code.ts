@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { LlmClient } from "../types.js";
 import type { RunLogger } from "../trace/logger.js";
+import type { ThinkingLevel } from "../config.js";
 
 export class ClaudeCodeClient implements LlmClient {
   constructor(private readonly logger?: RunLogger) {}
@@ -14,7 +15,7 @@ export class ClaudeCodeClient implements LlmClient {
     user: string;
     model?: string;
     maxTokens?: number;
-    thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh";
+    thinkingLevel?: ThinkingLevel;
     agentic?: boolean;
   }): Promise<string> {
     if (!input.model) throw new Error("model is required");
