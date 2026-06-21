@@ -1,6 +1,6 @@
 name: Release
 
-# Release automation only packages and publishes the Node artifact. Do not add
+# Release automation only packages the Node artifact. Do not add
 # provider secrets, pi login, live Flounder audit commands, or extra deploy
 # targets here.
 
@@ -57,30 +57,3 @@ jobs:
           name: npm-package
           path: "*.tgz"
           if-no-files-found: error
-
-  publish-npm:
-    name: Publish npm
-    needs: release-gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment: npm
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Publish package
-        run: npm publish

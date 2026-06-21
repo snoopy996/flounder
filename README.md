@@ -108,6 +108,14 @@ flounder confirm ./runs/my-target-<timestamp> --source ./src --build-root .
 
 Real audits execute model-generated commands through the sandbox. The safe default is Docker-backed OCI: install and start Docker or a Docker-compatible runtime, then build the default image with `npm run sandbox:build`. `--sandbox-backend auto` uses `flounder-sandbox:latest` when available and otherwise fails closed instead of silently running tests on the host.
 
+The default image is a baseline, not a promise to cover every target stack. It includes common build and audit toolchains so the first run has a safe execution boundary, but specialized targets should use a daemon- or operator-provided image with the exact compiler, prover, chain tooling, or package manager they require:
+
+```bash
+flounder run --source ./src --build-root . --sandbox-image your-audit-image:latest
+```
+
+Image construction is part of the trusted execution base. The audit model may report missing toolchains or propose an image recipe, but it should not receive unrestricted `docker build` / `docker pull` capability inside the audit loop. A safe automation path is to generate a reviewable target-specific image plan, build it in a controlled daemon/operator step, then pin and reuse that image by name or digest.
+
 For trusted local smoke tests only, use `--sandbox-backend host --allow-host-execution` or set `FLOUNDER_ALLOW_HOST_EXECUTION=1`. Host mode still uses the copied workspace plus isolated `HOME` and package-cache paths, but it does not provide kernel-level filesystem or network isolation and should not be used for untrusted targets, malicious dependencies, or real model-generated exploit code.
 
 ## Use It Yourself

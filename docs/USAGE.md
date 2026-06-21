@@ -94,6 +94,14 @@ npm run sandbox:build
 
 The default backend is `auto`: Flounder checks for the OCI image `flounder-sandbox:latest`, runs sandboxed commands in it when available, and otherwise refuses execution with a policy error. It does not silently fall back to host execution. Use `--sandbox-backend oci` to require the container path and fail if the image is missing. Use `--sandbox-image <image>` to provide a target-specific image with extra toolchains.
 
+The bundled image is only the default baseline. It cannot cover every compiler, prover, framework, package manager, or blockchain toolchain a real audit may need. For specialized targets, build or pull a reviewed image outside the audit loop and pass it explicitly:
+
+```bash
+flounder run --source ./src --build-root . --sandbox-image your-audit-image:latest
+```
+
+Treat image construction as a daemon/operator responsibility. The agent can identify missing tools and propose a Dockerfile or image plan, but unrestricted `docker build` or `docker pull` from inside model-directed execution would expand the trusted boundary and can undermine the sandbox. If automated image synthesis is enabled in a deployment, keep it as a separate controlled prepare step with human review or a locked template, pinned base images, and a resulting image digest recorded in the run.
+
 Host mode exists as an explicit trusted-local escape hatch for environments where Docker/OCI is unavailable or for deterministic fixture tests:
 
 ```bash
