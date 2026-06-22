@@ -7,6 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { defaultConfig } from "../dist/config.js";
 import {
+  AUDIT_CONFIRM_SYSTEM,
   AUDIT_DEEP_SYSTEM,
   AUDIT_SYNTHESIS_SYSTEM,
   AUDIT_SYSTEM,
@@ -43,6 +44,7 @@ function defaultPromptCorpus() {
     AUDIT_DEEP_SYSTEM,
     MAP_SYSTEM,
     AUDIT_VERIFY_SYSTEM,
+    AUDIT_CONFIRM_SYSTEM,
     AUDIT_SYNTHESIS_SYSTEM,
     POC_TRUST_RULE,
     buildSessionPrompt({ cfg, fileManifest: "example.rs" }),
@@ -197,6 +199,12 @@ test("default prompts retain the generic capabilities needed by known-bug regres
       `prompt corpus missing generic capability: ${expectation.capability} (${expectation.needle})`,
     );
   }
+});
+
+test("confirm prompt bounds novelty search after reproduction", () => {
+  assert.match(AUDIT_CONFIRM_SYSTEM, /Novelty checking is bounded/i);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /at most THREE targeted public checks/i);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /do not keep searching/i);
 });
 
 test("default prompts do not hard-code known-bug answers or local target identifiers", async () => {
