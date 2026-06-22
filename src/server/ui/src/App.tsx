@@ -894,6 +894,8 @@ function appendActivityLine(lines: ActivityLine[], event: ActivityRecord): Activ
     const action = event.kind === "audit_action" ? actionSummary(body) : undefined;
     const summary = event.kind === "audit_action" ? undefined : eventSummary(event, body);
     const actionFailed = event.kind === "audit_action" && event.ok === false;
+    if (event.kind === "audit_action" && !actionFailed && event.tool === "bash") return next.slice(-60);
+    if (event.kind === "audit_action" && !actionFailed && ["bash", "read", "write", "edit"].includes(body.trim())) return next.slice(-60);
     const normalizedBody = event.kind === "audit_command_run"
       ? commandRunSummary(body, eventPayload(event))
       : actionFailed
