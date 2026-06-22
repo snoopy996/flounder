@@ -212,11 +212,12 @@ function validatePrepareManifest(manifest: unknown, matchDeployed: boolean): Pre
     const id = String(c?.identity ?? c?.role ?? c?.id ?? c?.name ?? c?.path ?? "?");
     const platform = String(c?.platform ?? "").trim().toLowerCase();
     const type = str(c?.type).toLowerCase();
-    const deployed = platform.length > 0 && platform !== "none" && platform !== "n/a"
-      || str(c?.address).length > 0
+    const deployed = str(c?.address).length > 0
       || Object.keys(objectRecord(c?.addresses) ?? {}).length > 0
       || type.includes("ethereum_contract")
-      || type.includes("deployment");
+      || type.includes("deployed_contract")
+      || type.includes("deployment")
+      || isDeploymentPlatform(platform);
     const match = normalizePrepareMatchStatus(str(c?.match ?? deploymentMatch?.status));
     const revision = str(
       c?.revision
@@ -251,10 +252,30 @@ function validatePrepareManifest(manifest: unknown, matchDeployed: boolean): Pre
 function normalizePrepareMatchStatus(value: string): string {
   const raw = value.trim().toLowerCase();
   if (!raw) return "";
-  if (["n/a", "na", "none", "not_applicable", "not-applicable"].includes(raw)) return "n/a";
+  if (raw === "na" || raw === "none" || raw.startsWith("n/a") || raw.includes("not_applicable") || raw.includes("not-applicable")) return "n/a";
   if (raw.includes("unverified") || raw.includes("not_verified") || raw.includes("no_match")) return "unverified";
   if (raw === "matched" || raw.includes("verified") || raw.includes("matched") || raw.includes("sourcify")) return "matched";
   return raw;
+}
+
+function isDeploymentPlatform(platform: string): boolean {
+  if (!platform || platform === "none" || platform === "n/a") return false;
+  if (platform.includes("github") || platform.includes("crates.io") || platform.includes("npm") || platform.includes("package")) return false;
+  if (platform.includes("documentation") || platform.includes("docs") || platform.includes("spec")) return false;
+  return [
+    "ethereum",
+    "evm",
+    "mainnet",
+    "sepolia",
+    "testnet",
+    "chain",
+    "sourcify",
+    "etherscan",
+    "contract",
+    "deployed",
+    "l1",
+    "l2",
+  ].some((needle) => platform.includes(needle));
 }
 
 function validateRealTargetPlan(manifest: Record<string, unknown>, ctx: { issues: string[]; deployedComponents: number }): void {

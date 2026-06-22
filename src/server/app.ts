@@ -984,18 +984,38 @@ function summarizePrepareComponent(component: Record<string, unknown>): Record<s
 }
 
 function isPreparedDeployment(component: Record<string, unknown>, type: string, normalizedPlatform: string): boolean {
-  if (normalizedPlatform.length > 0 && normalizedPlatform !== "none" && normalizedPlatform !== "n/a") return true;
   if (stringValue(component.address)) return true;
   const addresses = objectValue(component.addresses);
   if (addresses && Object.keys(addresses).length > 0) return true;
   const normalizedType = type.toLowerCase();
-  return normalizedType.includes("ethereum_contract") || normalizedType.includes("deployment");
+  if (normalizedType.includes("ethereum_contract") || normalizedType.includes("deployed_contract") || normalizedType.includes("deployment")) return true;
+  return isDeploymentPlatform(normalizedPlatform);
+}
+
+function isDeploymentPlatform(platform: string): boolean {
+  if (!platform || platform === "none" || platform === "n/a") return false;
+  if (platform.includes("github") || platform.includes("crates.io") || platform.includes("npm") || platform.includes("package")) return false;
+  if (platform.includes("documentation") || platform.includes("docs") || platform.includes("spec")) return false;
+  return [
+    "ethereum",
+    "evm",
+    "mainnet",
+    "sepolia",
+    "testnet",
+    "chain",
+    "sourcify",
+    "etherscan",
+    "contract",
+    "deployed",
+    "l1",
+    "l2",
+  ].some((needle) => platform.includes(needle));
 }
 
 function normalizePrepareMatchStatus(value: string): string {
   const raw = value.trim().toLowerCase();
   if (!raw) return "";
-  if (["n/a", "na", "none", "not_applicable", "not-applicable"].includes(raw)) return "n/a";
+  if (raw === "na" || raw === "none" || raw.startsWith("n/a") || raw.includes("not_applicable") || raw.includes("not-applicable")) return "n/a";
   if (raw.includes("unverified") || raw.includes("not_verified") || raw.includes("no_match")) return "unverified";
   if (raw === "matched" || raw.includes("verified") || raw.includes("matched") || raw.includes("sourcify")) return "matched";
   return raw;
