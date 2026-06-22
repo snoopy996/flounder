@@ -29,6 +29,10 @@ RUN apt-get update \
     sed \
   && rm -rf /var/lib/apt/lists/*
 
+RUN npm install -g yarn@1.22.22 pnpm@9.15.9 \
+  && yarn --version \
+  && pnpm --version
+
 ARG FOUNDRY_VERSION=stable
 ENV FOUNDRY_DIR=/root/.foundry
 ENV PATH="${FOUNDRY_DIR}/bin:${PATH}"

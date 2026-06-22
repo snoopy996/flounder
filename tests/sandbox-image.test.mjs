@@ -14,3 +14,10 @@ test("foundry tools are copied into the non-root sandbox PATH", async () => {
   assert.match(dockerfile, /install -m 0755 "\$\{FOUNDRY_DIR\}\/bin\/forge" \/usr\/local\/bin\/forge/);
   assert.doesNotMatch(dockerfile, /ln -sf "\$\{FOUNDRY_DIR\}\/bin\/forge" \/usr\/local\/bin\/forge/);
 });
+
+test("default sandbox image includes common JavaScript package managers", async () => {
+  const dockerfile = await readFile(new URL("../docker/flounder-sandbox.Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /npm install -g yarn@1\.22\.22 pnpm@9\.15\.9/);
+  assert.match(dockerfile, /yarn --version/);
+  assert.match(dockerfile, /pnpm --version/);
+});
