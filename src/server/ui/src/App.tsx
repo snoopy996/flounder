@@ -1039,7 +1039,7 @@ export function App() {
     return () => source.close();
   }, [route.projectUuid]);
 
-  async function launch(action: LaunchAction) {
+  async function launch(action: LaunchAction, selectedFindings?: FindingRow[]) {
     if (!route.projectUuid) return;
     let verifyCandidates: FindingRow[] = [];
     if (detail?.project.uuid === route.projectUuid) {
@@ -1084,13 +1084,20 @@ export function App() {
         setModal(null);
         return;
       }
+      if ((action === "verify" || action === "confirm") && selectedFindings && selectedFindings.length === 0) {
+        setToast({ tone: "warning", message: "Select at least one finding before launching." });
+        setModal(null);
+        return;
+      }
     }
     setBusy(true);
     try {
       const verb = action === "verify" ? "audit" : action;
+      const selected = selectedFindings && selectedFindings.length ? selectedFindings : undefined;
       const result = (await api.launchRun(route.projectUuid, {
         verb,
-        ...(action === "verify" ? { verifyFindings: verifyCandidates } : {}),
+        ...(action === "verify" ? { verifyFindings: selected ?? verifyCandidates } : {}),
+        ...(action === "confirm" && selected ? { findingIds: selected.map((finding) => finding.id) } : {}),
       })) as LaunchResult;
       const waiting = (result.daemons ?? 0) === 0;
       const label = action === "verify" ? "verify" : verb;
@@ -1299,10 +1306,10 @@ export function App() {
           detail={detail}
           busy={busy}
           onCancel={() => setLaunchConfirmAction(null)}
-          onConfirm={() => {
+          onConfirm={(selectedFindings) => {
             const action = launchConfirmAction;
             setLaunchConfirmAction(null);
-            void launch(action);
+            void launch(action, selectedFindings);
           }}
         />
       ) : null}
@@ -1597,9 +1604,10 @@ function ProjectDetailView(props: {
           <Stat n={detail.findingsTotal} label="findings" onClick={() => { props.setFindingStatus(""); props.setFindingQuery(""); setTab("findings"); }} />
           <Stat n={overviewCandidates.length} label={pendingVerify ? "to verify" : "top candidates"} onClick={() => { props.setFindingStatus(""); props.setFindingQuery(""); setTab("overview"); scrollToProjectSection("project-top-candidates"); }} />
           <Stat n={confirmed} label="confirmed" good onClick={() => { props.setFindingStatus("execution-confirmed"); props.setFindingQuery(""); setTab("findings"); }} />
-          <Stat n={reproduced} label="reproduced" onClick={() => setTab("overview")} />
+          <Stat n={reproduced} label="reproduced" onClick={() => { setTab("overview"); scrollToProjectSection("project-real-target-decisions"); }} />
           <Stat n={detail.runsTotal} label="runs" onClick={() => setTab("runs")} />
         </div>
+        <RealTargetCallout decisions={detail.confirmDecisions} onOpen={() => { setTab("overview"); scrollToProjectSection("project-real-target-decisions"); }} />
         <ProjectSetupDisclosure items={readyItems} />
       </Card>
       <div className="tabs" role="tablist" aria-label="Project sections">
@@ -1801,26 +1809,43 @@ function recommendationLabel(decision: ConfirmDecision): string {
 function ConfirmDecisionsCard({ decisions, onOpenArtifact }: { decisions: ConfirmDecision[]; onOpenArtifact: (artifact: ArtifactPreview) => void }) {
   if (!decisions.length) return null;
   return (
-    <Card title={<span>Real-target decisions <Counter>{decisions.length}</Counter></span>}>
-      <div className="decision-list">
-        {decisions.map((decision) => (
-          <div className="decision-row" key={decision.id ?? `${decision.run_id}-${decision.bug}`}>
-            <div className="decision-main">
-              <span className={`label ${decision.reproduced === "yes" ? "s-confirmed-executable" : decision.reproduced === "no" ? "s-refuted" : "s-suspected"}`}>
-                {decisionLabel(decision)}
-              </span>
-              <strong>{decision.bug}</strong>
-              <small>{recommendationLabel(decision)}</small>
+    <div id="project-real-target-decisions" className="section-anchor">
+      <Card title={<span>Real-target decisions <Counter>{decisions.length}</Counter></span>}>
+        <div className="decision-list">
+          {decisions.map((decision) => (
+            <div className="decision-row" key={decision.id ?? `${decision.run_id}-${decision.bug}`}>
+              <div className="decision-main">
+                <span className={`label ${decision.reproduced === "yes" ? "s-confirmed-executable" : decision.reproduced === "no" ? "s-refuted" : "s-suspected"}`}>
+                  {decisionLabel(decision)}
+                </span>
+                <strong>{decision.bug}</strong>
+                <small>{recommendationLabel(decision)}</small>
+              </div>
+              {decision.run_id ? (
+                <Button size="sm" icon="shieldcheck" onClick={() => onOpenArtifact({ title: `Confirm report - #${decision.run_id}`, runId: decision.run_id!, name: "confirm_report.md" })}>
+                  Report
+                </Button>
+              ) : null}
             </div>
-            {decision.run_id ? (
-              <Button size="sm" icon="shieldcheck" onClick={() => onOpenArtifact({ title: `Confirm report - #${decision.run_id}`, runId: decision.run_id!, name: "confirm_report.md" })}>
-                Report
-              </Button>
-            ) : null}
-          </div>
-        ))}
-      </div>
-    </Card>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function RealTargetCallout({ decisions, onOpen }: { decisions: ConfirmDecision[]; onOpen: () => void }) {
+  const reproduced = decisions.filter((decision) => decision.reproduced === "yes").length;
+  if (!decisions.length) return null;
+  return (
+    <button className="real-target-callout" type="button" onClick={onOpen}>
+      <span className="dot" />
+      <span>
+        <strong>{plural(reproduced, "real-target reproduction")}</strong>
+        <small>{plural(decisions.length, "decision")} ready. Open final decision reports.</small>
+      </span>
+      <Icon name="arrowright" size={14} />
+    </button>
   );
 }
 
@@ -3161,11 +3186,24 @@ function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError 
   );
 }
 
-function LaunchConfirmModal({ action, detail, busy, onCancel, onConfirm }: { action: LaunchAction; detail: ProjectDetail; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
-  const verifyCount = pendingVerifyFindings(detail.allFindings).length;
-  const confirmCount = pendingConfirmFindings(detail.allFindings).length;
+function LaunchConfirmModal({ action, detail, busy, onCancel, onConfirm }: { action: LaunchAction; detail: ProjectDetail; busy: boolean; onCancel: () => void; onConfirm: (findings: FindingRow[]) => void }) {
   const isConfirm = action === "confirm";
-  const count = isConfirm ? confirmCount : verifyCount;
+  const targets = isConfirm ? pendingConfirmFindings(detail.allFindings) : pendingVerifyFindings(detail.allFindings);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set(targets.map((finding) => finding.id)));
+  const selectedTargets = targets.filter((finding) => selectedIds.has(finding.id));
+  const count = selectedTargets.length;
+  const allSelected = targets.length > 0 && selectedIds.size === targets.length;
+  function toggleFinding(id: number) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(targets.map((finding) => finding.id)));
+  }
   return (
     <Modal
       title={isConfirm ? "Start real-target confirmation?" : "Verify candidates?"}
@@ -3173,7 +3211,7 @@ function LaunchConfirmModal({ action, detail, busy, onCancel, onConfirm }: { act
       footer={(
         <>
           <Button onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button variant="primary" icon={isConfirm ? "shieldcheck" : "search"} onClick={onConfirm} disabled={busy || count === 0}>
+          <Button variant="primary" icon={isConfirm ? "shieldcheck" : "search"} onClick={() => onConfirm(selectedTargets)} disabled={busy || count === 0}>
             {isConfirm ? "Confirm" : "Verify"}
           </Button>
         </>
@@ -3186,6 +3224,22 @@ function LaunchConfirmModal({ action, detail, busy, onCancel, onConfirm }: { act
             ? "This may use network reads and local forks to reproduce already audit-confirmed findings. Flounder still keeps the white-hat boundary: no broadcast and no live-system writes."
             : "This starts a local confirm-or-refute run for suspected or source-confirmed candidates. It can take time and will write normal run artifacts, but it does not contact real targets."}
         </p>
+        <label className="check-all">
+          <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+          <span>{allSelected ? "Clear all" : "Select all"}</span>
+        </label>
+        <div className="confirm-targets" aria-label={isConfirm ? "Findings to confirm" : "Findings to verify"}>
+          {targets.map((finding) => (
+            <label className="confirm-target" key={finding.id}>
+              <input type="checkbox" checked={selectedIds.has(finding.id)} onChange={() => toggleFinding(finding.id)} />
+              <span className="target-index">#{finding.id}</span>
+              <span>
+                <strong>{finding.title ?? "Untitled finding"}</strong>
+                <small>{finding.location || "No location"} · {finding.status}</small>
+              </span>
+            </label>
+          ))}
+        </div>
       </div>
     </Modal>
   );
@@ -3275,17 +3329,10 @@ function RunLogModal({ run, onClose }: { run: RunRow; onClose: () => void }) {
 }
 
 function ReportModal({ finding, onClose }: { finding: FindingRow; onClose: () => void }) {
+  const markdown = findingReportMarkdown(finding);
   return (
     <Modal title="Finding report" wide onClose={onClose}>
-      <article className="report-preview">
-        <StatusBadge status={finding.status} />
-        <h2>{finding.title}</h2>
-        <p><strong>Location:</strong> <code>{finding.location}</code></p>
-        {finding.description ? <p>{finding.description}</p> : null}
-        {finding.evidence ? <pre>{finding.evidence}</pre> : null}
-        {finding.exploit_sketch ? <p><strong>Exploit:</strong> {finding.exploit_sketch}</p> : null}
-        {finding.fix ? <p><strong>Fix:</strong> {finding.fix}</p> : null}
-      </article>
+      <MarkdownReport markdown={markdown} fileName={`finding-${finding.id}.md`} />
     </Modal>
   );
 }
@@ -3316,16 +3363,174 @@ function ArtifactModal({ artifact, onClose }: { artifact: ArtifactPreview; onClo
       cancelled = true;
     };
   }, [artifact.runId, artifact.name]);
+  const markdown = redactReportMarkdown(body);
   return (
     <Modal title={artifact.title} wide onClose={onClose}>
-      <article className="report-preview artifact-preview">
-        <p><strong>Artifact:</strong> <code>{artifact.name}</code></p>
+      <article className="artifact-preview">
+        <p className="artifact-name"><strong>Artifact:</strong> <code>{artifact.name}</code></p>
         {loading ? <EmptyInline>Loading artifact...</EmptyInline> : null}
         {error ? <div className="inline-error">{error}</div> : null}
-        {!loading && !error ? <pre>{body || "Artifact is empty."}</pre> : null}
+        {!loading && !error ? <MarkdownReport markdown={markdown || "Artifact is empty."} fileName={`${slugify(artifact.title)}.md`} /> : null}
       </article>
     </Modal>
   );
+}
+
+function findingReportMarkdown(finding: FindingRow): string {
+  const lines = [
+    `# ${finding.title ?? "Finding report"}`,
+    "",
+    `- Status: ${finding.status}`,
+    finding.location ? `- Location: \`${finding.location}\`` : "",
+    finding.severity ? `- Severity: ${finding.severity}` : "",
+    finding.confidence != null ? `- Confidence: ${Math.round(finding.confidence * 100)}%` : "",
+    "",
+  ].filter(Boolean);
+  if (finding.description) lines.push("## Description", "", finding.description, "");
+  if (finding.evidence) lines.push("## Evidence", "", "```", finding.evidence, "```", "");
+  if (finding.exploit_sketch) lines.push("## Exploit", "", finding.exploit_sketch, "");
+  if (finding.fix) lines.push("## Fix", "", finding.fix, "");
+  return lines.join("\n").trim();
+}
+
+function redactReportMarkdown(markdown: string): string {
+  return markdown
+    .replace(/\/Users\/[^/\s`]+\/\.flounder/g, "~/.flounder")
+    .replace(/\/Users\/[^/\s`]+\/[^\s`]*full-stack-auditor/g, "<flounder-repo>");
+}
+
+function slugify(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "report";
+}
+
+function downloadText(fileName: string, body: string, type = "text/markdown;charset=utf-8") {
+  const blob = new Blob([body], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function fallbackCopyText(body: string) {
+  const textarea = document.createElement("textarea");
+  textarea.value = body;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+function MarkdownReport({ markdown, fileName }: { markdown: string; fileName: string }) {
+  const [copyLabel, setCopyLabel] = useState("Copy Markdown");
+  const reportTitle = markdown.match(/^#\s+(.+)$/m)?.[1] ?? fileName.replace(/\.md$/i, "");
+  const bodyMarkdown = markdown.replace(/^#\s+.+\n+/, "");
+  async function copy() {
+    setCopyLabel("Copied");
+    window.setTimeout(() => setCopyLabel("Copy Markdown"), 1600);
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(markdown);
+      else fallbackCopyText(markdown);
+    } catch {
+      fallbackCopyText(markdown);
+    }
+  }
+  return (
+    <section className="markdown-report">
+      <div className="report-document-head">
+        <h1>{reportTitle}</h1>
+        <div className="report-actions">
+          <IconButton icon="copy" title="Copy Markdown" aria-label="Copy Markdown" onClick={() => void copy()} />
+          {copyLabel === "Copied" ? <span className="copied-note">Copied</span> : null}
+          <Button size="sm" onClick={() => downloadText(fileName, markdown)}>Download .md</Button>
+          <Button size="sm" onClick={() => window.print()}>Export PDF</Button>
+        </div>
+      </div>
+      <article className="report-preview markdown-body">
+        {renderMarkdown(bodyMarkdown)}
+      </article>
+    </section>
+  );
+}
+
+function renderMarkdown(markdown: string): ReactNode[] {
+  const lines = markdown.split(/\r?\n/);
+  const nodes: ReactNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) {
+      i += 1;
+      continue;
+    }
+    const fence = line.match(/^```(.*)$/);
+    if (fence) {
+      const code: string[] = [];
+      i += 1;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        code.push(lines[i]);
+        i += 1;
+      }
+      i += lines[i]?.startsWith("```") ? 1 : 0;
+      nodes.push(<pre key={`code-${i}`}><code>{code.join("\n")}</code></pre>);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length, 3);
+      nodes.push(renderMarkdownHeading(level, heading[2], `h-${i}`));
+      i += 1;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(<li key={`li-${i}`}>{renderInlineMarkdown(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>);
+        i += 1;
+      }
+      nodes.push(<ul key={`ul-${i}`}>{items}</ul>);
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(<li key={`oli-${i}`}>{renderInlineMarkdown(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>);
+        i += 1;
+      }
+      nodes.push(<ol key={`ol-${i}`}>{items}</ol>);
+      continue;
+    }
+    const paragraph = [line];
+    i += 1;
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6})\s+/.test(lines[i]) && !/^```/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i])) {
+      paragraph.push(lines[i]);
+      i += 1;
+    }
+    nodes.push(<p key={`p-${i}`}>{renderInlineMarkdown(paragraph.join(" "))}</p>);
+  }
+  return nodes;
+}
+
+function renderMarkdownHeading(level: number, text: string, key: string): ReactNode {
+  if (level === 1) return <h1 key={key}>{renderInlineMarkdown(text)}</h1>;
+  if (level === 2) return <h2 key={key}>{renderInlineMarkdown(text)}</h2>;
+  return <h3 key={key}>{renderInlineMarkdown(text)}</h3>;
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    return <span key={index}>{part}</span>;
+  });
 }
 
 function CommandPalette({ projects, currentProjectUuid, onClose, onNewProject, onLaunch }: { projects: ProjectSnapshot[]; currentProjectUuid?: string; onClose: () => void; onNewProject: () => void; onLaunch: () => void }) {

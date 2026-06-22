@@ -203,6 +203,8 @@ const ROUTES: Route[] = [
       scopeCoverageMode: "focused|standard|half|full|custom? — one-off coverage mode for this run",
       maxScopes: "number? — one-off scope cap for this dig batch", mapSteps: "number? — one-off map turn cap", digSteps: "number? — one-off per-scope dig turn cap",
       maxSteps: "number? — one-off global turn cap", digSamples: "number? — one-off samples per scope", digConcurrency: "number? — one-off parallel scopes",
+      findingId: "number? — confirm: reproduce one pending audit-confirmed finding",
+      findingIds: "number[]? — confirm: reproduce selected pending audit-confirmed findings",
       inputRunDir: "string? — confirm: the finished run dir to reproduce",
       clue: "string? — prepare: the tx / address / project / link to acquire from",
       posture: "string? — prepare: 'blind' | 'informed'", matchDeployed: "boolean? — prepare: prove staged source matches the live deployment (default true)", endpoint: "string? — prepare: read-only access hint (e.g. RPC URL)",
@@ -1058,7 +1060,7 @@ async function scopeSetStatus(c: Ctx): Promise<void> {
   const inventory = await loadScopeInventory(inventoryDir);
   const scope = inventory.find((s) => s.id === scopeId);
 
-  // Prioritize: bump this scope's score above all others so the dig — which audits the highest-
+  // Prioritize: bump this scope's score above all others so the dig - which audits the highest-
   // scored un-audited scopes first — picks it next. Lets the operator hand-order the dig queue
   // (e.g. push the escape-hatch scope to the front) without touching its status.
   if (body.prioritize) {
@@ -1095,15 +1097,20 @@ async function runLaunch(c: Ctx): Promise<void> {
   const prepared = applyPreparedWorkspaceIfNeeded(spec, runs);
   if (!prepared.ok) return sendJson(c.res, 400, { error: prepared.error });
   // Confirm is FINDING-grained + resumable: when no explicit run dir is given, resolve the work set
-  // from finding STATUS — a specific finding (body.findingId) or all pending-confirmable findings
+  // from finding STATUS — selected findings (body.findingId/body.findingIds) or all
+  // pending-confirmable findings
   // (confirmed by the audit, not yet decided on the real target). The confirm then updates each
   // finding's confirm_status, so a re-run only picks up what's still pending.
   if (spec.verb === "confirm" && !spec.inputRunDir && !(spec.inputRunDirs && spec.inputRunDirs.length > 0)) {
-    if (body.findingId != null) {
-      const f = c.store.getConfirmable(Number(project.id), Number(body.findingId));
-      if (!f || !f.run_dir) return sendJson(c.res, 400, { error: "that finding is not pending confirm for this project, or has no source run dir" });
-      spec.inputRunDir = String(f.run_dir);
-      spec.confirmKeys = [f.finding_key];
+    const findingIds = selectedFindingIds(body);
+    if (findingIds.length > 0) {
+      const selected = findingIds.map((id) => ({ id, row: c.store.getConfirmable(Number(project.id), id) }));
+      const missing = selected.filter((entry) => !entry.row || !entry.row.run_dir).map((entry) => entry.id);
+      if (missing.length > 0) return sendJson(c.res, 400, { error: `finding ${missing.join(", ")} is not pending confirm for this project, or has no source run dir` });
+      const rows = selected.flatMap((entry) => entry.row ? [entry.row] : []);
+      spec.inputRunDirs = [...new Set(rows.map((row) => String(row.run_dir)))];
+      spec.inputRunDir = spec.inputRunDirs[0];
+      spec.confirmKeys = rows.map((row) => row.finding_key);
     } else {
       const pending = c.store.pendingConfirmable(Number(project.id)).filter((p) => p.run_dir);
       if (pending.length === 0) return sendJson(c.res, 400, { error: "nothing to confirm — every audit-confirmed finding already has a real-target decision (use --fresh to redo)" });
@@ -1126,6 +1133,17 @@ async function runLaunch(c: Ctx): Promise<void> {
   const jobId = c.store.enqueueJob(spec.target, spec, daemonId);
   c.plane.nudge();
   sendJson(c.res, 200, { jobId, verb: spec.verb, queued: true, daemons: c.plane.daemonCount(daemonId), daemonId });
+}
+
+function selectedFindingIds(body: Record<string, unknown>): number[] {
+  const ids = new Set<number>();
+  if (typeof body.findingId === "number" && Number.isInteger(body.findingId)) ids.add(body.findingId);
+  if (Array.isArray(body.findingIds)) {
+    for (const id of body.findingIds) {
+      if (typeof id === "number" && Number.isInteger(id)) ids.add(id);
+    }
+  }
+  return [...ids];
 }
 
 function applyPreparedWorkspaceIfNeeded(spec: LaunchSpec, runs: Array<Record<string, unknown>>): { ok: true } | { ok: false; error: string } {

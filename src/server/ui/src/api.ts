@@ -259,6 +259,7 @@ export interface LaunchPayload {
   mockLlm?: boolean;
   remap?: boolean;
   findingId?: number;
+  findingIds?: number[];
   verifyFindings?: unknown;
 }
 

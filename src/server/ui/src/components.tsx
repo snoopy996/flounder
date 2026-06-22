@@ -39,7 +39,14 @@ export function Counter({ children, live }: { children: ReactNode; live?: boolea
 
 export function StateBadge({ status }: { status?: string | null }) {
   const cls = ["running", "done", "partial", "error", "killed"].includes(status ?? "") ? status : "none";
-  return <span className={`state ${cls}`}>{status === "partial" ? "Partial" : status || "no runs"}</span>;
+  const label = {
+    running: "Running",
+    done: "Done",
+    partial: "Partial",
+    error: "Error",
+    killed: "Killed",
+  }[status ?? ""] ?? (status ? status.slice(0, 1).toUpperCase() + status.slice(1) : "No runs");
+  return <span className={`state ${cls}`}>{label}</span>;
 }
 
 export function StatusBadge({ status }: { status: string }) {
