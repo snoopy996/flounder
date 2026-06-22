@@ -24,6 +24,7 @@ import {
   PHASE_DESC,
   rankCandidates,
   runProgress,
+  runScopeBatchComplete,
   sortScopes,
   STATUSES,
   THINKING_LEVELS,
@@ -308,6 +309,7 @@ function phaseStatusLabel(status: string): string {
 }
 
 function runKindLabel(kind: string, run?: RunRow): string {
+  if (runScopeBatchComplete(run)) return isVerifyRun(run) ? "Finalize verification" : "Finalize audit";
   if (isVerifyRun(run)) return "Verify";
   return {
     prepare: "Prepare target",

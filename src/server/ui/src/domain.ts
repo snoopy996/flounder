@@ -114,6 +114,10 @@ export function isVerifyRun(run: RunRow | undefined): boolean {
   return Boolean(run && parseJson<{ verify?: boolean }>(run.budgets_json, {}).verify === true);
 }
 
+export function runScopeBatchComplete(run: RunRow | undefined): boolean {
+  return Boolean(run?.status === "running" && run.run_scopes_target != null && (run.run_scopes_done ?? 0) >= run.run_scopes_target);
+}
+
 export function pct(a: number | null | undefined, t: number | null | undefined): number {
   return t && t > 0 ? Math.round(((a ?? 0) / t) * 100) : 0;
 }
@@ -129,10 +133,11 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const digStarted = Boolean(audit && audit.run_scopes_target != null);
   const mapRunning = Boolean(audit && audit.kind !== "audit" && !digStarted);
   const digRunning = Boolean(audit && (audit.kind === "audit" || digStarted));
-  const batchDone = Boolean(audit && audit.run_scopes_target != null && (audit.run_scopes_done ?? 0) >= audit.run_scopes_target);
+  const batchDone = runScopeBatchComplete(audit);
+  const finalizingAudit = Boolean(batchDone && audit && !isVerifyRun(audit));
   const thisRun = audit && audit.run_scopes_target != null
     ? batchDone
-      ? " · confirming findings"
+      ? " · finalizing"
       : ` · current run ${audit.run_scopes_done ?? 0}/${audit.run_scopes_target}`
     : "";
   const isVerify = isVerifyRun(audit);
@@ -159,7 +164,13 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
     map: { status: mapRunning ? "running" : progress.total > 0 ? "done" : "none", stat: progress.total > 0 ? `${progress.total} scopes mapped` : mapRunning ? "Mapping scopes" : "Not started", dur: mapDur },
     dig: {
       status: digRunning ? "running" : progress.audited > 0 ? "done" : progress.total > 0 ? "pending" : "none",
-      stat: isVerify ? verifyStat : progress.total > 0 ? `${progress.audited}/${progress.total} scopes audited · ${progress.pending} pending${detail.findingsTotal ? ` · ${detail.findingsTotal} ${detail.findingsTotal === 1 ? "finding" : "findings"}` : ""}${thisRun}` : "Not started",
+      stat: isVerify
+        ? verifyStat
+        : finalizingAudit
+          ? `Verifying candidates · ${progress.audited}/${progress.total} scopes audited${detail.findingsTotal ? ` · ${detail.findingsTotal} in project` : ""}`
+          : progress.total > 0
+            ? `${progress.audited}/${progress.total} scopes audited · ${progress.pending} pending${detail.findingsTotal ? ` · ${detail.findingsTotal} ${detail.findingsTotal === 1 ? "finding" : "findings"}` : ""}${thisRun}`
+            : "Not started",
       dur: digDur,
     },
     confirm: {
@@ -182,9 +193,13 @@ export function runProgress(run: RunRow, decisions: ConfirmDecision[]): string {
     return rows.length ? `${rows.filter((d) => d.reproduced === "yes").length}/${rows.length} reproduced` : "No decisions recorded yet";
   }
   if (isVerifyRun(run) && run.run_scopes_target != null) {
+    if (runScopeBatchComplete(run)) return `Finalizing verification after ${run.run_scopes_done ?? 0}/${run.run_scopes_target} findings`;
     return `${run.run_scopes_done ?? 0}/${run.run_scopes_target} findings verified`;
   }
   if (run.run_scopes_target != null) {
+    if (runScopeBatchComplete(run)) {
+      return `Finalizing audit after ${run.run_scopes_done ?? 0}/${run.run_scopes_target} scopes${run.scopes_total != null ? ` · ${run.scopes_audited ?? 0}/${run.scopes_total} total audited` : ""}`;
+    }
     return `${run.run_scopes_done ?? 0}/${run.run_scopes_target} scopes in this batch${run.scopes_total != null ? ` · ${run.scopes_audited ?? 0}/${run.scopes_total} total audited` : ""}`;
   }
   if (run.scopes_total != null) return `${run.scopes_audited ?? 0}/${run.scopes_total} scopes audited`;
