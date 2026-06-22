@@ -838,6 +838,7 @@ export function App() {
   const [reportFinding, setReportFinding] = useState<FindingRow | null>(null);
   const [logRun, setLogRun] = useState<RunRow | null>(null);
   const [stopConfirmRun, setStopConfirmRun] = useState<RunRow | null>(null);
+  const [launchConfirmAction, setLaunchConfirmAction] = useState<LaunchAction | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -872,6 +873,7 @@ export function App() {
         setCmdOpen(false);
         setModal(null);
         setStopConfirmRun(null);
+        setLaunchConfirmAction(null);
       }
     };
     addEventListener("keydown", onKey);
@@ -1029,6 +1031,14 @@ export function App() {
     }
   }
 
+  function requestLaunch(action: LaunchAction) {
+    if (action === "verify" || action === "confirm") {
+      setLaunchConfirmAction(action);
+      return;
+    }
+    void launch(action);
+  }
+
   async function updateTracking(finding: FindingRow, status: string) {
     try {
       await api.trackFinding(finding.id, status);
@@ -1129,7 +1139,7 @@ export function App() {
                   findingStatus={projectFindingStatus}
                   setFindingStatus={setProjectFindingStatus}
                   busy={busy}
-                  onLaunch={launch}
+                  onLaunch={requestLaunch}
                   onOpenRunModal={() => setModal("run")}
                   onOpenEdit={() => setModal("edit-project")}
                   onOpenReport={(finding) => {
@@ -1172,7 +1182,7 @@ export function App() {
         ) : null}
         {route.view === "settings" ? <SettingsView pane={route.settingsPane} providers={providers} daemons={daemons} onRefresh={refreshBase} /> : null}
       </div>
-      {cmdOpen ? <CommandPalette projects={projects} currentProjectUuid={route.projectUuid} onClose={() => setCmdOpen(false)} onNewProject={() => setModal("new-project")} onLaunch={() => void launch("run")} /> : null}
+      {cmdOpen ? <CommandPalette projects={projects} currentProjectUuid={route.projectUuid} onClose={() => setCmdOpen(false)} onNewProject={() => setModal("new-project")} onLaunch={() => requestLaunch("run")} /> : null}
       {modal === "new-project" ? (
         <NewProjectModal
           providers={providers}
@@ -1186,7 +1196,7 @@ export function App() {
           onError={(message) => setToast({ tone: "error", message })}
         />
       ) : null}
-      {modal === "run" && detail ? <RunModal detail={detail} busy={busy} onClose={() => setModal(null)} onLaunch={launch} onUpdateRunTarget={(run, target) => void updateRunTarget(run, target)} onError={(message) => setToast({ tone: "error", message })} /> : null}
+      {modal === "run" && detail ? <RunModal detail={detail} busy={busy} onClose={() => setModal(null)} onLaunch={requestLaunch} onUpdateRunTarget={(run, target) => void updateRunTarget(run, target)} onError={(message) => setToast({ tone: "error", message })} /> : null}
       {modal === "edit-project" && detail ? <EditProjectModal detail={detail} providers={providers} daemons={daemons} onClose={() => setModal(null)} onSaved={async () => { setDetail(await api.project(detail.project.uuid)); setModal(null); }} onError={(message) => setToast({ tone: "error", message })} /> : null}
       {modal === "report" && reportFinding ? <ReportModal finding={reportFinding} onClose={() => setModal(null)} /> : null}
       {modal === "run-log" && logRun ? <RunLogModal run={logRun} onClose={() => { setModal(null); setLogRun(null); }} /> : null}
@@ -1196,6 +1206,19 @@ export function App() {
           busy={busy}
           onCancel={() => setStopConfirmRun(null)}
           onConfirm={() => void stopRun(stopConfirmRun)}
+        />
+      ) : null}
+      {launchConfirmAction && detail ? (
+        <LaunchConfirmModal
+          action={launchConfirmAction}
+          detail={detail}
+          busy={busy}
+          onCancel={() => setLaunchConfirmAction(null)}
+          onConfirm={() => {
+            const action = launchConfirmAction;
+            setLaunchConfirmAction(null);
+            void launch(action);
+          }}
         />
       ) : null}
       {toast ? <ToastView toast={toast} onClose={() => setToast(null)} /> : null}
@@ -2816,6 +2839,36 @@ function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError 
           ))}
         </div>
       )}
+    </Modal>
+  );
+}
+
+function LaunchConfirmModal({ action, detail, busy, onCancel, onConfirm }: { action: LaunchAction; detail: ProjectDetail; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const verifyCount = pendingVerifyFindings(detail.allFindings).length;
+  const confirmCount = pendingConfirmFindings(detail.allFindings).length;
+  const isConfirm = action === "confirm";
+  const count = isConfirm ? confirmCount : verifyCount;
+  return (
+    <Modal
+      title={isConfirm ? "Start real-target confirmation?" : "Verify candidates?"}
+      onClose={onCancel}
+      footer={(
+        <>
+          <Button onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="primary" icon={isConfirm ? "shieldcheck" : "search"} onClick={onConfirm} disabled={busy || count === 0}>
+            {isConfirm ? "Confirm" : "Verify"}
+          </Button>
+        </>
+      )}
+    >
+      <div className="confirm-copy">
+        <strong>{isConfirm ? `${plural(count, "finding")} will be checked against the real target.` : `${plural(count, "candidate")} will be checked by local execution.`}</strong>
+        <p>
+          {isConfirm
+            ? "This may use network reads and local forks to reproduce already audit-confirmed findings. Flounder still keeps the white-hat boundary: no broadcast and no live-system writes."
+            : "This starts a local confirm-or-refute run for suspected or source-confirmed candidates. It can take time and will write normal run artifacts, but it does not contact real targets."}
+        </p>
+      </div>
     </Modal>
   );
 }
