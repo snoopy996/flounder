@@ -72,7 +72,11 @@ Flounder is built for the parts of security work that usually require a human to
 
 ## Quickstart
 
+Use Node 22 LTS. This repository includes `.nvmrc` and `.node-version` pinned to
+22.20.0, the version used by the test suite.
+
 ```bash
+nvm use
 npm install
 npm run build
 npm run sandbox:build
