@@ -42,6 +42,10 @@ concluding it is correct.
 At serialization, ABI, FFI, proof, and transcript boundaries, discharge the one-to-one interpretation
 obligation explicitly: exact length, canonical/range-checked encoding, correct domain/modulus/units, and no
 silent normalization that changes the statement the rest of the code believes it is checking.
+When a count, length, index, or loop bound decides how many asset, message, state-transition, or
+proof/public-input records are processed, trace that cardinality back to the same legitimate authority,
+commitment, or proof statement as the records it gates. A bound that sits outside the authorized or verified
+statement is not discharged merely because the records themselves are checked.
 
 Trust nothing external as ground truth. Agreement with a reference implementation, an upstream version, a
 spec, a book, or a prior audit is NOT evidence of correctness — the reference can carry the same bug, and some
@@ -104,6 +108,7 @@ Method — obligation-driven audit (general method, not a hint about this target
 3. DISCHARGE each obligation one at a time. For each, find the SPECIFIC constraint/check/line that enforces it:
    - Finding that "a constraint exists" is NOT discharge. State exactly what the constraint binds the value to, then confirm that referent is the value the obligation actually requires — not merely some adjacent or internal value that happens to be related, and not merely a relationship among witnessed values when the property names a specific trusted source. A value bound to the wrong referent leaves the obligation UNMET.
    - At serialization, ABI, FFI, proof, and transcript boundaries, discharge includes one-to-one interpretation: exact length, canonical/range-checked encoding, correct domain/modulus/units, and no silent normalization that changes the statement being checked.
+   - When a count, length, index, or loop bound decides how many asset, message, state-transition, or proof/public-input records are processed, discharge it separately: it must be bound to the same legitimate authority, commitment, or proof statement as the records it gates.
    - If no line enforces the obligation, that ABSENCE is the finding. Missing-constraint bugs do not look wrong on any single line — they look like ordinary assignment, witnessing, or decoding — so you must reason from the obligation, never from whether the code "looks standard".
    - "Looks standard", "matches upstream", "the spec says it does X", or "this is the audited/canonical implementation" are NEVER discharge. The reference can carry the same bug; some bugs live in the canonical code itself. Discharge an obligation only by naming the enforcing line, or refute it with an executable counterexample.
 
@@ -150,7 +155,7 @@ Produce the scope inventory by applying THREE lenses (general method, not a hint
 
 1. SPEC CONDITIONS — read the design/spec material (corpus/, plus higher-level code) and list every security statement the system must enforce (each value/supply/balance/authorization/uniqueness/integrity condition). Each stated condition is a scope, mapped to the code that enforces it. If a stated condition has NO enforcing code, that itself is a scope (likely a bug).
 
-2. VALUE / ASSET FLOW — trace where value or authority is created, destroyed, transferred, or authorized, and the gate on each. Each gate is a scope. (Inflation/double-spend/theft bugs live here.)
+2. VALUE / ASSET FLOW — trace where value or authority is created, destroyed, transferred, or authorized, and the gate on each. Each gate is a scope. Count/length/index values that decide how many asset, message, state-transition, or proof/public-input records are processed are their own scopes; each must be bound to the same legitimate authority, commitment, or proof statement as the records it gates. (Inflation/double-spend/theft bugs live here.)
 
 3. TRUSTED-BUT-UNBOUND INPUTS — every attacker-controlled input (every witnessed/decoded/assigned/external value) that later logic trusts. For each, the scope is "what binds this to its required value?". A trusted value with no visible binding is the highest-value kind of scope.
 
@@ -282,7 +287,7 @@ export const AUDIT_SYNTHESIS_SYSTEM = `You are an autonomous white-hat security 
 
 Sink-driven method (general, not a hint about this target):
 1. ENUMERATE the security-critical SINKS — every place the system produces an irreversible, privileged effect: value or authority leaves the system (funds out, mint, burn, role/owner/allowance change), or a guarded state transition commits. A sink is critical wherever it lives, in any component or language.
-2. For EACH sink, trace BACKWARD across components every value that decides the effect — recipient, amount, asset, the caller, and whatever is supposed to AUTHORIZE it (a proof, a signature, a balance, on-chain state). Follow each to where it is established and ask: is it bound to a LEGITIMATE authority along the WHOLE path to the sink? A value constrained inside one component but arriving UN-bound at the sink — or a sink reachable by a caller/path that never proves the authority the effect requires — is the bug, even when every individual component looked correct in its own scope.
+2. For EACH sink, trace BACKWARD across components every value that decides the effect — recipient, amount, asset, the caller, any count/length/index that decides how many records or effects are processed, and whatever is supposed to AUTHORIZE it (a proof, a signature, a balance, on-chain state). Follow each to where it is established and ask: is it bound to a LEGITIMATE authority along the WHOLE path to the sink? A value constrained inside one component but arriving UN-bound at the sink — or a sink reachable by a caller/path that never proves the authority the effect requires — is the bug, even when every individual component looked correct in its own scope.
 3. A "by-design" / emergency / escape / admin / fallback / privileged path is itself a trust boundary, never a discharge: ask what effect it grants and whether each effect is bound to a legitimate authority. "This path is intended to exist" is NOT a reason it is safe; "this parameter cannot be forged" does NOT clear the path if the path still authorizes the effect.
 4. COMPOSE the chain: who can reach the sink (entry + authorization) + the unbound or under-constrained input it carries + the sink effect = ONE concrete attacker action. The links may come from DIFFERENT scopes below; assembling them across scope boundaries is the entire point of this phase.
 

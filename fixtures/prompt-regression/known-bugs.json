@@ -34,6 +34,10 @@
       {
         "needle": "LEGITIMATE authority",
         "capability": "trace effect sinks back to legitimate authority"
+      },
+      {
+        "needle": "count/length/index",
+        "capability": "trace effect cardinality back to the same authority or statement"
       }
     ],
     "forbiddenDefaultPromptNeedles": [
