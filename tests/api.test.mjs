@@ -92,6 +92,33 @@ test("api: project run defaults leave map/dig turns unbounded while standard cov
   });
 });
 
+test("api: project prepare defaults leave prepare turns unbounded", async () => {
+  await withServer(async (base) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "default-prepare-budget",
+      sourcePaths: ["./src"],
+      config: { scopeCoverageMode: "standard", maxScopes: 30 },
+    }));
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, {
+      verb: "prepare",
+      clue: "authorized target clue",
+      posture: "blind",
+    }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.verb, "prepare");
+    assert.equal(spec.maxSteps, undefined);
+    assert.equal(spec.mapSteps, undefined);
+    assert.equal(spec.digSteps, undefined);
+    assert.equal(spec.maxScopes, 30);
+  });
+});
+
 test("api: project run one-off coverage options are copied into the queued launch spec", async () => {
   await withServer(async (base) => {
     const json = (r) => r.json();

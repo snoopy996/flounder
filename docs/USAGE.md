@@ -155,7 +155,7 @@ The sealed verbs (`run --source`, `map`, and `audit`) share the tools, the confi
 | `flounder audit --verify <findings.json>` | confirm-or-refute existing suspected findings by execution — the standalone confirmation step on a prior run's `audit_findings.json` |
 | `flounder confirm <run-dir>` | open-world: reproduce a run's findings on the real target |
 
-The sealed verbs are **unbounded by default** (a run ends when the model is done, not at a step count) — a fixed budget silently truncates a productive dig. Cap a phase only when you want to: `--map-steps` / `--dig-steps` (and `--max-steps` for `run --quick` / `audit <region>`). A killed run **resumes** (it skips MAP and the already-audited scopes), so longer unbounded runs are safe to interrupt.
+`prepare` and the sealed verbs are **unbounded by default** (a run ends when the model is done, not at a step count) — a fixed budget silently truncates useful acquisition or a productive dig. Standard coverage caps only the next dig batch to 30 scopes; it does not cap prepare, map, or per-scope dig turns. Cap a phase only when you want to: `--max-steps` for `prepare`, `--map-steps` / `--dig-steps` for map/dig, or `--max-steps` for `run --quick` / `audit <region>`. A killed run **resumes** (it skips MAP and the already-audited scopes), so longer unbounded runs are safe to interrupt.
 
 ## Most effective setup
 
