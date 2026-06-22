@@ -29,6 +29,9 @@ export interface ProjectSnapshot {
   auditConfirmedFindings?: number;
   reproducedBugs?: number;
   confirmedBugs?: number;
+  verifyPendingFindings?: number;
+  confirmPendingFindings?: number;
+  confirmDecisionCount?: number;
   activeRuns?: number;
   latestRun?: RunRow | null;
 }

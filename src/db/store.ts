@@ -280,6 +280,23 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function confirmMemberKeys(member: string): string[] {
+  const cleaned = member.trim();
+  const keys = new Set<string>();
+  const add = (value: string): void => {
+    const key = value.trim().replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+    if (/^k[0-9a-z]+$/.test(key)) keys.add(key);
+  };
+  add(cleaned);
+  const first = cleaned.split(/\s+/)[0] ?? "";
+  add(first);
+  const bracketed = cleaned.match(/^\[(k[0-9a-z]+)\]/i)?.[1];
+  if (bracketed) add(bracketed);
+  const embedded = cleaned.match(/\b(k[0-9a-z]+)\b/i)?.[1];
+  if (embedded) add(embedded);
+  return [...keys];
+}
+
 export class MetadataStore {
   private readonly db: InstanceType<typeof DatabaseSync>;
 
@@ -321,6 +338,7 @@ export class MetadataStore {
       }
     }
     this.ensureProjectUuids();
+    this.reconcileConfirmStatuses();
     this.db.prepare("INSERT INTO meta(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO NOTHING").run(String(SCHEMA_VERSION));
   }
 
@@ -329,6 +347,23 @@ export class MetadataStore {
     const update = this.db.prepare("UPDATE project SET uuid = ? WHERE id = ?");
     for (const row of rows) update.run(randomUUID(), row.id);
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_project_uuid ON project(uuid)");
+  }
+
+  private reconcileConfirmStatuses(): void {
+    const rows = this.db
+      .prepare("SELECT project_id, reproduced, members_json FROM confirm_decision WHERE reproduced IN ('yes','no') AND members_json IS NOT NULL")
+      .all() as Array<{ project_id: number; reproduced: string; members_json: string }>;
+    if (rows.length === 0) return;
+    const update = this.db.prepare("UPDATE finding SET confirm_status = ? WHERE project_id = ? AND finding_key = ? AND confirm_status IS NULL");
+    for (const row of rows) {
+      const members = jsonParseOrNull(row.members_json);
+      if (!Array.isArray(members)) continue;
+      const outcome = row.reproduced === "yes" ? "reproduced" : "not-reproduced";
+      for (const member of members) {
+        if (typeof member !== "string") continue;
+        for (const key of confirmMemberKeys(member)) update.run(outcome, row.project_id, key);
+      }
+    }
   }
 
   /** Open the store for a config's output root (DB lives at <outputDir>/flounder.db). */
@@ -818,7 +853,7 @@ export class MetadataStore {
       for (const r of rows) {
         stmt.run(projectId, runId, r.bug, r.reproduced ?? null, r.recommendation ?? null, jsonOrNull(r.members), r.decisionPath ?? decisionPath ?? null, ts);
         const outcome = r.reproduced === "yes" ? "reproduced" : r.reproduced === "no" ? "not-reproduced" : null;
-        if (outcome) for (const key of r.members ?? []) setConfirm.run(outcome, projectId, key);
+        if (outcome) for (const member of r.members ?? []) for (const key of confirmMemberKeys(member)) setConfirm.run(outcome, projectId, key);
       }
     });
   }

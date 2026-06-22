@@ -110,6 +110,14 @@ function projectHashFor(project: Pick<ProjectSnapshot, "uuid">): string {
   return projectHash(project.uuid);
 }
 
+const PROJECT_ACCENTS = ["#2563eb", "#059669", "#d97706", "#dc2626", "#0891b2", "#7c3aed", "#475569", "#be123c"];
+
+function projectAccent(uuid: string): string {
+  let hash = 0;
+  for (let i = 0; i < uuid.length; i += 1) hash = ((hash << 5) - hash + uuid.charCodeAt(i)) | 0;
+  return PROJECT_ACCENTS[Math.abs(hash) % PROJECT_ACCENTS.length] ?? PROJECT_ACCENTS[0]!;
+}
+
 function plural(n: number, word: string, pluralWord = `${word}s`): string {
   return `${n} ${n === 1 ? word : pluralWord}`;
 }
@@ -287,7 +295,8 @@ function projectBadgeStatus(project: ProjectSnapshot): string | null | undefined
   const total = project.progress?.total ?? 0;
   const pending = project.progress?.pending ?? 0;
   if (total > 0 && pending > 0) return "partial";
-  return latest;
+  if ((project.verifyPendingFindings ?? 0) > 0 || (project.confirmPendingFindings ?? 0) > 0) return "partial";
+  return latest ?? (total > 0 ? "done" : undefined);
 }
 
 function phaseLabel(phase: "prepare" | "map" | "dig" | "confirm"): string {
@@ -1349,11 +1358,13 @@ function ProjectSidebar({ projects, selected, onSelect, onNew }: { projects: Pro
             <button
               type="button"
               className={`project-row${selected === project.uuid ? " sel" : ""}`}
+              style={{ "--project-color": projectAccent(project.uuid) } as React.CSSProperties}
               aria-current={selected === project.uuid ? "page" : undefined}
               aria-label={`Open project ${project.name}`}
               onClick={() => onSelect(project.uuid)}
             >
               <span className="project-row-top">
+                <span className="project-dot" aria-hidden="true" />
                 <span className="project-name">{shortName(project.name, 31)}</span>
                 <StateBadge status={projectBadgeStatus(project)} />
               </span>
@@ -1370,13 +1381,19 @@ function ProjectProgress({ project }: { project: ProjectSnapshot }) {
   const total = project.progress?.total ?? 0;
   const audited = project.progress?.audited ?? 0;
   const confirmed = totalConfirmed(project);
+  const reproduced = project.reproducedBugs ?? project.confirmedBugs ?? 0;
   const suspected = statusCount(project, "suspected");
+  const confirmPending = project.confirmPendingFindings ?? 0;
   return (
     <span className="project-progress">
       {total > 0 ? <span className="mini-progress"><span style={{ width: `${pct(audited, total)}%` }} /></span> : null}
-      <span className="muted">{total > 0 ? `${audited}/${total} scopes` : `${project.findingsTotal ?? 0} findings`}</span>
-      {confirmed > 0 ? <span className="good"> {confirmed} confirmed</span> : null}
-      {suspected > 0 ? <span className="muted"> · {suspected} suspected</span> : null}
+      <span className="project-progress-line">
+        <span className="muted">{total > 0 ? `${audited}/${total} scopes` : `${project.findingsTotal ?? 0} findings`}</span>
+        {reproduced > 0 ? <span className="good">{reproduced} reproduced</span> : null}
+        {confirmed > 0 ? <span>{confirmed} verified</span> : null}
+        {confirmPending > 0 ? <span>{confirmPending} confirm pending</span> : null}
+        {suspected > 0 ? <span className="muted">{suspected} suspected</span> : null}
+      </span>
     </span>
   );
 }

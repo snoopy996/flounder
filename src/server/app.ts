@@ -1976,7 +1976,14 @@ function projectSnapshots(store: MetadataStore): Array<Record<string, unknown>> 
   return store.listProjects().map((project) => {
     const id = Number(project.id);
     const findings = reportableFindings(store.listFindings(id));
+    const counts = findingCounts(findings);
     const reproducedBugs = store.countConfirmedBugs(id);
+    const confirmDecisions = store.listConfirmDecisions(id);
+    const verifyPendingFindings = (counts.suspected ?? 0) + (counts["confirmed-source"] ?? 0);
+    const confirmPendingFindings = findings.filter((finding) => {
+      const status = String(finding.status ?? "");
+      return (status === "confirmed-executable" || status === "confirmed-differential") && !finding.confirm_status;
+    }).length;
     return {
       id,
       uuid: project.uuid,
@@ -1986,11 +1993,14 @@ function projectSnapshots(store: MetadataStore): Array<Record<string, unknown>> 
       dir: project.dir ?? null,
       config: safeParse(project.config_json),
       progress: store.scopeProgress(id),
-      findingCounts: findingCounts(findings),
+      findingCounts: counts,
       findingsTotal: findings.length,
       auditConfirmedFindings: countAuditConfirmedFindings(findings),
       reproducedBugs,
       confirmedBugs: reproducedBugs,
+      verifyPendingFindings,
+      confirmPendingFindings,
+      confirmDecisionCount: confirmDecisions.length,
       runCount: store.countRuns(id),
       latestRun: store.latestRun(id) ?? null,
       activeRuns: activeByTarget.get(String(project.name)) ?? 0,
