@@ -1159,7 +1159,8 @@ function summarizePrepareRealTarget(value: unknown): PrepareRealTargetSummary {
   const mode = explicitMode || (requiresConfirmation === true ? "deployed" : requiresConfirmation === false ? "source-only" : "");
   if (!mode) issues.push("real_target.mode is missing");
   const guidance = objectValue(row.confirm_guidance) ?? objectValue(row.confirmGuidance);
-  const methodFallback = stringValue(row.method ?? row.read_only_method ?? row.readOnlyMethod);
+  const guidanceText = stringValue(row.confirm_guidance ?? row.confirmGuidance);
+  const methodFallback = stringValue(row.method ?? row.read_only_method ?? row.readOnlyMethod) || guidanceText;
   if (requiresConfirmation !== false && !guidance && !methodFallback) issues.push("real_target.confirm_guidance is missing");
   const ground = Array.isArray(row.ground_truth)
     ? row.ground_truth

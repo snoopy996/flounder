@@ -826,6 +826,72 @@ test("api: source-only prepare does not require real-target confirm guidance", a
   });
 });
 
+test("api: prepare summary accepts string real-target confirm guidance", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    const created = await json(await post("/api/projects", { name: "string-confirm-guidance" }));
+    const runDir = path.join(out, "string-confirm-guidance-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(path.join(workspace, "contracts"), { recursive: true });
+    await writeFile(path.join(workspace, "contracts", "Rollup.sol"), "contract Rollup {}\n");
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        status: "done",
+        clue: "deployed target with string guidance",
+        posture: "blind",
+        answer_firewall: "clean",
+        real_target: {
+          requires_confirmation: true,
+          mode: "deployed",
+          reason: "A deployed contract is in scope.",
+          ground_truth: [
+            {
+              kind: "chain",
+              network: "ethereum-mainnet",
+              chain_id: 1,
+              address: "0x1111111111111111111111111111111111111111",
+              role: "rollup",
+              block: "latest",
+              source_match: "matched",
+              evidence: "official docs",
+              staged_component: "contracts/Rollup.sol",
+            },
+          ],
+          confirm_guidance: "Use read-only RPC or a local fork; never broadcast.",
+        },
+        components: [
+          {
+            identity: "rollup",
+            platform: "ethereum-mainnet",
+            revision: "block 1",
+            source: "verified",
+            staged_path: "contracts/Rollup.sol",
+            in_scope: true,
+            match: "matched",
+          },
+        ],
+        gaps: [],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const runId = store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(runId, "done");
+    } finally {
+      store.close();
+    }
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.prepareSummary.realTarget.guidance.required, true);
+    assert.equal(detail.prepareSummary.realTarget.guidance.recommendedMethod, "Use read-only RPC or a local fork; never broadcast.");
+    assert.ok(!detail.prepareSummary.issues.includes("real_target.confirm_guidance is missing"));
+  });
+});
+
 test("api: unresolved prepare manifest status is surfaced as limited materials", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
