@@ -88,7 +88,7 @@ export async function runReport(
       tools: buildReportTools(),
       logger,
       cwd: workspace.absolute,
-      fileManifest: renderFileManifest(source, corpus),
+      fileManifest: renderReportFileManifest(source, corpus, options.findings),
       report: seed,
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.onActivity ? { onActivity: options.onActivity } : {}),
@@ -178,10 +178,23 @@ function safeReportId(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "finding";
 }
 
-function renderFileManifest(source: Doc[], corpus: Doc[]): string {
-  const lines = source.map((doc) => `- source ${publicPath(doc.path)} (${doc.content.length} chars)`);
-  lines.push(...corpus.map((doc) => `- corpus ${publicPath(doc.path)} (${doc.content.length} chars)`));
-  return lines.join("\n") || "(no files loaded)";
+export function renderReportFileManifest(source: Doc[], corpus: Doc[], findings: ReportFindingInput[]): string {
+  const relevant = reportPathHints(findings).slice(0, 80);
+  const sourceLines = source.slice(0, 300).map((doc) => `- source ${publicPath(doc.path)} (${doc.content ? doc.content.split("\n").length : 0} lines)`);
+  const corpusLines = corpus.slice(0, 120).map((doc) => `- corpus ${publicPath(doc.path)} (${doc.content ? doc.content.split("\n").length : 0} lines)`);
+  const sections: string[] = [];
+
+  sections.push(`Loaded workspace source: ${source.length} files. The list below is intentionally capped for report mode; use read with exact evidence paths or bash purpose="inspect" (rg/find/ls/sed/cat/jq) to inspect any copied workspace file needed for accuracy.`);
+  if (relevant.length > 0) {
+    sections.push(`Report-relevant path hints from findings and reproduced decisions:\n${relevant.map((entry) => `- ${entry}`).join("\n")}`);
+  }
+  if (sourceLines.length > 0) {
+    sections.push(`Source inventory sample (${sourceLines.length}/${source.length} shown):\n${sourceLines.join("\n")}${source.length > sourceLines.length ? `\n…and ${source.length - sourceLines.length} more source files` : ""}`);
+  }
+  if (corpusLines.length > 0) {
+    sections.push(`Corpus inventory sample (${corpusLines.length}/${corpus.length} shown):\n${corpusLines.join("\n")}${corpus.length > corpusLines.length ? `\n…and ${corpus.length - corpusLines.length} more corpus files` : ""}`);
+  }
+  return sections.join("\n\n") || "(no files loaded)";
 }
 
 function historyLocation(cfg: AuditorConfig): { outputDir: string; targetName: string; historyDir?: string } {
@@ -190,4 +203,42 @@ function historyLocation(cfg: AuditorConfig): { outputDir: string; targetName: s
     targetName: cfg.targetName,
     ...(cfg.historyDir ? { historyDir: cfg.historyDir } : {}),
   };
+}
+
+function reportPathHints(findings: ReportFindingInput[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string | undefined): void => {
+    if (!value) return;
+    for (const hint of extractPathLikeTokens(value)) {
+      const normalized = hint.replace(/^\.\/+/, "").replace(/,$/, "");
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+    }
+  };
+  for (const finding of findings) {
+    add(finding.location);
+    add(finding.evidence);
+    add(finding.description);
+    add(finding.exploitSketch);
+    add(finding.fix);
+    if (finding.decisions) add(JSON.stringify(finding.decisions));
+  }
+  return out;
+}
+
+function extractPathLikeTokens(text: string): string[] {
+  const exts = [
+    "rs", "sol", "nr", "ts", "tsx", "js", "jsx", "mjs", "cjs", "cpp", "cc", "c", "hpp", "h", "go", "py",
+    "json", "toml", "yaml", "yml", "md", "txt", "cairo", "move", "circom", "proto", "graphql", "gql",
+  ];
+  const pattern = new RegExp(`(?:^|[\\s"'()\\[\\]{},;])([A-Za-z0-9_.@/-]+\\.(${exts.join("|")})(?::\\d+(?:-\\d+)?)?)`, "gi");
+  const out: string[] = [];
+  for (const match of text.matchAll(pattern)) {
+    const value = match[1];
+    if (!value || value.includes("..")) continue;
+    out.push(value);
+  }
+  return out;
 }

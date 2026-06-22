@@ -9,9 +9,10 @@ import { buildTools, describeAction, ingestFindingsFromScratch, newSession, dedu
 import { runAudit } from "../dist/agent/audit.js";
 import { normalizePrepareManifest } from "../dist/agent/acquire.js";
 import { runAuditLoop, isTransientError } from "../dist/agent/loop.js";
-import { buildDeepKickoff, buildMapKickoff, AUDIT_DEEP_SYSTEM, AUDIT_SYSTEM, AUDIT_VERIFY_SYSTEM, MAP_GRANULARITY_RULES, MAP_SYSTEM, POC_TRUST_RULE } from "../dist/agent/prompts.js";
+import { buildDeepKickoff, buildMapKickoff, AUDIT_CONFIRM_SYSTEM, AUDIT_DEEP_SYSTEM, AUDIT_SYSTEM, AUDIT_VERIFY_SYSTEM, MAP_GRANULARITY_RULES, MAP_SYSTEM, POC_TRUST_RULE } from "../dist/agent/prompts.js";
 import { runDifferentialConfirmation } from "../dist/agent/differential.js";
 import { runRefutation } from "../dist/agent/refutation.js";
+import { renderReportFileManifest } from "../dist/agent/report.js";
 import { buildSessionPrompt, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapThinkingLevel, toolSchemas } from "../dist/agent/pi-session.js";
 import { MockAuditLlmClient } from "../dist/llm/mock.js";
 import { RunLogger } from "../dist/trace/logger.js";
@@ -99,7 +100,13 @@ test("prompt contract keeps attacker-faithful PoC rule on legacy and pi-session 
   const reportPrompt = buildSessionPrompt({ cfg: defaultConfig(), fileManifest: "x.rs", report: "[]" });
   assert.ok(reportPrompt.includes("No-fabrication rule"), "report mode should prohibit unsupported report details");
   assert.ok(reportPrompt.includes("checking any source/evidence needed for accuracy"), "report mode should verify code/evidence before writing");
+  assert.ok(reportPrompt.includes("## Evidence Basis"), "formal reports should expose the evidence base");
+  assert.ok(reportPrompt.includes("source, corpus, PoC files, or artifacts"), "report mode should inspect missing details instead of guessing");
   assert.ok(reportPrompt.includes("If a detail is not established"), "report mode should surface evidence gaps instead of inventing details");
+
+  assert.ok(AUDIT_CONFIRM_SYSTEM.includes("Report accuracy rule"), "confirm-generated reports should carry the no-fabrication contract");
+  assert.ok(AUDIT_CONFIRM_SYSTEM.includes("## Evidence Basis"), "confirm-generated reports should expose the evidence base");
+  assert.ok(AUDIT_CONFIRM_SYSTEM.includes("Not established by the available evidence"), "confirm-generated reports should preserve uncertainty");
 });
 
 test("prepare manifest normalization turns ended in-progress manifests into terminal states", () => {
@@ -121,6 +128,31 @@ test("prepare manifest normalization turns ended in-progress manifests into term
     { components: 0, matched: 0, unverified: 0, sourcePinned: 0, issues: ["ignored"] },
   );
   assert.equal(existing.status, "verified");
+});
+
+test("report manifest is compact but keeps finding-relevant path hints", () => {
+  const source = Array.from({ length: 500 }, (_, idx) => ({
+    path: `source/pkg/file-${idx}.ts`,
+    content: `export const x${idx} = ${idx};\n`,
+    kind: "source",
+  }));
+  const manifest = renderReportFileManifest(source, [], [
+    {
+      findingId: 1,
+      findingKey: "k1",
+      title: "Bug",
+      location: "source/pkg/critical.ts:44",
+      evidence: "The reproduced command cited source/pkg/critical.ts:44 and source/pkg/helper.nr:12.",
+      decisions: [{ repro_evidence: "cmd1 exercised source/pkg/critical.ts:44" }],
+    },
+  ]);
+
+  assert.ok(manifest.includes("Loaded workspace source: 500 files"));
+  assert.ok(manifest.includes("Report-relevant path hints"));
+  assert.ok(manifest.includes("source/pkg/critical.ts:44"));
+  assert.ok(manifest.includes("source/pkg/helper.nr:12"));
+  assert.ok(manifest.includes("300/500 shown"));
+  assert.ok(!manifest.includes("source/pkg/file-499.ts"));
 });
 
 test("project memory persists notes and recalls by keyword overlap", async () => {

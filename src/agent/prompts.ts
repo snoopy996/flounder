@@ -389,11 +389,16 @@ Supply repro_command_id + fix_patch + patched_success_patterns whenever a row's 
 
 Formal submission reports — for every row with "reproduced":"yes" and recommendation "submit-candidate" or "needs-human", also write ONE Markdown report at the workspace root named report_<first member id>.md, where <first member id> is the first value in members lowercased and sanitized to [a-z0-9_.-]. This file is the user-facing, submission-ready report for that single distinct bug. Do not emit done until confirm_decision.json and the required report_*.md files are written.
 
+Report accuracy rule: the report is not a place to smooth over missing evidence. Every concrete detail must come from the reproduced decision row, the passing command/artifact, source/corpus you inspected, or bounded public corroboration/novelty checks. Before writing each report, verify title/root cause/location, attacker capability, impact, affected version/deployment, fix guidance, and novelty/disclosure state against that evidence. If a detail is missing or ambiguous, do targeted source/corpus/artifact inspection; if it still is not established, say "Not established by the available evidence" or list it as a human gate. Do not invent impact, versions, exploitability, affected deployments, novelty, fix validation, or proof details.
+
 Use this report template exactly, but fill it with target-specific content and concise evidence:
 # <clear vulnerability title>
 
 ## Summary
 One short paragraph explaining the bug and affected security property.
+
+## Evidence Basis
+Bullet list of the reproduced decision row, command/artifact ids, source/corpus paths, and report-run inspections that support the report. If an expected item is unavailable, say so here.
 
 ## Severity
 Severity, rationale, and affected asset or trust boundary. Do not invent CVSS; include it only if you can justify every vector.

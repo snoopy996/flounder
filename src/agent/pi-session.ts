@@ -213,15 +213,19 @@ export async function runAuditSession(input: {
       return;
     }
     if (input.report) {
-      if ([...input.ctx.session.scratchFiles.keys()].some((key) => /^report_[a-z0-9_.-]+\.md$/.test(key) || /\/report_[a-z0-9_.-]+\.md$/.test(key))) return;
+      let missing = missingReportFiles(input.report, input.ctx.session.scratchFiles);
+      if (missing.length === 0) return;
       finalizing = true;
-      await input.logger.event("audit_report_finalize", { reason: "no report markdown before stop" });
-      try {
-        await session.prompt(REPORT_FINALIZE_PROMPT);
-      } catch {
-        // best-effort
+      for (let attempt = 1; attempt <= 3 && missing.length > 0; attempt += 1) {
+        await input.logger.event("audit_report_finalize", { reason: "missing required report markdown", attempt, missing });
+        try {
+          await session.prompt(buildReportFinalizePrompt(input.report, missing));
+        } catch {
+          // best-effort
+        }
+        missing = missingReportFiles(input.report, input.ctx.session.scratchFiles);
       }
-      await input.logger.event("audit_report_finalize_done", { hasReport: [...input.ctx.session.scratchFiles.keys()].some((key) => /^report_[a-z0-9_.-]+\.md$/.test(key) || /\/report_[a-z0-9_.-]+\.md$/.test(key)) });
+      await input.logger.event("audit_report_finalize_done", { hasReport: missing.length === 0, missing });
       return;
     }
     if (input.map) {
@@ -444,7 +448,21 @@ ${input.fileManifest}
 Consolidate the findings into distinct bugs, reproduce each distinct bug against real ground truth, check novelty/corroboration online (leads only, never proof), then write confirm_decision.json and emit done.`;
 }
 
-const REPORT_FINALIZE_PROMPT = `Your budget is spent. Do NOT inspect anything else. Based ONLY on the reproduced decision data, existing evidence, and source/code facts you already checked, WRITE the missing report_*.md files now at the workspace root. If a detail is not established, say "Not established by the available evidence" or list it as a human gate. Do NOT invent impact, versions, exploitability, affected deployments, novelty, or fix validation. After writing the reports, emit {"done": true}. Output only write tool calls followed by done.`;
+function buildReportFinalizePrompt(reportSeed: string, missingFiles: string[]): string {
+  return `The REPORT phase stopped before all required files were written.
+
+You must now finish the missing formal report files by calling the write tool. Missing files:
+${missingFiles.map((file) => `- ${file}`).join("\n")}
+
+Use the reproduced decision data and evidence below. If exact source details are still needed, you may make a small number of read or bash purpose="inspect" checks before writing. If a detail is not established, say "Not established by the available evidence" or list it as a human gate. Do NOT invent impact, versions, exploitability, affected deployments, novelty, fix validation, or proof details.
+
+For each missing report, verify the title/root cause/location, attacker capability, impact, reproduction result, and fix/novelty claims against the supplied evidence. When any of those fields is absent or ambiguous, do a targeted source/corpus/artifact inspection before writing. If the inspection still does not establish the detail, keep the report useful by naming the limitation instead of filling it in.
+
+Reports to write:
+${reportSeed}
+
+Write every missing report at the workspace root with its exact required_file name, then emit {"done": true}.`;
+}
 
 function buildReportSessionPrompt(input: { report: string; fileManifest: string; memoryHint?: string }): string {
   return `You are the REPORT phase of Flounder, an autonomous white-hat security auditor.
@@ -458,6 +476,8 @@ No-fabrication rule: every concrete statement in the report must be supported by
 - command output you produced in this report run.
 If a detail is not established, write that it is not established or list it under human gates. Never fill gaps with plausible security-report language.
 
+Before writing each report, verify these fields against evidence: title/root cause/location, attacker capability, impact, reproduction result, affected version/deployment, recommended fix, and novelty/disclosure state. If any field is missing, stale, or ambiguous in the supplied decision data, use read or bash purpose="inspect" to check the copied source, corpus, PoC files, or artifacts. Use the report to preserve uncertainty: "Not established by the available evidence" is correct when the daemon cannot prove a detail.
+
 Write exactly one Markdown file per requested bug at the specified workspace-root filename. These files are persisted to the product DB and shown to users as the official report. Do not emit done until every required file is written.
 
 Use this template for each file:
@@ -465,6 +485,9 @@ Use this template for each file:
 
 ## Summary
 One concise paragraph explaining the bug and the violated security property.
+
+## Evidence Basis
+Bullet list of the reproduced decision row, command/artifact ids, source/corpus paths, and any report-run inspections that support the report. If an expected item is unavailable, say so here.
 
 ## Severity
 Severity, rationale, affected asset or trust boundary, and confidence. Do not invent CVSS; include it only if justified.
@@ -506,6 +529,34 @@ Loaded source files:
 ${input.fileManifest}
 
 Begin by checking any source/evidence needed for accuracy, then write every required report_*.md file and emit done.`;
+}
+
+function requiredReportFiles(reportSeed: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(reportSeed);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: string[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const file = (item as Record<string, unknown>).required_file;
+    if (typeof file === "string" && /^report_[a-z0-9_.-]+\.md$/.test(file)) out.push(file);
+  }
+  return [...new Set(out)];
+}
+
+function missingReportFiles(reportSeed: string, scratchFiles: Map<string, string>): string[] {
+  const required = requiredReportFiles(reportSeed);
+  const existing = new Set<string>();
+  for (const [file, content] of scratchFiles) {
+    if (!content.trim()) continue;
+    const basename = file.split("/").pop() ?? file;
+    if (/^report_[a-z0-9_.-]+\.md$/.test(basename)) existing.add(basename);
+  }
+  return required.filter((file) => !existing.has(file));
 }
 
 function verifyIntro(claim: string): string {
