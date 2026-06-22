@@ -45,6 +45,29 @@ test("a build command still cannot smuggle a remote/mainnet target in its argv",
 test("arbitrary non-build, non-test, non-inspection commands stay blocked", () => {
   assert.equal(analyzeAgentBashCommandSafety(cmd("curl", "https://evil.example")).blocked, true);
   assert.equal(analyzeAgentBashCommandSafety(cmd("rm", "-rf", "x")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("python3", "-c", "print('unchecked script')")).blocked, true);
+});
+
+test("agent bash allows readonly tool discovery, version, and local JSON inspection", () => {
+  for (const c of [
+    cmd("which", "nargo"),
+    cmd("nargo", "--version"),
+    cmd("forge", "--version"),
+    cmd("jq", ".", "provenance/mainnet_rpc_state_20260614.json"),
+    cmd("python3", "-m", "json.tool", "provenance/mainnet_rpc_state_20260614.json"),
+  ]) {
+    assert.equal(analyzeAgentBashCommandSafety(c).blocked, false, `${c.program} ${c.args.join(" ")} should be readonly inspection`);
+    assert.equal(isAgentBuildCommand(c), false, `${c.program} ${c.args.join(" ")} should not be a build command`);
+    assert.equal(isAgentConfirmCommand(c), false, `${c.program} ${c.args.join(" ")} should not confirm findings`);
+  }
+});
+
+test("agent bash distinguishes RPC-named local files from RPC secret references", () => {
+  assert.equal(analyzeAgentBashCommandSafety(cmd("rg", "Inbox", "provenance/mainnet_rpc_state_20260614.json")).blocked, false);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("cat", "provenance/MAINNET_RPC_STATE.json")).blocked, false);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("cat", "$MAINNET_RPC_URL")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("cat", "${MAINNET_RPC_URL}")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("cat", "MAINNET_RPC_URL")).blocked, true);
 });
 
 test("command safety policy blocks live-network broadcast-like commands", () => {

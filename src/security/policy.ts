@@ -326,15 +326,70 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
 function isAllowedLocalInspectionCommand(program: string, args: string[]): boolean {
   const name = program.toLowerCase();
   if (name === "pwd") return args.length === 0;
-  if (name === "cmake" || name === "ninja" || name === "make" || name === "gmake") return args.length === 1 && args[0] === "--version";
+  if (name === "which") return args.length > 0 && args.every(isPlainToolName);
+  if (isAllowedVersionInspection(name, args)) return true;
+  if (isAllowedJsonToolInspection(name, args)) return true;
   if (name === "ls") return args.every((arg) => isSafeInspectionArg(name, arg));
   if (name === "find") return args.every((arg) => isSafeInspectionArg(name, arg));
-  if (name === "rg" || name === "grep") return args.every((arg) => isSafeInspectionArg(name, arg));
+  if (name === "rg" || name === "grep" || name === "jq") return args.every((arg) => isSafeInspectionArg(name, arg));
   if (name === "sed") return args.every((arg) => isSafeInspectionArg(name, arg));
   if (["cat", "head", "tail", "wc", "sort", "uniq", "cut"].includes(name)) {
     return args.every((arg) => isSafeInspectionArg(name, arg));
   }
   return false;
+}
+
+function isAllowedVersionInspection(program: string, args: string[]): boolean {
+  if (args.length !== 1) return false;
+  const flag = args[0]?.toLowerCase();
+  if (!flag || !["--version", "-v", "-version", "version"].includes(flag)) return false;
+  return new Set([
+    "anvil",
+    "bb",
+    "bun",
+    "cargo",
+    "cast",
+    "chisel",
+    "cmake",
+    "deno",
+    "dotnet",
+    "forge",
+    "git",
+    "go",
+    "gmake",
+    "gradle",
+    "gradlew",
+    "jq",
+    "make",
+    "mvn",
+    "nargo",
+    "ninja",
+    "node",
+    "noir",
+    "npm",
+    "pip",
+    "pip3",
+    "pnpm",
+    "python",
+    "python3",
+    "rustc",
+    "rustup",
+    "solc",
+    "yarn",
+  ]).has(program);
+}
+
+function isAllowedJsonToolInspection(program: string, args: string[]): boolean {
+  if (program !== "python" && program !== "python3") return false;
+  if (args[0] !== "-m" || args[1] !== "json.tool") return false;
+  const rest = args.slice(2);
+  const paths = rest.filter((arg) => !arg.startsWith("-"));
+  if (paths.length > 1) return false;
+  return rest.every((arg) => isSafeInspectionArg(program, arg));
+}
+
+function isPlainToolName(input: string): boolean {
+  return /^[A-Za-z0-9._+-]+$/.test(input);
 }
 
 function isSafeInspectionArg(program: string, arg: string): boolean {
@@ -397,5 +452,7 @@ function isLocalUrl(input: string): boolean {
 }
 
 function looksLikeRpcEnvReference(input: string): boolean {
-  return /(?:^|[${_%])(?:[A-Z0-9_]*(?:RPC|ALCHEMY|INFURA|QUICKNODE|MORALIS|ETHERSCAN|PRIVATE_KEY|MNEMONIC|TOKEN|SECRET)[A-Z0-9_]*)/i.test(input);
+  const envName = "[A-Z][A-Z0-9_]*(?:RPC|ALCHEMY|INFURA|QUICKNODE|MORALIS|ETHERSCAN|PRIVATE_KEY|MNEMONIC|TOKEN|SECRET)[A-Z0-9_]*";
+  const pattern = new RegExp(`^(?:\\$\\{?${envName}\\}?|%${envName}%|${envName})(?:=.*)?$`);
+  return pattern.test(input.trim());
 }
