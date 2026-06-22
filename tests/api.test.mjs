@@ -186,6 +186,52 @@ test("api: project prepare defaults leave prepare turns unbounded", async () => 
   });
 });
 
+test("api: project prepare reuses prior neutral clue when resolving materials", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "neutral-material-resolution",
+      dir: "neutral-project-dir",
+      config: { scopeCoverageMode: "standard", maxScopes: 30 },
+    }));
+    const runDir = path.join(out, "neutral-material-resolution-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        clue: "official source and deployment material for neutral project",
+        posture: "blind",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only",
+          ground_truth: [],
+          confirm_guidance: { required: false, not_required_reason: "source-only fixture" },
+        },
+        components: [],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const runId = store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(runId, "done");
+    } finally {
+      store.close();
+    }
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "prepare" }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+    assert.equal(spec.verb, "prepare");
+    assert.equal(spec.clue, "official source and deployment material for neutral project");
+    assert.equal(spec.posture, "blind");
+    assert.equal(spec.matchDeployed, true);
+  });
+});
+
 test("api: project run one-off coverage options are copied into the queued launch spec", async () => {
   await withServer(async (base) => {
     const json = (r) => r.json();

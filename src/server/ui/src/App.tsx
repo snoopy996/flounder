@@ -43,7 +43,7 @@ type SettingsPane = "providers" | "daemons";
 type ProjectTab = "overview" | "findings" | "scopes" | "runs" | "setup";
 type ModalName = "new-project" | "run" | "edit-project" | "report" | "run-log" | "artifact" | null;
 type ArtifactPreview = { title: string; runId: number; name: string };
-type LaunchAction = "run" | "map" | "audit" | "confirm" | "verify" | "report";
+type LaunchAction = "run" | "prepare" | "map" | "audit" | "confirm" | "verify" | "report";
 
 interface RouteState {
   view: View;
@@ -3481,6 +3481,12 @@ function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError 
   };
   const options: Array<{ verb: LaunchAction; label: string; detail: string; disabled?: boolean }> = [
     { verb: "run", label: "Continue audit", detail: "Prepare if needed, map scopes if needed, then dig the next batch.", disabled: locked },
+    {
+      verb: "prepare",
+      label: detail.prepareSummary?.quality === "ready" ? "Refresh materials" : "Resolve materials",
+      detail: "Re-run Prepare to acquire official source/docs, pin provenance, and close material or real-target gaps before sealed auditing.",
+      disabled: locked,
+    },
     { verb: "map", label: "Map scopes only", detail: "Build or refresh the scope inventory without digging.", disabled: locked },
     { verb: "audit", label: "Dig pending scopes", detail: pendingScopes ? `Deep-audit the next pending batch from ${plural(pendingScopes, "mapped scope")}.` : "Disabled until Map scopes creates pending scope inventory.", disabled: locked || pendingScopes === 0 },
     { verb: "verify", label: verifyButtonLabel(verifiable), detail: verifiable ? `Confirm-or-refute ${plural(verifiable, "candidate")} by local execution.` : "Disabled until synthesis or dig leaves suspected candidates.", disabled: locked || verifiable === 0 },

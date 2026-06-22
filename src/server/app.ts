@@ -1425,6 +1425,7 @@ async function runLaunch(c: Ctx): Promise<void> {
   const runs = c.store.listRuns(projectId, 50);
   const progress = c.store.scopeProgress(projectId);
   const spec = launchSpec(project, body, c.out, profile, progress, phaseProfiles);
+  if (spec.verb === "prepare") applyProjectPrepareDefaults(spec, project, runs);
   const prepared = applyPreparedWorkspaceIfNeeded(spec, runs);
   if (!prepared.ok) return sendJson(c.res, 400, { error: prepared.error });
   const materialDrift = verifyMaterialDrift(c.store, projectId, spec.verifyFindings, body.allowMaterialDrift === true);
@@ -1483,6 +1484,17 @@ async function runLaunch(c: Ctx): Promise<void> {
   const jobId = c.store.enqueueJob(spec.target, spec, daemonId);
   c.plane.nudge();
   sendJson(c.res, 200, { jobId, verb: spec.verb, queued: true, daemons: c.plane.daemonCount(daemonId), daemonId });
+}
+
+function applyProjectPrepareDefaults(spec: LaunchSpec, project: Record<string, unknown>, runs: Array<Record<string, unknown>>): void {
+  const previousPrepare = latestPrepareSummary(runs);
+  if (!spec.clue) {
+    spec.clue = stringValue(previousPrepare?.clue) || stringValue(project.dir) || stringValue(project.name);
+  }
+  if (!spec.posture) {
+    spec.posture = stringValue(previousPrepare?.posture) || "blind";
+  }
+  if (spec.matchDeployed === undefined) spec.matchDeployed = true;
 }
 
 function selectedFindingIds(body: Record<string, unknown>): number[] {
