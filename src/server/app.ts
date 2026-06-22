@@ -1859,7 +1859,10 @@ function phaseProviderProfiles(project: Record<string, unknown>, store: Metadata
 function launchSpec(project: Record<string, unknown>, body: Record<string, unknown>, out: string, profile?: ProviderProfile, progress?: Coverage, phaseProfiles: PhaseProfiles = {}): LaunchSpec {
   const cfg = (safeParse(project.config_json) as Record<string, unknown>) ?? {};
   const overrides = (body.overrides as Record<string, unknown>) ?? {};
-  const merged = { ...cfg, ...((overrides.config as Record<string, unknown>) ?? {}), ...runBodyConfigOverrides(body) };
+  const configOverrides = (overrides.config as Record<string, unknown>) ?? {};
+  const bodyOverrides = runBodyConfigOverrides(body);
+  const merged = { ...cfg, ...configOverrides, ...bodyOverrides };
+  const explicitRunMaxScopes = configOverrides.maxScopes !== undefined || bodyOverrides.maxScopes !== undefined;
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
   const backend = (v: unknown): "auto" | "oci" | "host" | undefined => (v === "auto" || v === "oci" || v === "host" ? v : undefined);
@@ -1907,7 +1910,7 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
     model: phaseModel(primaryPhase) ?? str(primaryProfile?.model) ?? str(merged.model),
     thinking: phaseThinking(primaryPhase) ?? str(primaryProfile?.thinking) ?? str(merged.thinking),
     models: Object.keys(roles).length > 0 ? roles : legacyRoles,
-    maxScopes: resolveMaxScopes(merged, progress),
+    maxScopes: resolveMaxScopes(merged, progress, explicitRunMaxScopes),
     mapSteps: num(merged.mapSteps),
     digSteps: num(merged.digSteps),
     maxSteps: num(merged.maxSteps),
@@ -1960,9 +1963,10 @@ function runBodyConfigOverrides(body: Record<string, unknown>): Record<string, u
   return out;
 }
 
-function resolveMaxScopes(cfg: Record<string, unknown>, progress?: Coverage): number | undefined {
+function resolveMaxScopes(cfg: Record<string, unknown>, progress?: Coverage, explicitFirst = false): number | undefined {
   const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? Math.max(1, Math.floor(v)) : undefined);
   const explicit = num(cfg.maxScopes);
+  if (explicitFirst && explicit !== undefined) return explicit;
   const mode = typeof cfg.scopeCoverageMode === "string" ? cfg.scopeCoverageMode : "";
   const total = Math.max(0, Math.floor(progress?.total ?? 0));
   const pending = Math.max(0, Math.floor(progress?.pending ?? 0));

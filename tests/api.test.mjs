@@ -114,6 +114,24 @@ test("api: project run one-off coverage options are copied into the queued launc
   });
 });
 
+test("api: one-off maxScopes overrides the project's saved coverage mode", async () => {
+  await withServer(async (base) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "one-off-scope-cap",
+      sourcePaths: ["./src"],
+      config: { scopeCoverageMode: "standard" },
+    }));
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "audit", maxScopes: 5 }));
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.maxScopes, 5);
+  });
+});
+
 test("api: startup reconciles error runs that have successful terminal artifacts", async () => {
   const out = await mkdtemp(path.join(os.tmpdir(), "flounder-api-reconcile-"));
   const runDir = path.join(out, "artifact-success-run");
