@@ -170,7 +170,7 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "GET", path: "/api/projects/:uuid",
-    summary: "Project detail: config, prepare-material summary (prepareSummary.quality = ready|preparing|needs-review|missing|invalid), scope coverage, finding/run/confirmed counts, recent runs, confirm decisions.",
+    summary: "Project detail: config, prepare-material summary (prepareSummary.quality = ready|limited|preparing|needs-review|missing|invalid), scope coverage, finding/run/confirmed counts, recent runs, confirm decisions.",
     params: { uuid: "project UUID" },
     handler: projectGet,
   }),
@@ -976,14 +976,32 @@ function prepareSummaryQuality(input: {
   manifestState: string;
   issues: string[];
   gaps: string[];
-}): "ready" | "preparing" | "needs-review" | "missing" | "invalid" {
+}): "ready" | "limited" | "preparing" | "needs-review" | "missing" | "invalid" {
   if (input.manifestStatus === "invalid") return "invalid";
   if (input.manifestStatus === "missing") return input.runStatus === "running" ? "preparing" : "missing";
   if (input.runStatus === "running") return "preparing";
   const state = input.manifestState.trim().toLowerCase();
-  if (state && !["ready", "done", "complete", "completed", "verified"].includes(state)) return "needs-review";
-  if (input.issues.length > 0 || input.gaps.length > 0) return "needs-review";
+  if (state && !["ready", "done", "complete", "completed", "verified", "partial"].includes(state)) return "needs-review";
+  if (input.issues.some(isBlockingPrepareIssue)) return "needs-review";
+  if (state === "partial" || input.issues.length > 0 || input.gaps.length > 0) return "limited";
   return "ready";
+}
+
+function isBlockingPrepareIssue(issue: string): boolean {
+  const raw = issue.toLowerCase();
+  return raw.includes("prepare_manifest.json has not been written")
+    || raw.includes("prepare_manifest.json could not be parsed")
+    || raw.includes("prepare_manifest.json is not a json object")
+    || raw.includes("manifest lists no components")
+    || raw.includes("unresolved prepare placeholder")
+    || raw.includes("source origin is not pinned")
+    || raw.includes("real-target verification plan is missing")
+    || raw.includes("answer firewall is")
+    || raw.includes("requires confirmation but lists no ground truth")
+    || raw.includes("confirm_guidance is missing")
+    || raw.includes("confirm guidance is missing")
+    || raw.includes("but match is missing")
+    || raw.includes("but match is unknown");
 }
 
 function summarizePrepareComponent(component: Record<string, unknown>): Record<string, unknown> {

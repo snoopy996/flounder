@@ -1835,6 +1835,9 @@ function prepareMaterialsAttention(summary?: PrepareSummary | null): { tone: "wa
   const manifestPartial = manifestState && !["complete", "ready", "ok"].includes(manifestState) ? 1 : 0;
   const count = issues + gaps + manifestMissing + manifestPartial;
   if (count <= 0) return null;
+  if (summary.quality === "limited") {
+    return { tone: "warn", label: `Prepared materials have automation limits: ${plural(count, "note")}` };
+  }
   return {
     tone: summary.quality === "missing" ? "pending" : "warn",
     label: `Prepared materials need review: ${plural(count, "issue")}`,
@@ -2095,7 +2098,7 @@ function prepareMatchBadge(match?: string): { label: string; className: string; 
     return { label: "verified", className: "s-confirmed-source", title: `Verified source/deployment evidence: ${raw}` };
   }
   if (normalized.includes("unverified") || normalized.includes("partial") || normalized.includes("mixed")) {
-    return { label: normalized.includes("mixed") ? "mixed" : normalized.includes("partial") ? "partial" : "unverified", className: "s-suspected", title: `Needs review: ${raw}` };
+    return { label: normalized.includes("mixed") ? "mixed" : normalized.includes("partial") ? "partial" : "unverified", className: "s-suspected", title: `Trust boundary: ${raw}` };
   }
   return { label: raw, className: "s-discharged", title: `Reported source/deployment match status: ${raw}` };
 }
@@ -2106,10 +2109,12 @@ function PrepareMaterialsCard({ summary }: { summary: PrepareSummary }) {
   const gaps = summary.gaps ?? [];
   const realTarget = summary.realTarget;
   const manifestReady = summary.manifestStatus === "present";
-  const needsReview = summary.quality === "needs-review" || issues.length > 0 || gaps.length > 0;
+  const needsReview = summary.quality === "needs-review";
   const quality = summary.quality === "ready" ? "ok" : summary.quality === "preparing" || summary.quality === "missing" ? "pending" : "warn";
   const qualityLabel = summary.quality === "ready"
     ? "Ready for sealed audit"
+    : summary.quality === "limited"
+      ? "Ready with limits"
     : summary.quality === "preparing"
       ? "Preparing materials"
       : summary.quality === "missing"

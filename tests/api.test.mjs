@@ -49,7 +49,7 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
     const projectRun = cat.endpoints.find((e) => e.method === "POST" && e.path === "/api/projects/:uuid/runs");
     assert.match(projectRun.body.verb, /report/);
     assert.match(projectRun.body.scopeCoverageMode, /one-off coverage mode/);
-    assert.match(projectRun.body.maxScopes, /per-run scope cap/);
+    assert.match(projectRun.body.maxScopes, /one-off scope cap/);
     assert.match(projectRun.body.mapSteps, /one-off map turn cap/);
     assert.match(projectRun.body.digSteps, /one-off per-scope dig turn cap/);
     assert.match(projectRun.body.verifyFindings, /original row/);
@@ -685,7 +685,8 @@ test("api: prepare summary normalizes verified deployment evidence", async () =>
 
     const store = MetadataStore.openForOutput(out);
     try {
-      store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      const runId = store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(runId, "done");
     } finally {
       store.close();
     }
@@ -699,6 +700,7 @@ test("api: prepare summary normalizes verified deployment evidence", async () =>
     assert.equal(detail.prepareSummary.realTarget.guidance.recommendedMethod, "Use read-only RPC calls or a local fork; never broadcast.");
     assert.equal(detail.prepareSummary.realTarget.groundTruth[0].kind, "chain");
     assert.equal(detail.prepareSummary.realTarget.groundTruth[0].sourceMatch, "verified_full_sourcify");
+    assert.equal(detail.prepareSummary.quality, "limited");
     assert.deepEqual(detail.prepareSummary.issues, ["1 deployed component(s) are unverified and should be treated as trust boundaries"]);
   });
 });

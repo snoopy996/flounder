@@ -159,8 +159,10 @@ confirm the skill is discoverable before installing.
    - current phase: prepare, map, dig, confirm
    - live activity: `GET /api/runs/:id/log`
    - project state: `GET /api/projects/:uuid`
-   - prepare quality: `prepareSummary.quality` is `ready`, `preparing`,
-     `needs-review`, `missing`, or `invalid`
+   - prepare quality: `prepareSummary.quality` is `ready`, `limited`,
+     `preparing`, `needs-review`, `missing`, or `invalid`; `limited` means the
+     audit can continue automatically while recorded trust boundaries or
+     material gaps stay visible for later confirm/report decisions
    - findings: `GET /api/projects/:uuid/findings`
    - confirm decisions: `GET /api/projects/:uuid/confirm-decisions`
 
