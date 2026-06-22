@@ -399,6 +399,12 @@ test("an inspection command cannot forge confirmation by printing a success patt
     const inspect = await tool("bash").run({ cmd: "cat fake_evidence.txt" }, ctx);
     assert.match(inspect.observation, /\(inspect\)/);
     assert.ok(!/not confirmation-eligible/i.test(inspect.observation), "inspect runs must not show a confirmation verdict");
+
+    const events = (await readFile(logger.eventsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const inspectEvent = events.filter((event) => event.kind === "audit_command_run").at(-1);
+    assert.equal(inspectEvent.purpose, "inspect");
+    assert.equal(inspectEvent.ok, true, "successful inspect commands should render as successful activity");
+    assert.equal(inspectEvent.passed, false, "inspect commands are still not confirmation-eligible");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

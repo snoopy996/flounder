@@ -388,6 +388,7 @@ const bashTool: AgentTool = {
     await ctx.logger.event("audit_command_run", {
       runId,
       purpose: normalized.purpose,
+      ok: exitMatched,
       passed,
       exitCode: result.exitCode,
       expectedExitCode: result.expectedExitCode,
