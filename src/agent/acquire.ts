@@ -316,7 +316,7 @@ function validateRealTargetPlan(manifest: Record<string, unknown>, ctx: { issues
       : [];
   const guidance = objectRecord(realTarget.confirm_guidance) ?? objectRecord(realTarget.confirmGuidance);
   const methodFallback = str(realTarget.method ?? realTarget.read_only_method ?? realTarget.readOnlyMethod);
-  if (!guidance && !methodFallback) ctx.issues.push("real_target.confirm_guidance is missing");
+  if (requiredRaw !== false && !guidance && !methodFallback) ctx.issues.push("real_target.confirm_guidance is missing");
   const guidanceRequired = guidance ? guidance.required : undefined;
   if (guidance && typeof guidanceRequired === "boolean" && guidanceRequired !== requiredRaw) {
     ctx.issues.push("real_target.confirm_guidance.required disagrees with real_target.requires_confirmation");

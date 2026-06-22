@@ -1122,7 +1122,7 @@ function summarizePrepareRealTarget(value: unknown): PrepareRealTargetSummary {
   if (!mode) issues.push("real_target.mode is missing");
   const guidance = objectValue(row.confirm_guidance) ?? objectValue(row.confirmGuidance);
   const methodFallback = stringValue(row.method ?? row.read_only_method ?? row.readOnlyMethod);
-  if (!guidance && !methodFallback) issues.push("real_target.confirm_guidance is missing");
+  if (requiresConfirmation !== false && !guidance && !methodFallback) issues.push("real_target.confirm_guidance is missing");
   const ground = Array.isArray(row.ground_truth)
     ? row.ground_truth
     : Array.isArray(row.groundTruth)
@@ -1165,6 +1165,13 @@ function summarizePrepareRealTarget(value: unknown): PrepareRealTargetSummary {
       allowedNetworkActions: "",
       recommendedMethod: methodFallback,
       notRequiredReason: "",
+    };
+  } else if (requiresConfirmation === false) {
+    summary.guidance = {
+      required: false,
+      allowedNetworkActions: "none",
+      recommendedMethod: "",
+      notRequiredReason: summary.reason ?? "",
     };
   }
   return summary;

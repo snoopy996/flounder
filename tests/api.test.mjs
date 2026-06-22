@@ -702,6 +702,60 @@ test("api: prepare summary normalizes verified deployment evidence", async () =>
   });
 });
 
+test("api: source-only prepare does not require real-target confirm guidance", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    const created = await json(await post("/api/projects", { name: "source-only-no-guidance" }));
+    const runDir = path.join(out, "source-only-no-guidance-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(path.join(workspace, "source"), { recursive: true });
+    await writeFile(path.join(workspace, "source", "lib.rs"), "pub fn target() {}\n");
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        clue: "official source only",
+        posture: "blind",
+        scope_declaration: "Official source package only.",
+        answer_firewall: "clean",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only",
+          reason: "This target is source-only; no live deployment or published runtime is in scope.",
+          ground_truth: [],
+        },
+        components: [
+          {
+            identity: "source/package",
+            platform: "none",
+            revision: "v1.0.0",
+            source: "repo@tag",
+            staged_path: "source",
+            in_scope: true,
+            match: "n/a",
+          },
+        ],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+    } finally {
+      store.close();
+    }
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.prepareSummary.realTarget.requiresConfirmation, false);
+    assert.equal(detail.prepareSummary.realTarget.guidance.required, false);
+    assert.equal(detail.prepareSummary.realTarget.guidance.allowedNetworkActions, "none");
+    assert.equal(detail.prepareSummary.realTarget.guidance.notRequiredReason, "This target is source-only; no live deployment or published runtime is in scope.");
+    assert.ok(!detail.prepareSummary.issues.includes("real_target.confirm_guidance is missing"));
+    assert.deepEqual(detail.prepareSummary.issues, []);
+  });
+});
+
 test("api: unresolved prepare manifest status is surfaced as a review issue", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
