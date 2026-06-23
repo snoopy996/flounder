@@ -601,7 +601,7 @@ small {
 .pipeline {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(7, minmax(192px, 1fr));
+  grid-template-columns: repeat(7, minmax(150px, 1fr));
   gap: 8px;
   margin-top: 18px;
   overflow-x: auto;
@@ -616,8 +616,8 @@ small {
   position: relative;
   z-index: 1;
   min-height: 162px;
-  min-width: 192px;
-  padding: 13px 16px 13px;
+  min-width: 150px;
+  padding: 13px 12px 13px;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--canvas-subtle);
@@ -659,8 +659,9 @@ small {
 .phase-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 6px;
+  padding-right: 24px;
   font-weight: 650;
 }
 
@@ -668,15 +669,16 @@ small {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .phase-index {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   display: inline-grid;
   place-items: center;
   border-radius: 50%;
@@ -689,8 +691,8 @@ small {
 }
 
 .phase-marker {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: inline-grid;
   place-items: center;
   border-radius: 50%;
@@ -726,6 +728,9 @@ small {
 }
 
 .phase-state {
+  position: absolute;
+  top: 12px;
+  right: 10px;
   flex: none;
   width: 22px;
   height: 22px;
@@ -808,9 +813,11 @@ small {
 }
 
 .phase-detail > span:first-child {
-  display: block;
-  overflow: visible;
+  display: -webkit-box;
+  overflow: hidden;
   overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .phase-time {

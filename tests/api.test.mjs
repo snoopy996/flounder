@@ -570,8 +570,13 @@ test("api: running prepare resets the project current view to the new material s
       store.finishRun(reportRun, "done");
 
       const jobId = store.enqueueJob(created.name, { verb: "prepare" });
+      store.db.prepare("UPDATE job SET created_at = ?, updated_at = ? WHERE id = ?").run("2026-01-01T23:59:00.000Z", "2026-01-01T23:59:00.000Z", jobId);
       const prepare2 = store.startRun({ projectId: created.id, kind: "prepare", runDir: path.join(out, "prepare-refresh-running-prepare-2") });
+      store.db.prepare("UPDATE run SET started_at = ? WHERE id = ?").run("2026-01-02T00:00:00.000Z", prepare2);
       store.setJobRun(jobId, prepare2);
+      const strayAuditRun = store.startRun({ projectId: created.id, kind: "audit", runDir: path.join(out, "prepare-refresh-running-stray-audit") });
+      store.db.prepare("UPDATE run SET started_at = ? WHERE id = ?").run("2026-01-02T00:01:00.000Z", strayAuditRun);
+      store.recordStage(strayAuditRun, "synthesis", { status: "done", produced: 9, scopes: 9 });
     } finally {
       store.close();
     }
@@ -584,11 +589,12 @@ test("api: running prepare resets the project current view to the new material s
     assert.deepEqual(detail.confirmDecisions, []);
     assert.deepEqual(detail.allFindings, []);
     assert.equal(detail.currentRunsTotal, 1);
-    assert.equal(detail.runs[0].kind, "prepare");
+    assert.equal(detail.runs.find((run) => !run.material_stale)?.kind, "prepare");
     assert.equal(detail.runs.some((run) => run.kind === "audit" && run.material_stale === true), true);
     assert.equal(detail.runs.some((run) => run.kind === "confirm" && run.material_stale === true), true);
     assert.equal(detail.runs.some((run) => run.kind === "report" && run.material_stale === true), true);
     assert.equal(detail.runs.filter((run) => !run.material_stale).map((run) => run.kind).join(","), "prepare");
+    assert.equal(detail.material.currentPrepareStatus, "running");
 
     const currentFindings = await json(await fetch(base + `/api/projects/${created.uuid}/findings`));
     assert.equal(currentFindings.total, 0);

@@ -35,6 +35,7 @@ export interface ProjectSnapshot {
   activeRuns?: number;
   currentRunCount?: number;
   latestRun?: RunRow | null;
+  material?: MaterialSummary;
 }
 
 export interface ProjectRow {
@@ -155,6 +156,15 @@ export interface ProjectDetail {
   scopes?: ScopeRow[];
   allFindings?: FindingRow[];
   prepareSummary?: PrepareSummary | null;
+  material?: MaterialSummary;
+}
+
+export interface MaterialSummary {
+  currentPrepareRunId?: number | null;
+  currentPrepareStatus?: string | null;
+  currentPrepareStartedAt?: string | null;
+  staleRunCount?: number;
+  activePrepareRefreshStartedAt?: string;
 }
 
 export interface PrepareComponentSummary {

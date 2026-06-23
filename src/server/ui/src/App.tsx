@@ -540,7 +540,7 @@ function runStages(run: RunRow | undefined): RunStages {
 }
 
 function latestRunWithStage(detail: ProjectDetail, stage: keyof RunStages): RunRow | undefined {
-  return currentMaterialRuns(detail.runs).find((run) => Boolean(runStages(run)[stage]));
+  return currentMaterialRuns(detail.runs, detail.material).find((run) => Boolean(runStages(run)[stage]));
 }
 
 interface ActivityLine {
@@ -1598,7 +1598,7 @@ function ProjectDetailView(props: {
   const selectedDaemonOnline = selectedDaemon ? daemonHealth(selectedDaemon) === "online" : false;
   const online = selectedDaemonOnline ? [selectedDaemon] : [];
   const phases = phaseState(detail, detail.progress);
-  const currentRuns = currentMaterialRuns(detail.runs);
+  const currentRuns = currentMaterialRuns(detail.runs, detail.material);
   const topCandidates = topCandidateFindings(detail.allFindings);
   const verifyCandidates = pendingVerifyFindings(detail.allFindings);
   const overviewCandidates = verifyCandidates.length ? verifyCandidates : topCandidates;
@@ -1936,7 +1936,7 @@ function ProjectOverview({
   onVerifyCandidates: () => void;
   onOpenReport: (finding: FindingRow) => void;
 }) {
-  const currentRuns = currentMaterialRuns(detail.runs);
+  const currentRuns = currentMaterialRuns(detail.runs, detail.material);
   const current = currentRuns.find((run) => run.status === "running") ?? currentRuns[0];
   const runningRun = currentRuns.find((run) => run.status === "running");
   const pendingConfirm = pendingConfirmFindings(detail.allFindings, needsRealTargetConfirmation(detail)).length;

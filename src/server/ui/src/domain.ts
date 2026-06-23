@@ -149,12 +149,23 @@ function latestRunWithStage(runs: RunRow[], stage: keyof RunStages): RunRow | un
   return runs.find((run) => Boolean(stages(run)[stage]));
 }
 
-export function currentMaterialRuns(runs: RunRow[] | undefined): RunRow[] {
-  return (runs ?? []).filter((run) => !run.material_stale);
+function startedAtMs(value: string | null | undefined): number {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+export function currentMaterialRuns(runs: RunRow[] | undefined, material?: ProjectDetail["material"]): RunRow[] {
+  const current = (runs ?? []).filter((run) => !run.material_stale);
+  const prepareRefreshStartedAt = material?.activePrepareRefreshStartedAt
+    ?? (material?.currentPrepareStatus === "running" ? material.currentPrepareStartedAt ?? undefined : undefined);
+  if (!prepareRefreshStartedAt) return current;
+  const boundaryMs = startedAtMs(prepareRefreshStartedAt);
+  return current.filter((run) => run.kind === "prepare" && startedAtMs(run.started_at) >= boundaryMs);
 }
 
 export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseState {
-  const runs = currentMaterialRuns(detail.runs);
+  const runs = currentMaterialRuns(detail.runs, detail.material);
   const latest = (...kinds: string[]) => runs.find((r) => kinds.includes(r.kind));
   const prep = latest("prepare");
   const repro = confirmedDecisions(detail.confirmDecisions).length;

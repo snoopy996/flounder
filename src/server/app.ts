@@ -721,9 +721,7 @@ async function projectGet(c: Ctx): Promise<void> {
     const materialBoundary = latestPrepareRun(allRunsRaw);
     const activePrepareRefresh = activePrepareRefreshStartedAt(c.store, project, materialBoundary);
     const viewBoundary = materialViewBoundary(materialBoundary, activePrepareRefresh);
-    const currentRunsRaw = activePrepareRefresh
-      ? allRunsRaw.filter((run) => stringValue(run.started_at) >= activePrepareRefresh)
-      : currentMaterialRuns(allRunsRaw, materialBoundary);
+    const currentRunsRaw = currentVisibleRuns(allRunsRaw, materialBoundary, activePrepareRefresh);
     const currentRunIds = runIdSet(currentRunsRaw);
     const runs = runApiRows(c.store, allRunsRaw.slice(0, 50), c.plane, viewBoundary);
     const currentScopeRunExists = !activePrepareRefresh && (!materialBoundary || currentRunsRaw.some(isScopeInventoryRun));
@@ -818,6 +816,19 @@ function currentMaterialRuns(runs: Array<Record<string, unknown>>, boundary?: Re
   return runs.filter((run) => isCurrentMaterialRun(run, boundary));
 }
 
+function currentVisibleRuns(runs: Array<Record<string, unknown>>, boundary?: Record<string, unknown>, activePrepareRefreshStartedAt?: string): Array<Record<string, unknown>> {
+  const runningPrepareStartedAt = stringValue(boundary?.kind) === "prepare" && stringValue(boundary?.status) === "running"
+    ? stringValue(boundary?.started_at)
+    : undefined;
+  const prepareRefreshStartedAt = activePrepareRefreshStartedAt ?? runningPrepareStartedAt;
+  if (!prepareRefreshStartedAt) return currentMaterialRuns(runs, boundary);
+  return runs.filter((run) => {
+    if (stringValue(run.kind) !== "prepare") return false;
+    const runStarted = stringValue(run.started_at);
+    return Boolean(runStarted && runStarted >= prepareRefreshStartedAt);
+  });
+}
+
 function activePrepareRefreshStartedAt(store: MetadataStore, project: Record<string, unknown>, boundary?: Record<string, unknown>): string | undefined {
   const projectName = stringValue(project.name);
   if (!projectName) return undefined;
@@ -861,6 +872,18 @@ function isScopeInventoryVerb(verb: string | undefined): boolean {
 }
 
 function materialStaleness(run: Record<string, unknown>, boundary?: Record<string, unknown>): Record<string, unknown> {
+  const prepareRefresh = Boolean(boundary?.active_prepare_refresh)
+    || (stringValue(boundary?.kind) === "prepare" && stringValue(boundary?.status) === "running");
+  if (prepareRefresh) {
+    const boundaryStarted = stringValue(boundary?.started_at);
+    const runStarted = stringValue(run.started_at);
+    if (stringValue(run.kind) === "prepare" && (!boundaryStarted || !runStarted || runStarted >= boundaryStarted)) return {};
+    return {
+      material_stale: true,
+      stale_since_prepare_run_id: boundary?.id,
+      stale_since_prepare_started_at: boundary?.started_at,
+    };
+  }
   if (!boundary || isCurrentMaterialRun(run, boundary)) return {};
   return {
     material_stale: true,
@@ -887,9 +910,7 @@ async function projectScopesGet(c: Ctx): Promise<void> {
     const allRuns = c.store.listRuns(id);
     const materialBoundary = latestPrepareRun(allRuns);
     const activePrepareRefresh = activePrepareRefreshStartedAt(c.store, project, materialBoundary);
-    const currentRuns = activePrepareRefresh
-      ? allRuns.filter((run) => stringValue(run.started_at) >= activePrepareRefresh)
-      : currentMaterialRuns(allRuns, materialBoundary);
+    const currentRuns = currentVisibleRuns(allRuns, materialBoundary, activePrepareRefresh);
     if (activePrepareRefresh || (materialBoundary && !currentRuns.some(isScopeInventoryRun))) {
       return sendJson(c.res, 200, {
         scopes: [],
@@ -935,6 +956,21 @@ function latestPrepareSummary(runs: Array<Record<string, unknown>>): Record<stri
   const run = runs.find((entry) => entry.kind === "prepare" && typeof entry.run_dir === "string");
   if (!run) return null;
   return readPrepareSummary(run);
+}
+
+function readPrepareManifestObject(run: Record<string, unknown>): Record<string, unknown> | undefined {
+  const runDirValue = stringValue(run.run_dir);
+  if (!runDirValue) return undefined;
+  const runDir = path.resolve(runDirValue);
+  const workspaceDir = path.join(runDir, "prepare", "workspace");
+  const manifestPath = resolvePrepareManifestPath(runDir, workspaceDir);
+  if (!manifestPath) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+    return objectValue(parsed);
+  } catch {
+    return undefined;
+  }
 }
 
 function latestScopeCheckpoint(runs: Array<Record<string, unknown>>): { scopes: Array<Record<string, unknown>>; progress: Coverage } | null {
@@ -1780,8 +1816,10 @@ function reportWorklist(
 }
 
 function latestPrepareRequiresRealTargetConfirmation(runs: Array<Record<string, unknown>>): boolean {
-  const realTarget = latestPrepareSummary(runs)?.realTarget;
-  return !(realTarget && typeof realTarget === "object" && (realTarget as Record<string, unknown>).requiresConfirmation === false);
+  const run = runs.find((entry) => entry.kind === "prepare" && typeof entry.run_dir === "string");
+  const manifest = run ? readPrepareManifestObject(run) : undefined;
+  const realTarget = summarizePrepareRealTarget(manifest?.real_target ?? manifest?.realTarget);
+  return !(realTarget.reported && realTarget.requiresConfirmation === false);
 }
 
 function applyPreparedWorkspaceIfNeeded(spec: LaunchSpec, runs: Array<Record<string, unknown>>): { ok: true } | { ok: false; error: string } {
@@ -1913,9 +1951,7 @@ function findingsList(c: Ctx): void {
     const allRuns = c.store.listRuns(id);
     const materialBoundary = latestPrepareRun(allRuns);
     const activePrepareRefresh = activePrepareRefreshStartedAt(c.store, project, materialBoundary);
-    const currentRuns = activePrepareRefresh
-      ? allRuns.filter((run) => stringValue(run.started_at) >= activePrepareRefresh)
-      : currentMaterialRuns(allRuns, materialBoundary);
+    const currentRuns = currentVisibleRuns(allRuns, materialBoundary, activePrepareRefresh);
     const currentRunIds = runIdSet(currentRuns);
     const rows = reportableFindings(c.store.listFindings(id)
       .filter((finding) => includeStale || (!activePrepareRefresh && rowBelongsToCurrentMaterial(finding, currentRunIds, materialBoundary))))
@@ -2761,9 +2797,8 @@ function projectSnapshots(store: MetadataStore): Array<Record<string, unknown>> 
     const allRuns = store.listRuns(id);
     const materialBoundary = latestPrepareRun(allRuns);
     const activePrepareRefresh = activePrepareRefreshStartedAt(store, project, materialBoundary);
-    const currentRuns = activePrepareRefresh
-      ? allRuns.filter((run) => stringValue(run.started_at) >= activePrepareRefresh)
-      : currentMaterialRuns(allRuns, materialBoundary);
+    const currentRuns = currentVisibleRuns(allRuns, materialBoundary, activePrepareRefresh);
+    const viewBoundary = materialViewBoundary(materialBoundary, activePrepareRefresh);
     const currentRunIds = runIdSet(currentRuns);
     const currentScopeRunExists = !activePrepareRefresh && (!materialBoundary || currentRuns.some(isScopeInventoryRun));
     const findings = activePrepareRefresh
@@ -2801,8 +2836,9 @@ function projectSnapshots(store: MetadataStore): Array<Record<string, unknown>> 
       confirmDecisionCount: confirmDecisions.length,
       runCount: store.countRuns(id),
       currentRunCount: currentRuns.length,
-      latestRun: runApiRows(store, currentRuns.slice(0, 1), undefined, materialBoundary)[0] ?? null,
+      latestRun: runApiRows(store, currentRuns.slice(0, 1), undefined, viewBoundary)[0] ?? null,
       activeRuns: activeByTarget.get(String(project.name)) ?? 0,
+      material: materialSummary(allRuns, materialBoundary, activePrepareRefresh),
     };
   });
 }
