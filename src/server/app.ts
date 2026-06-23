@@ -1534,7 +1534,10 @@ function summarizePreparedWorkspace(workspaceDir: string): Record<string, unknow
 }
 
 function describeAnswerFirewall(value: unknown, posture = ""): string {
-  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "string" && value.trim()) {
+    const text = value.trim();
+    return isCleanFirewallNote(text) ? `clean · ${text}` : text;
+  }
   if (Array.isArray(value)) {
     if (value.length === 0) return "clean (empty list)";
     const notes = value.map((entry) => stringValue(entry)).filter(Boolean);
@@ -1557,7 +1560,9 @@ function describeAnswerFirewall(value: unknown, posture = ""): string {
 function isCleanFirewallNote(text: string): boolean {
   const lower = text.toLowerCase();
   if (lower.includes("blind")) return true;
+  if (lower.includes("included")) return false;
   if ((lower.includes("not fetched") || lower.includes("not staged") || lower.includes("skipped") || lower.includes("excluded")) && !lower.includes("included")) return true;
+  if ((lower.includes("no material") || lower.includes("no vulnerability") || lower.includes("not copied") || lower.includes("removed")) && !lower.includes("included")) return true;
   return lower === "clean" || lower.startsWith("clean ");
 }
 

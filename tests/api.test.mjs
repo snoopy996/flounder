@@ -1528,6 +1528,83 @@ test("api: answer-bearing prepare materials are explicit hard blockers", async (
   });
 });
 
+test("api: clean prepare firewall notes and optional material gaps do not block audits", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    const created = await json(await post("/api/projects", { name: "source-ready-with-notes" }));
+    const runDir = path.join(out, "source-ready-with-notes-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(path.join(workspace, "sources", "target"), { recursive: true });
+    await writeFile(path.join(workspace, "sources", "target", "lib.rs"), "pub fn target() {}\n");
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        status: "done",
+        posture: "blind",
+        scope_declaration: "Official published packages selected from package metadata.",
+        answer_firewall: "No material whose purpose is a vulnerability report, CVE, exploit, incident article, post-mortem, or target-specific bug writeup was staged. No vulnerability mechanism, affected code location, exploit steps, or security conclusion has been summarized in this manifest.",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only/published-packages",
+          reason: "The target is source-only; neutral official materials did not identify a live deployed contract or service target requiring fork/read-only confirmation.",
+          ground_truth: [
+            {
+              kind: "package",
+              network: "n/a",
+              address: "",
+              role: "target",
+              block: "1.0.0",
+              source_match: "source-pinned",
+              evidence: "registry checksum sha256:abc123",
+              staged_component: "sources/target",
+            },
+          ],
+          confirm_guidance: {
+            required: false,
+            allowed_network_actions: "none",
+            recommended_method: "Run local source-level checks against staged package sources.",
+            not_required_reason: "No deployed target is in scope.",
+          },
+        },
+        components: [
+          {
+            identity: "target@1.0.0",
+            platform: "crates.io",
+            revision: "1.0.0",
+            source: "published",
+            staged_path: "sources/target",
+            in_scope: true,
+            match: "n/a",
+          },
+        ],
+        gaps: [
+          "No live deployed target was resolved because the task is source-only.",
+          "Project-owned docs were best-effort and are not required for source provenance.",
+        ],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const runId = store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(runId, "done");
+    } finally {
+      store.close();
+    }
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.prepareSummary.quality, "limited");
+    assert.equal(detail.prepareSummary.auditReady, true);
+    assert.equal(detail.prepareSummary.blocked, false);
+    assert.deepEqual(detail.prepareSummary.blockingIssues, []);
+    assert.deepEqual(detail.prepareSummary.issues, []);
+    assert.match(detail.prepareSummary.answerFirewall, /^clean · No material/);
+    assert.match(detail.prepareSummary.caveats.join("\n"), /Project-owned docs were best-effort/);
+  });
+});
+
 test("api: blind prepare manifests get a clean answer-firewall fallback", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
