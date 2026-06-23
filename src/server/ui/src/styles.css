@@ -814,11 +814,13 @@ small {
 .phase-detail > span:first-child {
   display: block;
   min-height: 0;
-  max-height: none;
+  max-height: 58px;
   width: 100%;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overflow-wrap: anywhere;
   padding-right: 2px;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
 }
 

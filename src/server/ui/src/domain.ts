@@ -160,6 +160,12 @@ export function runDur(run: RunRow | undefined, live?: boolean): string {
   return end ? fmtDur(end - start) : "";
 }
 
+function durSince(value: string | null | undefined): string {
+  if (!value) return "";
+  const start = new Date(value).getTime();
+  return Number.isFinite(start) ? fmtDur(Date.now() - start) : "";
+}
+
 export function isVerifyRun(run: RunRow | undefined): boolean {
   return Boolean(run && parseJson<{ verify?: boolean }>(run.budgets_json, {}).verify === true);
 }
@@ -210,6 +216,24 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const decisions = currentMaterialConfirmDecisions(detail);
   const latest = (...kinds: string[]) => runs.find((r) => kinds.includes(r.kind));
   const prep = latest("prepare");
+  if (materialRefreshInProgress(detail.material)) {
+    const prepareDur = runDur(prep, prep?.status === "running")
+      || durSince(detail.material?.activePrepareRefreshStartedAt ?? detail.material?.currentPrepareStartedAt);
+    const empty = (stat = "Not started"): PhaseInfo => ({ status: "none", stat, dur: "" });
+    return {
+      prepare: {
+        status: "running",
+        stat: prep?.status === "running" || !prep ? "Preparing source" : prep.status,
+        dur: prepareDur,
+      },
+      map: empty(),
+      dig: empty(),
+      synthesis: empty(),
+      verify: empty(),
+      confirm: empty(),
+      report: empty(),
+    };
+  }
   const repro = confirmedDecisions(decisions).length;
   const conf = latest("confirm");
   const synthesis = stages(latestRunWithStage(runs, "synthesis")).synthesis;
