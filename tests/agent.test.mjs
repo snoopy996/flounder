@@ -747,6 +747,14 @@ test("baseline integrity: the model cannot modify the target source under audit"
     const newFile = await tool("write").run({ path: "exploit_test.rs", content: "// poc\n" }, ctx);
     assert.match(newFile.observation, /wrote exploit_test\.rs/);
 
+    session.baselineFiles.add("contracts/contracts/Proxy.sol");
+    const newNativeTest = await tool("write").run({ path: "contracts/test/hidden_upgrade_target_hash.spec.ts", content: "// poc\n" }, ctx);
+    assert.match(newNativeTest.observation, /wrote contracts\/test\/hidden_upgrade_target_hash\.spec\.ts/);
+
+    const newProductionSource = await tool("write").run({ path: "contracts/contracts/KeysWithPlonkVerifier.sol", content: "contract BuildShim {}\n" }, ctx);
+    assert.match(newProductionSource.observation, /blocked/i);
+    assert.match(newProductionSource.observation, /production source files must stay pristine/i);
+
     // Editing a target-source file is blocked too (even before the old-text check).
     const edit = await tool("edit").run({ path: "halo2_missing_constraint.rs", old: "assign_advice", new: "x" }, ctx);
     assert.match(edit.observation, /blocked/i);

@@ -279,7 +279,7 @@ function isAllowedLocalTestCommand(program: string, args: string[]): boolean {
   if (name === "cargo") return cargoSubcommand(args) === "test";
   if (name === "go") return first === "test";
   if (name === "npm") return first === "test" || (first === "run" && second === "test");
-  if (name === "pnpm" || name === "yarn" || name === "bun") return first === "test" || (first === "run" && second === "test");
+  if (name === "pnpm" || name === "yarn" || name === "bun") return first === "test" || (first === "run" && second === "test") || (first === "hardhat" && second === "test");
   if (name === "node") return first === "--test";
   if (name === "python" || name === "python3") return first === "-m" && (second === "pytest" || second === "unittest");
   if (name === "pytest") return true;

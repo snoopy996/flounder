@@ -272,7 +272,8 @@ const writeTool: AgentTool = {
     if (content === undefined) return { observation: 'error: "content" is required.' };
     if (Buffer.byteLength(content, "utf8") > ctx.cfg.reproductionMaxFileBytes) return { observation: "error: content exceeds the configured file-size limit." };
 
-    if (baselineProtected(ctx, normalized)) return { observation: baselineBlockMessage(normalized) };
+    const protectionBlock = targetSourceWriteBlock(ctx, normalized);
+    if (protectionBlock) return { observation: protectionBlock };
     if (!ctx.cfg.prepareMode && !isReportFile(normalized)) {
       const blockedFile = firstBlockedSandboxFile([{ path: normalized, content }]);
       if (blockedFile) return { observation: `blocked: ${blockedFile}` };
@@ -303,7 +304,8 @@ const editTool: AgentTool = {
     if (!workspace) return { observation: "error: edit needs on-disk source roots (sourcePaths); none are configured for this run." };
     const existing = await readWorkspaceCandidate(ctx, target);
     if (!existing) return { observation: `error: no sandbox file matches "${target}".` };
-    if (baselineProtected(ctx, existing.path)) return { observation: baselineBlockMessage(existing.path) };
+    const protectionBlock = targetSourceWriteBlock(ctx, existing.path);
+    if (protectionBlock) return { observation: protectionBlock };
     if (!existing.content.includes(oldText)) return { observation: `error: old text was not found in ${existing.path}.` };
 
     const next = asBool(args.replace_all, false) ? existing.content.split(oldText).join(newText) : existing.content.replace(oldText, newText);
@@ -580,8 +582,42 @@ function baselineProtected(ctx: ToolContext, normalizedPath: string): boolean {
   return Boolean(ctx.session.baselineFiles?.has(normalizedPath));
 }
 
+function targetSourceWriteBlock(ctx: ToolContext, normalizedPath: string): string | undefined {
+  if (isReportFile(normalizedPath)) return undefined;
+  if (baselineProtected(ctx, normalizedPath)) return baselineBlockMessage(normalizedPath);
+  if (ctx.cfg.prepareMode) return undefined;
+  if (insidePristineSourceTree(ctx, normalizedPath) && !isModelOwnedPocPath(normalizedPath)) {
+    return `blocked: "${normalizedPath}" is inside the target source tree. Only new test/spec/PoC/harness/scratch files may be written there; production source files must stay pristine.`;
+  }
+  return undefined;
+}
+
 function baselineBlockMessage(normalizedPath: string): string {
   return `blocked: "${normalizedPath}" is part of the target source under audit and cannot be modified. Write your test/PoC as a NEW file. To demonstrate a bug, prove it on the unmodified code; the framework applies your declared fix during confirmation.`;
+}
+
+function insidePristineSourceTree(ctx: ToolContext, normalizedPath: string): boolean {
+  const baseline = ctx.session.baselineFiles;
+  if (!baseline || baseline.size === 0) return false;
+  for (const file of baseline) {
+    const dir = dirname(file);
+    if (!dir) return true;
+    if (normalizedPath === dir || normalizedPath.startsWith(`${dir}/`)) return true;
+  }
+  return false;
+}
+
+function isModelOwnedPocPath(normalizedPath: string): boolean {
+  const segments = normalizedPath.toLowerCase().split("/");
+  if (segments.some((segment) => /^(test|tests|spec|specs|__tests__|poc|pocs|repro|repros|harness|harnesses|scratch)$/.test(segment))) return true;
+  const base = segments.at(-1) ?? "";
+  return /(^|[._-])(test|spec|poc|repro|harness|scratch|flounder)([._-]|$)/.test(base)
+    || /(^test_|_test\.|\.test\.|\.spec\.)/.test(base);
+}
+
+function dirname(normalizedPath: string): string {
+  const idx = normalizedPath.lastIndexOf("/");
+  return idx === -1 ? "" : normalizedPath.slice(0, idx);
 }
 
 async function ensurePrepared(ctx: ToolContext, workspace: SandboxWorkspace): Promise<void> {
