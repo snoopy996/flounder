@@ -1603,7 +1603,7 @@ async function runLaunch(c: Ctx): Promise<void> {
   }
   if (spec.verb === "report") {
     const selected = selectedFindingIds(body);
-    const reports = reportWorklist(c.store, Number(project.id), selected, currentRunIds, materialBoundary);
+    const reports = reportWorklist(c.store, Number(project.id), selected, currentRunIds, materialBoundary, latestPrepareRequiresRealTargetConfirmation(runs));
     if (reports.error) return sendJson(c.res, 400, { error: reports.error });
     spec.reportFindings = reports.findings;
   }
@@ -1720,11 +1720,13 @@ function reportWorklist(
   selectedIds: number[] = [],
   currentRunIds?: Set<number>,
   materialBoundary?: Record<string, unknown>,
+  requiresRealTargetConfirmation = true,
 ): { findings: ReportFindingSpec[]; error?: undefined } | { findings?: undefined; error: string } {
   const selected = selectedIds.length ? new Set(selectedIds) : undefined;
   const rows = reportableFindings(store.listFindings(projectId)).filter((row) => {
     if (selected && !selected.has(Number(row.id))) return false;
     if (!rowBelongsToCurrentMaterial(row, currentRunIds ?? new Set(), materialBoundary)) return false;
+    if (!requiresRealTargetConfirmation) return isExecutionConfirmedFindingStatus(String(row.status ?? "").toLowerCase());
     if (String(row.confirm_status ?? "") !== "reproduced") return false;
     const decisions = store.listConfirmDecisionsForFinding(projectId, String(row.finding_key ?? ""));
     return decisions.some((decision) => rowBelongsToCurrentMaterial(decision, currentRunIds ?? new Set(), materialBoundary) && decision.reproduced === "yes" && decision.recommendation !== "drop");
@@ -1732,13 +1734,19 @@ function reportWorklist(
   if (selected && rows.length !== selected.size) {
     const found = new Set(rows.map((row) => Number(row.id)));
     const missing = [...selected].filter((id) => !found.has(id));
-    return { error: `finding ${missing.join(", ")} is not reproduced on the real target, was dropped, or has no linked confirm decision` };
+    const reason = requiresRealTargetConfirmation
+      ? "is not reproduced on the real target, was dropped, or has no linked confirm decision"
+      : "is not locally execution-confirmed for this source-only target";
+    return { error: `finding ${missing.join(", ")} ${reason}` };
   }
-  if (rows.length === 0) return { error: "no reproduced real-target findings are ready for formal reports" };
+  if (rows.length === 0) {
+    return { error: requiresRealTargetConfirmation ? "no reproduced real-target findings are ready for formal reports" : "no locally execution-confirmed source-only findings are ready for formal reports" };
+  }
   return {
     findings: rows.map((row) => ({
       findingId: Number(row.id),
       findingKey: String(row.finding_key ?? ""),
+      evidenceMode: requiresRealTargetConfirmation ? "real-target-reproduced" : "source-only-local-confirmed",
       title: stringValue(row.title),
       location: stringValue(row.location) || undefined,
       severity: stringValue(row.severity) || undefined,
@@ -1749,10 +1757,17 @@ function reportWorklist(
       exploitSketch: stringValue(row.exploit_sketch) || undefined,
       fix: stringValue(row.fix) || undefined,
       confidence: Number.isFinite(Number(row.confidence)) ? Number(row.confidence) : undefined,
-      decisions: store.listConfirmDecisionsForFinding(projectId, String(row.finding_key ?? ""))
-        .filter((decision) => rowBelongsToCurrentMaterial(decision, currentRunIds ?? new Set(), materialBoundary) && decision.reproduced === "yes" && decision.recommendation !== "drop"),
+      decisions: requiresRealTargetConfirmation
+        ? store.listConfirmDecisionsForFinding(projectId, String(row.finding_key ?? ""))
+          .filter((decision) => rowBelongsToCurrentMaterial(decision, currentRunIds ?? new Set(), materialBoundary) && decision.reproduced === "yes" && decision.recommendation !== "drop")
+        : [],
     })),
   };
+}
+
+function latestPrepareRequiresRealTargetConfirmation(runs: Array<Record<string, unknown>>): boolean {
+  const realTarget = latestPrepareSummary(runs)?.realTarget;
+  return !(realTarget && typeof realTarget === "object" && (realTarget as Record<string, unknown>).requiresConfirmation === false);
 }
 
 function applyPreparedWorkspaceIfNeeded(spec: LaunchSpec, runs: Array<Record<string, unknown>>): { ok: true } | { ok: false; error: string } {
@@ -2031,6 +2046,10 @@ function isReportableFinding(row: Record<string, unknown>): boolean {
 
 function isConfirmedFindingStatus(status: string): boolean {
   return status === "confirmed-source" || status === "confirmed-executable" || status === "confirmed-differential";
+}
+
+function isExecutionConfirmedFindingStatus(status: string): boolean {
+  return status === "confirmed-executable" || status === "confirmed-differential";
 }
 
 function countAuditConfirmedFindings(rows: Array<Record<string, unknown>>): number {

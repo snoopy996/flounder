@@ -682,6 +682,83 @@ test("api: report launch queues only reproduced real-target findings that were n
   });
 });
 
+test("api: report launch accepts source-only execution-confirmed findings without real-target confirm", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", { name: "source-only-report", sourcePaths: ["./src"], corpusPaths: ["./docs"] }));
+    const prepareDir = path.join(out, "source-only-report-prepare");
+    const workspace = path.join(prepareDir, "prepare", "workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        status: "done",
+        clue: "official source package",
+        posture: "blind",
+        answer_firewall: "clean",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only",
+          reason: "This fixture audits official source only; no live deployment is in scope.",
+          ground_truth: [],
+          confirm_guidance: { required: false, not_required_reason: "source-only fixture" },
+        },
+        components: [{ id: "pkg", kind: "git_repository", source: { revision: "abc123" }, in_scope: true }],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir: prepareDir });
+      store.finishRun(prepareRun, "done");
+      const auditRun = store.startRun({ projectId: created.id, kind: "audit", runDir: path.join(out, "source-only-report-audit") });
+      store.upsertFindings(created.id, auditRun, [
+        {
+          findingKey: "ksource",
+          title: "Source-only execution confirmed bug",
+          location: "src/Target.rs:12",
+          severity: "medium",
+          status: "confirmed-executable",
+          description: "A locally confirmed source-only bug.",
+          evidence: "Local proof passed.",
+          confidence: 0.88,
+        },
+        {
+          findingKey: "ksuspected",
+          title: "Source-only suspected bug",
+          location: "src/Target.rs:34",
+          severity: "medium",
+          status: "suspected",
+        },
+      ]);
+    } finally {
+      store.close();
+    }
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.prepareSummary.realTarget.requiresConfirmation, false);
+    const ready = detail.allFindings.find((finding) => finding.finding_key === "ksource");
+    const suspected = detail.allFindings.find((finding) => finding.finding_key === "ksuspected");
+    assert.ok(ready);
+    assert.ok(suspected);
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [ready.id] }));
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.verb, "report");
+    assert.equal(spec.reportFindings.length, 1);
+    assert.equal(spec.reportFindings[0].findingKey, "ksource");
+    assert.equal(spec.reportFindings[0].evidenceMode, "source-only-local-confirmed");
+    assert.deepEqual(spec.reportFindings[0].decisions, []);
+
+    const rejected = await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [suspected.id] });
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json()).error, /not locally execution-confirmed/);
+  });
+});
+
 test("api: one-off maxScopes overrides the project's saved coverage mode", async () => {
   await withServer(async (base) => {
     const json = (r) => r.json();

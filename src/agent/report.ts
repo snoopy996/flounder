@@ -16,6 +16,7 @@ export interface ReportFindingInput {
   findingId: number;
   findingKey: string;
   title: string;
+  evidenceMode?: "real-target-reproduced" | "source-only-local-confirmed" | undefined;
   location?: string | undefined;
   severity?: string | undefined;
   status?: string | undefined;
@@ -47,7 +48,7 @@ export async function runReport(
   if (!isPiSessionProvider(cfg.provider)) {
     throw new Error(`flounder report needs a session provider (e.g. openai-codex); provider "${cfg.provider}" cannot generate formal reports.`);
   }
-  if (options.findings.length === 0) throw new Error("flounder report needs at least one reproduced finding");
+  if (options.findings.length === 0) throw new Error("flounder report needs at least one reportable finding");
 
   const reportCfg: AuditorConfig = { ...cfg, auditMaxSteps: options.maxSteps ?? cfg.auditMaxSteps };
   const startedAt = new Date();
@@ -135,6 +136,7 @@ function renderReportSeed(findings: ReportFindingInput[]): string {
       required_file: reportFileName(finding),
       finding_id: finding.findingId,
       finding_key: finding.findingKey,
+      evidence_mode: finding.evidenceMode ?? "real-target-reproduced",
       title: finding.title,
       location: finding.location,
       severity: finding.severity,

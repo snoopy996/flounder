@@ -92,6 +92,7 @@ export interface ReportFindingSpec {
   findingId: number;
   findingKey: string;
   title: string;
+  evidenceMode?: "real-target-reproduced" | "source-only-local-confirmed" | undefined;
   location?: string | undefined;
   severity?: string | undefined;
   status?: string | undefined;

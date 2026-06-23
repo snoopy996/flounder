@@ -477,7 +477,7 @@ function buildReportFinalizePrompt(reportSeed: string, missingFiles: string[]): 
 You must now finish the missing formal report files by calling the write tool. Missing files:
 ${missingFiles.map((file) => `- ${file}`).join("\n")}
 
-Use the reproduced decision data and evidence below. If exact source details are still needed, you may make a small number of read or bash purpose="inspect" checks before writing. If a detail is not established, say "Not established by the available evidence" or list it as a human gate. Do NOT invent impact, versions, exploitability, affected deployments, novelty, fix validation, or proof details.
+Use the finding evidence below. Some reports have evidence_mode="real-target-reproduced" and include reproduced decision data. Source-only audits may have evidence_mode="source-only-local-confirmed"; those findings do not require a real-target decision because Prepare established that no deployed target or live service is in scope. If exact source details are still needed, you may make a small number of read or bash purpose="inspect" checks before writing. If a detail is not established, say "Not established by the available evidence" or list it as a human gate. Do NOT invent impact, versions, exploitability, affected deployments, novelty, fix validation, or proof details.
 
 For each missing report, verify the title/root cause/location, attacker capability, impact, reproduction result, and fix/novelty claims against the supplied evidence. When any of those fields is absent or ambiguous, do a targeted source/corpus/artifact inspection before writing. If the inspection still does not establish the detail, keep the report useful by naming the limitation instead of filling it in.
 
@@ -490,10 +490,11 @@ Write every missing report at the workspace root with its exact required_file na
 function buildReportSessionPrompt(input: { report: string; fileManifest: string; memoryHint?: string }): string {
   return `You are the REPORT phase of Flounder, an autonomous white-hat security auditor.
 
-Your job is to produce formal, submission-ready Markdown reports for already reproduced bugs. You are NOT discovering new bugs, NOT upgrading suspected claims, and NOT changing confirm decisions. You may read the copied source, official docs/corpus, existing PoC files, and decision evidence to verify exact details before writing. You may run inspect-only commands when needed to check paths, code snippets, versions, or artifact contents. Do not rerun live exploits, do not broadcast, and do not write to live systems.
+Your job is to produce formal, submission-ready Markdown reports for already reproduced bugs, or for source-only findings that were locally execution-confirmed when Prepare says no real-target confirmation is required. You are NOT discovering new bugs, NOT upgrading suspected claims, and NOT changing confirm decisions. You may read the copied source, official docs/corpus, existing PoC files, and decision evidence to verify exact details before writing. You may run inspect-only commands when needed to check paths, code snippets, versions, or artifact contents. Do not rerun live exploits, do not broadcast, and do not write to live systems.
 
 No-fabrication rule: every concrete statement in the report must be supported by one of:
 - the reproduced confirm decision supplied below;
+- source-only local execution evidence when evidence_mode="source-only-local-confirmed";
 - the finding's stored evidence;
 - source/corpus lines you read in this report run;
 - command output you produced in this report run.
@@ -528,7 +529,7 @@ Step-by-step attacker capabilities and exploit path, written for maintainers. Av
 Concrete effect and harmed parties/assets, tied to reproduced observable evidence.
 
 ## Reproduction Evidence
-The real-target reproduction result, observed effect, command_id, and artifacts. Say whether reproduction used a fork, published package, real verifier, deployed bytecode, or another real-world ground truth.
+The real-target reproduction result, observed effect, command_id, and artifacts. For source-only local-confirmed reports, state that real-target confirmation was not required by Prepare and summarize the local executable confirmation evidence instead. Say whether reproduction used a fork, published package, real verifier, deployed bytecode, or another real-world ground truth.
 
 ## Proof of Concept
 Minimal local-only reproduction steps or code pointers sufficient for the maintainer to reproduce. Never include commands that broadcast to or write to live systems.
