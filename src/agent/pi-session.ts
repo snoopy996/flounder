@@ -73,7 +73,10 @@ export async function runAuditSession(input: {
   const hasScratch = (basename: string): boolean =>
     [...input.ctx.session.scratchFiles.keys()].some((key) => key === basename || key.endsWith(`/${basename}`));
   const customTools = input.tools.map((tool) =>
-    toPiTool(tool, input.ctx, () => (stepNo += 1), steps, input.logger, (n) => prepareCheckpointHint(input.prepare, n, hasScratch("prepare_manifest.json"))),
+    toPiTool(tool, input.ctx, () => (stepNo += 1), steps, input.logger, (n, toolName, args) =>
+      prepareCheckpointDirective(input.prepare, n, hasScratch("prepare_manifest.json"))
+      ?? mapCheckpointDirective(input.map, n, toolName, args, readScratchScopes(input.ctx.session).length),
+    ),
   );
 
   const { session } = await createAgentSession({
@@ -299,9 +302,17 @@ function looksLikeAuthError(message: string): boolean {
 
 const PREPARE_CHECKPOINT_TOOL_STEPS = 16;
 
-function prepareCheckpointHint(prepare: string | undefined, step: number, hasManifest: boolean): string {
-  if (!prepare || hasManifest || step < PREPARE_CHECKPOINT_TOOL_STEPS) return "";
-  return [
+export interface CheckpointDirective {
+  message: string;
+  eventKind: string;
+  block?: boolean;
+}
+
+export function prepareCheckpointDirective(prepare: string | undefined, step: number, hasManifest: boolean): CheckpointDirective | undefined {
+  if (!prepare || hasManifest || step < PREPARE_CHECKPOINT_TOOL_STEPS) return undefined;
+  return {
+    eventKind: "audit_prepare_checkpoint_nudge",
+    message: [
     "PREPARE CHECKPOINT REQUIRED:",
     "prepare_manifest.json is still missing after the early checkpoint window.",
     "Your next action should write prepare_manifest.json with the stable schema: top-level clue, posture, match_deployed, scope_declaration, real_target, components, offscope, gaps, answer_firewall.",
@@ -310,10 +321,37 @@ function prepareCheckpointHint(prepare: string | undefined, step: number, hasMan
     "Do not leave components empty after staging files. Do not set requires_confirmation=true with empty ground_truth unless you immediately continue resolving it before done.",
     "Use explicit gaps for unresolved deployment addresses, docs, source matches, or real-target confirmation details; missing docs/specs are best-effort caveats, while source/provenance and real-target mode are the hard gate.",
     "Do not continue long-tail fetching before this checkpoint exists.",
-  ].join(" ");
+    ].join(" "),
+  };
 }
 
-function toPiTool(tool: AgentTool, ctx: ToolContext, nextStep: () => number, steps: TranscriptStep[], logger: RunLogger, checkpointHint?: (step: number, toolName: string) => string): ToolDefinition {
+const MAP_CHECKPOINT_TOOL_STEPS = 12;
+
+export function mapCheckpointDirective(map: boolean | undefined, step: number, toolName: string, args: Record<string, unknown>, scopeCount: number): CheckpointDirective | undefined {
+  if (!map || scopeCount > 0 || step < MAP_CHECKPOINT_TOOL_STEPS) return undefined;
+  const message = [
+    "blocked: MAP CHECKPOINT REQUIRED.",
+    "scopes.json is still missing or empty after the early mapping window.",
+    "Your next action must write scopes.json at the workspace root using the stable array schema: [{\"id\",\"obligation\",\"region\",\"lenses\",\"exposure\",\"difficulty\",\"score\",\"why\"}].",
+    "Write the broad inventory you have so far; it is a checkpoint, not completion. You can rewrite the full array later as you expand coverage.",
+    "Do not read, grep, or run more inspection commands until this checkpoint exists.",
+  ].join(" ");
+  if (toolName === "write" && writesScopesJson(args)) {
+    return {
+      eventKind: "audit_map_checkpoint_nudge",
+      message: message.replace(/^blocked: /, ""),
+    };
+  }
+  return { eventKind: "audit_map_checkpoint_block", message, block: true };
+}
+
+function writesScopesJson(args: Record<string, unknown>): boolean {
+  if (typeof args.path !== "string") return false;
+  const normalized = args.path.trim().replaceAll("\\", "/");
+  return normalized === "scopes.json" || normalized.endsWith("/scopes.json");
+}
+
+function toPiTool(tool: AgentTool, ctx: ToolContext, nextStep: () => number, steps: TranscriptStep[], logger: RunLogger, checkpointDirective?: (step: number, toolName: string, args: Record<string, unknown>) => CheckpointDirective | undefined): ToolDefinition {
   return defineTool({
     name: tool.name,
     label: tool.name,
@@ -323,17 +361,23 @@ function toPiTool(tool: AgentTool, ctx: ToolContext, nextStep: () => number, ste
     async execute(_toolCallId, params) {
       const args = (params ?? {}) as Record<string, unknown>;
       const n = nextStep();
+      const preDirective = checkpointDirective?.(n, tool.name, args);
       let observation: string;
-      try {
-        const result = await tool.run(args, ctx);
-        observation = result.observation;
-      } catch (error) {
-        observation = `error: tool "${tool.name}" failed: ${error instanceof Error ? error.message : String(error)}`;
-      }
-      const hint = checkpointHint?.(n, tool.name) ?? "";
-      if (hint) {
-        await logger.event("audit_prepare_checkpoint_nudge", { step: n, tool: tool.name });
-        observation = `${observation}\n\n${hint}`;
+      if (preDirective?.block) {
+        await logger.event(preDirective.eventKind, { step: n, tool: tool.name });
+        observation = preDirective.message;
+      } else {
+        try {
+          const result = await tool.run(args, ctx);
+          observation = result.observation;
+        } catch (error) {
+          observation = `error: tool "${tool.name}" failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        const postDirective = checkpointDirective?.(n, tool.name, args);
+        if (postDirective) {
+          await logger.event(postDirective.eventKind, { step: n, tool: tool.name });
+          observation = `${observation}\n\n${postDirective.message}`;
+        }
       }
       steps.push({ n, thought: "", tool: tool.name, args, observation });
       // Rich live-activity line: the actual command/file the agent ran + its outcome.

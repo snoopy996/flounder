@@ -13,7 +13,7 @@ import { buildConfirmKickoff, buildDeepKickoff, buildMapKickoff, AUDIT_CONFIRM_S
 import { runDifferentialConfirmation } from "../dist/agent/differential.js";
 import { runRefutation } from "../dist/agent/refutation.js";
 import { renderReportFileManifest } from "../dist/agent/report.js";
-import { buildSessionPrompt, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapThinkingLevel, toolSchemas } from "../dist/agent/pi-session.js";
+import { buildSessionPrompt, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapCheckpointDirective, mapThinkingLevel, toolSchemas } from "../dist/agent/pi-session.js";
 import { MockAuditLlmClient } from "../dist/llm/mock.js";
 import { RunLogger } from "../dist/trace/logger.js";
 import { renderDisclosure } from "../dist/reports/disclosure.js";
@@ -51,6 +51,22 @@ test("pi session preserves the configured xhigh thinking level", () => {
   assert.equal(mapThinkingLevel("off"), "off");
   assert.equal(mapThinkingLevel("minimal"), "minimal");
   assert.equal(mapThinkingLevel("xhigh"), "xhigh");
+});
+
+test("map checkpoint guard blocks further exploration until scopes.json exists", () => {
+  assert.equal(mapCheckpointDirective(true, 11, "read", { path: "src/lib.rs" }, 0), undefined);
+  const blocked = mapCheckpointDirective(true, 12, "read", { path: "src/lib.rs" }, 0);
+  assert.equal(blocked?.block, true);
+  assert.equal(blocked?.eventKind, "audit_map_checkpoint_block");
+  assert.match(blocked?.message ?? "", /MAP CHECKPOINT REQUIRED/);
+  assert.match(blocked?.message ?? "", /write scopes\.json/i);
+
+  const write = mapCheckpointDirective(true, 12, "write", { path: "scopes.json" }, 0);
+  assert.equal(write?.block, undefined);
+  assert.equal(write?.eventKind, "audit_map_checkpoint_nudge");
+
+  assert.equal(mapCheckpointDirective(true, 12, "bash", { cmd: "rg public" }, 1), undefined);
+  assert.equal(mapCheckpointDirective(false, 12, "read", { path: "src/lib.rs" }, 0), undefined);
 });
 
 test("prompt contract keeps attacker-faithful PoC rule on legacy and pi-session paths", () => {
