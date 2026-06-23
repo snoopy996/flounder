@@ -1047,13 +1047,15 @@ small {
 .prepare-materials {
   display: grid;
   gap: 13px;
+  min-width: 0;
 }
 
 .prepare-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 16px;
+  min-width: 0;
 }
 
 .prepare-quality {
@@ -1093,6 +1095,7 @@ small {
   display: block;
   color: var(--fg-muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .prepare-kpis {
@@ -1100,6 +1103,7 @@ small {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 .prepare-kpis span,
@@ -1115,6 +1119,7 @@ small {
   color: var(--fg-muted);
   font-size: 12px;
   white-space: nowrap;
+  max-width: 100%;
 }
 
 .prepare-kpis strong,
@@ -1126,17 +1131,20 @@ small {
 .prepare-scope {
   margin: 0;
   color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 .prepare-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .prepare-real-target {
   display: grid;
   gap: 9px;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
@@ -1165,6 +1173,7 @@ small {
 
 .prepare-real-target small {
   color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 .prepare-ground-truth {
@@ -1177,6 +1186,7 @@ small {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   min-height: 28px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1184,6 +1194,8 @@ small {
   background: var(--canvas);
   color: var(--fg-muted);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .prepare-ground-truth strong {
@@ -1197,7 +1209,9 @@ small {
 
 .prepare-components {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .prepare-component {
@@ -1209,6 +1223,7 @@ small {
   border-radius: 8px;
   padding: 9px 10px;
   background: var(--canvas-subtle);
+  min-width: 0;
 }
 
 .prepare-component strong,
@@ -1225,8 +1240,9 @@ small {
 
 .prepare-lists {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
 }
 
 .prepare-list {
@@ -1234,6 +1250,7 @@ small {
   border-radius: 8px;
   padding: 10px 12px;
   background: var(--canvas-subtle);
+  min-width: 0;
 }
 
 .prepare-list.warn {
@@ -1245,6 +1262,7 @@ small {
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 .prepare-list li + li {
@@ -3069,10 +3087,15 @@ small {
 
   .prepare-head {
     display: grid;
+    grid-template-columns: 1fr;
   }
 
   .prepare-kpis {
     justify-content: flex-start;
+  }
+
+  .prepare-components {
+    grid-template-columns: 1fr;
   }
 
   .setup-disclosure summary {
