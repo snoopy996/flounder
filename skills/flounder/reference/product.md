@@ -98,10 +98,20 @@ curl http://127.0.0.1:4500/api/runs/<id>/log
 Selected report regeneration:
 
 ```bash
+flounder report --project <uuid> --finding 123 --finding 456
+flounder report --project <uuid> --all
+
 curl -X POST http://127.0.0.1:4500/api/projects/<uuid>/runs \
   -H 'content-type: application/json' \
   -d '{"verb":"report","findingIds":[123,456]}'
+
+curl -X POST http://127.0.0.1:4500/api/projects/<uuid>/runs \
+  -H 'content-type: application/json' \
+  -d '{"verb":"report","regenerateReports":true}'
 ```
+
+Without `--finding`, `--all`, `findingIds`, or `regenerateReports:true`, report
+runs generate only missing formal reports.
 
 ## Artifact Model
 

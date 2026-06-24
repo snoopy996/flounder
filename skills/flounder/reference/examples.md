@@ -130,11 +130,21 @@ curl 'http://127.0.0.1:4500/api/projects/<uuid>/findings?tracking=active'
 curl 'http://127.0.0.1:4500/api/projects/<uuid>/findings?tracking=ignored'
 ```
 
-Mark human-dismissed machine findings as `ignored`, not deleted. Regenerate
-selected reports with a project run body like:
+Mark human-dismissed machine findings as `ignored`, not deleted. Generate
+missing reports, regenerate selected reports, or regenerate every current
+reportable finding with the project-scoped report command:
+
+```bash
+flounder report --project <uuid>
+flounder report --project <uuid> --finding 123 --finding 456
+flounder report --project <uuid> --all
+```
+
+The matching project run bodies are:
 
 ```json
 {"verb":"report","findingIds":[123,456]}
+{"verb":"report","regenerateReports":true}
 ```
 
 ## Verify Existing Suspicions
@@ -155,8 +165,11 @@ Write a JSON file:
 Then run:
 
 ```bash
-flounder audit --verify claims.json --source ./contracts --build-root .
+flounder verify claims.json --source ./contracts --build-root .
 ```
+
+`flounder audit --verify claims.json --source ./contracts --build-root .` is
+equivalent.
 
 Return each claim as confirmed, refuted, or still suspected. Do not merge these
 statuses.

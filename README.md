@@ -218,8 +218,11 @@ flounder audit src/Vault.sol:120-220 --source ./contracts --build-root .
 Use this for claims from a prior run, a human review, or an imported JSON file.
 
 ```bash
-flounder audit --verify claims.json --source ./contracts --build-root .
+flounder verify claims.json --source ./contracts --build-root .
 ```
+
+`flounder audit --verify claims.json --source ./contracts --build-root .` is
+equivalent.
 
 ### Real-Target Confirmation
 
@@ -232,14 +235,25 @@ flounder confirm ~/.flounder/protocol-<timestamp> --source ./contracts --build-r
 
 ### Report Regeneration And Finding Triage
 
-Project report generation is a UI/API action because it uses tracked findings.
+Project report generation is project-scoped because it uses tracked findings.
+Without a selection it generates only missing formal reports. Selected findings
+are regenerated even if a report already exists; `--all` regenerates every
+current reportable finding.
 
 ```bash
 PROJECT_UUID=<uuid>
 
+flounder report --project "$PROJECT_UUID"
+flounder report --project "$PROJECT_UUID" --finding 123 --finding 456
+flounder report --project "$PROJECT_UUID" --all
+
 curl -X POST http://127.0.0.1:4500/api/projects/$PROJECT_UUID/runs \
   -H 'content-type: application/json' \
   -d '{"verb":"report","findingIds":[123,456]}'
+
+curl -X POST http://127.0.0.1:4500/api/projects/$PROJECT_UUID/runs \
+  -H 'content-type: application/json' \
+  -d '{"verb":"report","regenerateReports":true}'
 
 curl 'http://127.0.0.1:4500/api/projects/'"$PROJECT_UUID"'/findings?tracking=ignored'
 
@@ -267,9 +281,9 @@ For trusted local smoke tests only, use `--sandbox-backend host --allow-host-exe
 Agents can drive everything through [skills/flounder/SKILL.md](skills/flounder/SKILL.md), but every step is also exposed directly:
 
 - **Dashboard**: `flounder ui` for projects, daemons, provider profiles, runs, scopes, findings, live activity, and reports.
-- **CLI**: workflow verbs (`prepare`, `run`, `map`, `audit`, `confirm`), run-history import, control-plane resources under `flounder server ...`, daemon-local operations under `flounder daemon ...`, and `config`.
+- **CLI**: workflow verbs (`prepare`, `run`, `map`, `audit`, `verify`, `confirm`, `report`), run-history import, control-plane resources under `flounder server ...`, daemon-local operations under `flounder daemon ...`, and `config`.
 - **REST API**: `GET /api` returns the self-describing catalog; agents can create projects, enqueue runs, watch logs, and read findings without the UI.
-- **pi extension**: `flounder_prepare`, `flounder_run`, `flounder_map`, `flounder_audit`, and `flounder_confirm` mirror the top-level workflow verbs when loaded through pi.
+- **pi extension**: `flounder_prepare`, `flounder_run`, `flounder_map`, `flounder_audit`, and `flounder_confirm` expose the agent-session workflow tools when loaded through pi.
 
 ## How It Works
 
@@ -292,7 +306,9 @@ You can run that end to end or drive each phase directly:
 | `flounder audit <region> --source <paths...>` | deep-audit one named file/function/region without a new map |
 | `flounder audit --scope <id,...> --source <paths...>` | deep-audit selected inventory scopes after `flounder map` |
 | `flounder audit --verify <file> --source <paths...>` | confirm or refute suspected findings from JSON by execution |
+| `flounder verify <file> --source <paths...>` | alias for `audit --verify`; confirm or refute suspected findings from JSON by execution |
 | `flounder confirm <run-dir> --source <paths...>` | reproduce locally confirmed findings on real-world ground truth |
+| `flounder report --project <uuid\|name> [--finding <id>...] [--all]` | generate missing formal reports, regenerate selected reports, or regenerate every current reportable finding |
 | `flounder history import-run --target <name> --run <dir>` | import an existing run directory into tracked history |
 | `flounder server project list` | list tracked projects |
 | `flounder server run list [--project <name>]` | list global or project run history |
