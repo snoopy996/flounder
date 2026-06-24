@@ -29,7 +29,7 @@
     "flounder": "./dist/cli.js"
   },
   "engines": {
-    "node": ">=22.20 <23"
+    "node": ">=24.13 <25"
   },
   "scripts": {
     "build": "node scripts/clean-dist.mjs && npm run build:server && npm run build:ui",
@@ -91,6 +91,7 @@
     "docker/**",
     "docs/**",
     "fixtures/**",
+    "assets/screenshots/demo-full-overview.png",
     "scripts/**",
     "README.md",
     "AGENTS.md",
@@ -115,9 +116,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.78.1",
-    "@earendil-works/pi-coding-agent": "0.78.1",
-    "@types/node": "^22.20.0",
+    "@earendil-works/pi-ai": "0.80.2",
+    "@earendil-works/pi-coding-agent": "0.80.2",
+    "@types/node": "^24.13.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",

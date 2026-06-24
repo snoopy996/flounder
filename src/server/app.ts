@@ -19,7 +19,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultOutputDir } from "../config.js";
 import { MetadataStore, type RunKind, type Coverage, type ProviderInput, type ProviderProfile, type ProjectInput, type ProjectListOptions, type ProviderRoles, type RoleOverride } from "../db/store.js";
-import { getProviders, getModels, getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { getProviders, getModels } from "@earendil-works/pi-ai/compat";
 import { type LaunchSpec, ActivityBus, type Activity, type ReportFindingSpec } from "./run-manager.js";
 import { THINKING_LEVELS } from "../config.js";
 import { projectHistoryDir } from "../trace/history.js";
@@ -28,6 +29,7 @@ import { deriveScopeNote } from "../scope-note.js";
 
 const UI_HTML_PATH = fileURLToPath(new URL("./public/index.html", import.meta.url));
 const UI_PUBLIC_DIR = path.dirname(UI_HTML_PATH);
+const PROJECT_STREAM_LIMIT = 100;
 function loadUiHtml(): string {
   try {
     return readFileSync(UI_HTML_PATH, "utf8");
@@ -147,11 +149,24 @@ const ROUTES: Route[] = [
 
   route({
     method: "GET", path: "/api/projects",
-    summary: "List active projects with a live snapshot (scope coverage, finding counts, confirmed-bug count, latest run, active runs). Pass ?archived=1 to list archived projects for Settings.",
-    query: { archived: "boolean? — when true, return archived projects instead of active projects" },
+    summary: "List projects with a live snapshot (scope coverage, finding counts, confirmed-bug count, latest run, active runs). Paginated with ?limit/&offset; pass ?archived=1 to list archived projects for Settings.",
+    query: {
+      archived: "boolean? — when true, return archived projects instead of active projects",
+      limit: "number? (default 100)",
+      offset: "number? (default 0)",
+      q: "string? — case-insensitive project-name search",
+    },
     handler: async (c) => {
+      const limit = clampInt(c.url.searchParams.get("limit"), 100, 1, 500);
+      const offset = clampInt(c.url.searchParams.get("offset"), 0, 0, 1_000_000);
+      const options: ProjectListOptions = {
+        archived: truthyParam(c.url.searchParams.get("archived")),
+        limit,
+        offset,
+        search: c.url.searchParams.get("q") ?? undefined,
+      };
       await reconcileAllStaleAuditingScopes(c);
-      sendJson(c.res, 200, { projects: projectSnapshots(c.store, { archived: truthyParam(c.url.searchParams.get("archived")) }) });
+      sendJson(c.res, 200, { projects: projectSnapshots(c.store, options), total: c.store.countProjects(options), limit, offset });
     },
   }),
   route({
@@ -171,7 +186,7 @@ const ROUTES: Route[] = [
       sourcePaths: "string[] — code paths relative to dir",
       buildRoot: "string? — buildable root relative to dir",
       corpusPaths: "string[]? — specs/docs relative to dir",
-      config: "object? — { prepareClue, projectIntent, phaseProviders, scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency, sandbox... }. Default coverage is cumulative: Standard audits until 30 project scopes are done, not 30 extra scopes per launch.",
+      config: "object? — { prepareClue, projectIntent, phaseProviders, scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency, sandbox... }. Default coverage is full pending coverage; Standard is an explicit cumulative mode that audits until 30 project scopes are done.",
     },
     handler: projectCreate,
   }),
@@ -211,6 +226,7 @@ const ROUTES: Route[] = [
       quick: "boolean? — run: single breadth pass", mockLlm: "boolean? — offline mock model",
       region: "string? — audit: pinned region e.g. src/Foo.sol:120-180", scope: "string? — audit: scope id(s)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution; project finding rows with id are linked back to that original row",
       allowMaterialDrift: "boolean? — expert override for verifyFindings when a newer Prepare run changed project materials after the selected findings were produced",
+      regenerateReports: "boolean? — report: include findings that already have formal reports; selected findingIds are always regenerated",
       scopeCoverageMode: "focused|standard|half|full|custom? — one-off coverage mode for this run; standard means audit until the project has 30 audited scopes",
       maxScopes: "number? — one-off scope cap for this run, or the custom target when scopeCoverageMode=custom", mapSteps: "number? — one-off map turn cap", digSteps: "number? — one-off per-scope dig turn cap",
       maxSteps: "number? — one-off global turn cap", digSamples: "number? — one-off samples per scope", digConcurrency: "number? — one-off parallel scopes",
@@ -1087,17 +1103,41 @@ function scopeCheckpointRow(entry: unknown, index: number): Record<string, unkno
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const scope = entry as Record<string, unknown>;
   const scopeId = stringValue(scope.scope_id ?? scope.id) || `checkpoint-${index + 1}`;
+  const title = stringValue(scope.title ?? scope.obligation ?? scope.scope ?? scope.name) || scopeId;
+  const obligation = stringValue(scope.obligation) || composeCheckpointObligation(scope) || title;
   const status = stringValue(scope.status) || "pending";
   return {
     scope_id: scopeId,
-    title: stringValue(scope.title ?? scope.obligation) || scopeId,
+    title,
     location: stringValue(scope.location ?? scope.region),
-    obligation: stringValue(scope.obligation ?? scope.title) || scopeId,
+    obligation,
     region: stringValue(scope.region ?? scope.location),
-    score: numericValue(scope.score),
+    score: numericValue(scope.score) ?? scoreFromCheckpointExposure(scope.exposure),
     priority: numericValue(scope.priority),
     status,
   };
+}
+
+function composeCheckpointObligation(scope: Record<string, unknown>): string | undefined {
+  const spec = stringValue(scope.spec);
+  const value = stringValue(scope.value);
+  const inputs = stringValue(scope.inputs);
+  if (!spec && !value && !inputs) return undefined;
+  return [
+    spec ? `Spec: ${spec}` : undefined,
+    value ? `Value at risk: ${value}` : undefined,
+    inputs ? `Inputs/trust boundary: ${inputs}` : undefined,
+  ].filter((part): part is string => Boolean(part)).join(" ");
+}
+
+function scoreFromCheckpointExposure(exposure: unknown): number | null {
+  const value = stringValue(exposure).toLowerCase();
+  if (value === "critical") return 10;
+  if (value === "high") return 8;
+  if (value === "medium" || value === "moderate") return 5;
+  if (value === "low") return 2;
+  if (value === "info" || value === "informational") return 1;
+  return null;
 }
 
 function checkpointScopeView(
@@ -1801,7 +1841,7 @@ async function runLaunch(c: Ctx): Promise<void> {
   }
   if (spec.verb === "report") {
     const selected = selectedFindingIds(body);
-    const reports = reportWorklist(c.store, Number(project.id), selected, currentResultRunIds, materialBoundary, latestPrepareRequiresRealTargetConfirmation(runs));
+    const reports = reportWorklist(c.store, Number(project.id), selected, currentResultRunIds, materialBoundary, latestPrepareRequiresRealTargetConfirmation(runs), body.regenerateReports === true);
     if (reports.error) return sendJson(c.res, 400, { error: reports.error });
     spec.reportFindings = reports.findings;
   }
@@ -1920,12 +1960,13 @@ function reportWorklist(
   currentRunIds?: Set<number>,
   materialBoundary?: Record<string, unknown>,
   requiresRealTargetConfirmation = true,
+  includeExistingReports = false,
 ): { findings: ReportFindingSpec[]; error?: undefined } | { findings?: undefined; error: string } {
   const selected = selectedIds.length ? new Set(selectedIds) : undefined;
   const rows = reportableFindings(store.listFindings(projectId)).filter((row) => {
     if (selected && !selected.has(Number(row.id))) return false;
     if (isIgnoredFinding(row)) return false;
-    if (!selected && rowHasFormalReport(row)) return false;
+    if (!selected && !includeExistingReports && rowHasFormalReport(row)) return false;
     if (!rowBelongsToCurrentMaterial(row, currentRunIds ?? new Set(), materialBoundary)) return false;
     if (!requiresRealTargetConfirmation) return isExecutionConfirmedFindingStatus(String(row.status ?? "").toLowerCase());
     if (String(row.confirm_status ?? "") !== "reproduced") return false;
@@ -3101,7 +3142,7 @@ function streamSnapshots(res: ServerResponse, store: MetadataStore, plane: Contr
   // A throw here (closed socket, or a transient store read error) must not crash the server.
   function tick(): void {
     try {
-      res.write(`data: ${JSON.stringify({ projects: projectSnapshots(store), active: activeRuns(store, plane) })}\n\n`);
+      res.write(`data: ${JSON.stringify({ projects: projectSnapshots(store, { limit: PROJECT_STREAM_LIMIT }), active: activeRuns(store, plane) })}\n\n`);
     } catch {
       clearInterval(timer);
     }
@@ -3266,7 +3307,7 @@ function resolveCoverage(cfg: Record<string, unknown>, progress?: Coverage, expl
   if (mode === "focused") return { mode, target: 10, maxScopes: cumulativeCoverageLimit(10, progress) };
   if (mode === "standard") return { mode, target: 30, maxScopes: cumulativeCoverageLimit(30, progress) };
   if (mode === "half") return { mode, maxScopes: total > 0 ? Math.max(0, Math.ceil(pending / 2)) : 30 };
-  if (mode === "full") return { mode, maxScopes: total > 0 ? pending : 1_000_000 };
+  if (mode === "full") return { mode, maxScopes: total > 0 ? pending : undefined };
   if (mode === "custom") return { mode, maxScopes: explicit };
   return { mode, maxScopes: explicit };
 }
@@ -3274,7 +3315,8 @@ function resolveCoverage(cfg: Record<string, unknown>, progress?: Coverage, expl
 function normalizeCoverageMode(input: unknown, explicit?: number): CoverageMode {
   if (input === "focused" || input === "standard" || input === "half" || input === "full" || input === "custom") return input;
   if (explicit === 10) return "focused";
-  if (explicit === undefined || explicit === 30) return "standard";
+  if (explicit === 30) return "standard";
+  if (explicit === undefined) return "full";
   return "custom";
 }
 

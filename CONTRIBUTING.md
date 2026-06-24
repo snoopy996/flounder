@@ -6,8 +6,8 @@ Flounder is a public open-source project. Public-facing text, examples, package 
 
 ## Development Setup
 
-Use Node 22 LTS. This repository includes `.nvmrc` and `.node-version` pinned to
-22.20.0.
+Use Node 24 LTS. This repository includes `.nvmrc` and `.node-version` pinned to
+24.13.0.
 
 ```bash
 nvm use

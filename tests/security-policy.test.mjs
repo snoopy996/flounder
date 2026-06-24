@@ -110,6 +110,7 @@ test("reproduction command policy allows only structured local test commands", (
   assert.equal(analyzeReproductionCommandSafety({ program: "forge", args: ["test", "--match-test", "testLocalRepro"] }).blocked, false);
   assert.equal(analyzeReproductionCommandSafety({ program: "ctest", args: ["--test-dir", "build/bbapi-poc", "-R", "noncanonical"] }).blocked, false);
   assert.equal(analyzeReproductionCommandSafety({ program: "npx", args: ["hardhat", "test", "test/repro.ts"] }).blocked, false);
+  assert.equal(analyzeReproductionCommandSafety({ program: "yarn", args: ["hardhat", "test", "test/repro.ts"] }).blocked, false);
   assert.equal(analyzeReproductionCommandSafety({ program: "zcash-cli", args: ["-testnet", "sendrawtransaction", "poc"] }).blocked, true);
   assert.equal(analyzeReproductionCommandSafety({ program: "bash", args: ["-lc", "cargo test"] }).blocked, true);
   assert.equal(analyzeReproductionCommandSafety({ program: "cargo;curl", args: ["test"] }).blocked, true);
@@ -172,6 +173,10 @@ test("reproduction command policy keeps Solidity fork and network targets local-
   );
   assert.equal(
     analyzeReproductionCommandSafety({ program: "npx", args: ["hardhat", "test", "--network", "sepolia"] }).blocked,
+    true,
+  );
+  assert.equal(
+    analyzeReproductionCommandSafety({ program: "yarn", args: ["hardhat", "test", "--network", "sepolia"] }).blocked,
     true,
   );
   assert.equal(

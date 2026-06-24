@@ -130,7 +130,7 @@ When a user asks to audit, confirm, verify, report, or inspect Flounder state:
 7. Report the result with project/run ids, phase, evidence status, and next
    action. Include setup blockers distinctly from audit findings.
 
-For repository development or local builds, use Node 22 LTS from `.nvmrc` /
+For repository development or local builds, use Node 24 LTS from `.nvmrc` /
 `.node-version`; do not substitute newer experimental Node versions.
 
 ## Quickstart For Codex Or Claude Code
@@ -353,11 +353,19 @@ Use this when the user is reviewing machine-reported bugs.
 
 ### Verify, Confirm, And Report Selected Findings
 
-- Suspected finding from JSON: `flounder audit --verify <file> --source ...`.
+- Suspected finding from JSON: `flounder audit --verify <file> --source ...`
+  or the equivalent `flounder verify <file> --source ...`.
 - Selected project findings: use More actions -> Verify/Confirm/Report, or
   pass `findingId` / `findingIds` to `POST /api/projects/:uuid/runs`.
 - Regenerate only specific reports with `{"verb":"report","findingIds":[...]}`.
+- Regenerate every current reportable finding with
+  `{"verb":"report","regenerateReports":true}` or
+  `flounder report --project <uuid|name> --all`.
 - Report without `findingIds` generates only missing formal reports.
+- CLI report generation uses the same project worklist:
+  `flounder report --project <uuid|name>` for missing reports and
+  `flounder report --project <uuid|name> --finding <id>` for selected
+  regeneration.
 - Mark a human-dismissed machine finding as `ignored`; recover it later from
   `tracking=ignored` by changing it back to `open`.
 
@@ -383,13 +391,13 @@ Open only the references needed for the current task:
 | "Audit this repo/source openly for bug bounty" | Open-world bounty audit: project with source paths plus task/clue, then Run |
 | "Map the attack surface first" | `flounder map`, then inspect scopes and run `flounder audit --scope ...` |
 | "Dig this file/function/region" | `flounder audit <region> --source ... --build-root ...` |
-| "Verify this suspected bug" | Write a claims JSON and run `flounder audit --verify <file>` |
+| "Verify this suspected bug" | Write a claims JSON and run `flounder verify <file>` or `flounder audit --verify <file>` |
 | "Continue coverage" | Use project Continue or audit pending scopes from the inventory |
 | "Confirm whether this is real" | `flounder confirm <run-dir>` or project/finding Confirm in the UI |
 | "Collect bugs for disclosure" | Read findings, selected reports, confirm decisions, and artifacts; return only execution-backed items |
 | "Ignore this false positive" | Set finding tracking to `ignored`; do not delete it |
 | "Bring back ignored findings" | Filter `tracking=ignored`, then set selected rows back to `open` |
-| "Regenerate reports" | Use report action with selected `findingIds` |
+| "Regenerate reports" | Use `flounder report --project <uuid|name> --finding <id>` or the report action with selected `findingIds` |
 
 ## Deciding The Next Action
 
@@ -437,8 +445,8 @@ Open only the references needed for the current task:
 | `prepareSummary.quality=invalid/missing` | No usable staged source or contaminated material | Repair prepare inputs before audit. |
 | Verify rejects selected findings for material drift | New Prepare changed the current material boundary | Re-select current findings or pass the explicit expert override only after checking drift. |
 | Confirm returns `not-reproduced` | PoC was not attacker-real on the real target, or environment is incomplete | Treat as not submission-ready unless the user approves more reproduction work. |
-| Report action says no findings are missing reports | All reportable rows already have formal reports, or selected rows are not reproduced/confirmed | Select eligible findings or inspect Active/Ignored tracking filters. |
-| Node native crash during repo tooling | Unsupported Node version | Use Node 22 LTS from `.nvmrc` / `.node-version`. |
+| Report action says no findings are missing reports | All reportable rows already have formal reports, or selected rows are not reproduced/confirmed | Use `flounder report --project <uuid|name> --all` to regenerate existing reports, select eligible findings, or inspect Active/Ignored tracking filters. |
+| Node native crash during repo tooling | Unsupported Node version | Use Node 24 LTS from `.nvmrc` / `.node-version`. |
 
 ## Collecting Bugs
 
