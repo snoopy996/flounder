@@ -306,7 +306,7 @@ export async function runAudit(
       const live = options.control?.getRunScopesTarget?.();
       const raw = typeof live === "number" && Number.isFinite(live) ? live : cfg.auditMaxScopes;
       if (toDig.length === 0) return 0;
-      return Math.max(1, Math.min(toDig.length, Math.floor(raw)));
+      return Math.min(toDig.length, Math.max(0, Math.floor(raw)));
     };
     const effectiveRunScopesTarget = (done: number): number => Math.max(done, requestedRunScopesTarget());
     let reportedRunScopesTarget = effectiveRunScopesTarget(0);

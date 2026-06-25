@@ -1118,6 +1118,50 @@ test("map → dig: --deep enumerates scopes then deep-audits each, tagging findi
   }
 });
 
+test("map → dig: a zero scope target does not audit an extra pending scope", async () => {
+  const dir = await tempDir();
+  try {
+    const cfg = defaultConfig();
+    cfg.targetName = "mapdig-zero-target-e2e";
+    cfg.sourcePaths = [fixtures];
+    cfg.corpusPaths = [fixtures];
+    cfg.outputDir = path.join(dir, "runs");
+    cfg.auditDeep = true;
+    cfg.auditSynthesize = false;
+    cfg.auditMapSteps = 6;
+    cfg.auditDigSteps = 8;
+    cfg.auditMaxScopes = 0;
+
+    const runScopes = [];
+    const tracker = {
+      runDbId: undefined,
+      scopes() {},
+      runScopes(done, target) {
+        runScopes.push({ done, target });
+      },
+      findings() {},
+      stage() {},
+      confirmDecisions() {},
+      finish() {},
+    };
+
+    const { runDir, summary, scopeCoverage } = await runAudit(cfg, {
+      llm: new MockAuditLlmClient(),
+      makeTracker: () => tracker,
+    });
+
+    const scopes = JSON.parse(await readFile(path.join(runDir, "audit_scopes.json"), "utf8"));
+    assert.equal(scopes.length, 2, "map still enumerates the inventory");
+    assert.equal(scopes.find((s) => s.id === "S1").status, "pending");
+    assert.equal(scopes.find((s) => s.id === "S2").status, "pending");
+    assert.deepEqual(scopeCoverage, { total: 2, audited: 0, pending: 2, deferred: 0 });
+    assert.equal(summary.findings.length, 0);
+    assert.deepEqual(runScopes[0], { done: 0, target: 0 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("map → dig: a running sequential batch can shrink its scope target at a scope boundary", async () => {
   const dir = await tempDir();
   try {
