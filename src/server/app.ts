@@ -257,7 +257,7 @@ const ROUTES: Route[] = [
     summary: "Queue project work (Run/Continue pipeline, map, audit a region/scope, verify, confirm, report, or prepare). The job is dispatched to a connected daemon, which executes it and reports back. Uses the project's stored materials + config unless overridden. This is the single action behind the UI's primary and More actions controls.",
     params: { uuid: "project UUID" },
     body: {
-      verb: "'run' | 'map' | 'audit' | 'confirm' | 'report' | 'prepare' (default 'run'; project run = prepare-if-needed→map/dig→confirm→report; source run = map→dig)",
+      verb: "'run' | 'map' | 'audit' | 'confirm' | 'report' | 'prepare' (default 'run'; project run = prepare-if-needed→map/dig→verify→confirm→report; source run = map→dig→verify)",
       remap: "boolean? — re-enumerate scopes (restart)", fresh: "boolean? — confirm: ignore a prior interrupted confirm",
       quick: "boolean? — run: single breadth pass", mockLlm: "boolean? — offline mock model",
       region: "string? — audit: pinned region e.g. src/Foo.sol:120-180", scope: "string? — audit: scope id(s)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution; project finding rows with id are linked back to that original row",
@@ -414,7 +414,7 @@ const ROUTES: Route[] = [
       provider: "string?", model: "string?", thinking: "string?",
       scopeCoverageMode: "focused|standard|half|full|custom? — standard/focused are cumulative project targets, not per-run additions", maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
       sandboxBackend: "'auto'|'oci'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
-      remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> confirm -> report", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
+      remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> verify -> confirm -> report", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
       inputRunDir: "string? — confirm", fresh: "boolean? — confirm",
       clue: "string? — prepare", posture: "string? — prepare", matchDeployed: "boolean? — prepare", endpoint: "string? — prepare",
     },
@@ -495,7 +495,7 @@ const ROUTES: Route[] = [
   route({ method: "POST", path: "/api/daemon/runs", summary: "(daemon) Start a run row for a claimed job; links job→run.", hidden: true, handler: daemonRunStart }),
   route({ method: "PATCH", path: "/api/daemon/runs/:id", summary: "(daemon) Report run progress: scopes / findings / confirm-decisions / finish.", hidden: true, handler: daemonRunUpdate }),
   route({ method: "POST", path: "/api/daemon/runs/:id/activity", summary: "(daemon) Push a batch of token-level activity events for the live log.", hidden: true, handler: daemonRunActivity }),
-  route({ method: "POST", path: "/api/daemon/pipeline-worklist", summary: "(daemon) Resolve confirm/report work for an in-process pipeline job.", hidden: true, handler: daemonPipelineWorklist }),
+  route({ method: "POST", path: "/api/daemon/pipeline-worklist", summary: "(daemon) Resolve verify/confirm/report work for an in-process pipeline job.", hidden: true, handler: daemonPipelineWorklist }),
   route({ method: "POST", path: "/api/daemon/jobs/:id/status", summary: "(daemon) Report a job's terminal status (done/error/canceled).", hidden: true, handler: daemonJobStatus }),
 ];
 
@@ -805,7 +805,7 @@ async function projectGet(c: Ctx): Promise<void> {
       ? []
       : reportableFindings(c.store.listFindings(id).filter((row) => rowBelongsToCurrentMaterial(row, currentRunIds, materialBoundary)));
     const activeFindings = allFindings.filter((finding) => !isIgnoredFinding(finding));
-    const findingSummaries = allFindings.map(findingSummaryRow);
+    const findingSummaries = allFindings.map((finding) => findingSummaryRow({ ...finding, timeline: c.store.findingTimeline(Number(finding.id)) }));
     const auditConfirmedFindings = countAuditConfirmedFindings(activeFindings);
     const confirmDecisions = activePrepareRefresh
       ? []
@@ -2245,6 +2245,7 @@ function findingSummaryRow(row: Record<string, unknown>): Record<string, unknown
     "tracking_status",
     "created_at",
     "updated_at",
+    "timeline",
   ]) {
     if (key in row) out[key] = row[key];
   }
@@ -2965,8 +2966,8 @@ async function daemonPipelineWorklist(c: Ctx): Promise<void> {
   const body = (await readBody(c.req)) as { project?: string; phase?: string };
   const projectName = typeof body.project === "string" ? body.project.trim() : "";
   if (!projectName) return sendJson(c.res, 400, { error: "project is required" });
-  const phase = body.phase === "confirm" || body.phase === "report" ? body.phase : "";
-  if (!phase) return sendJson(c.res, 400, { error: "phase must be confirm or report" });
+  const phase = body.phase === "verify" || body.phase === "confirm" || body.phase === "report" ? body.phase : "";
+  if (!phase) return sendJson(c.res, 400, { error: "phase must be verify, confirm, or report" });
   const project = c.store.getProject(projectName);
   if (!project) return sendJson(c.res, 404, { error: `no project named ${projectName}` });
 
@@ -2977,6 +2978,14 @@ async function daemonPipelineWorklist(c: Ctx): Promise<void> {
   const scopeBoundary = latestScopeInventoryBoundaryRun(currentRuns);
   const currentResultRunIds = runIdSet(currentResultRuns(currentRuns, scopeBoundary));
   const requiresRealTargetConfirmation = latestPrepareRequiresRealTargetConfirmation(allRuns);
+
+  if (phase === "verify") {
+    const verifyFindings = verifyWorklist(c.store, projectId, currentResultRunIds, materialBoundary);
+    return sendJson(c.res, 200, {
+      phase,
+      verifyFindings,
+    });
+  }
 
   if (phase === "confirm") {
     if (!requiresRealTargetConfirmation) {
@@ -3001,6 +3010,17 @@ async function daemonPipelineWorklist(c: Ctx): Promise<void> {
     reportFindings: reports.findings ?? [],
     ...(reports.error ? { skipReason: reports.error } : {}),
   });
+}
+
+function verifyWorklist(store: MetadataStore, projectId: number, currentResultRunIds: Set<number>, materialBoundary?: Record<string, unknown>): unknown[] {
+  return reportableFindings(store.listFindings(projectId)
+    .filter((row) => rowBelongsToCurrentMaterial(row, currentResultRunIds, materialBoundary))
+    .filter((row) => !isIgnoredFinding(row))
+    .filter((row) => {
+      const status = String(row.status ?? "");
+      return status === "suspected" || status === "confirmed-source";
+    }))
+    .map((row) => normalizeProjectVerifyFindings(findingDetailRow(row)));
 }
 
 async function daemonJobStatus(c: Ctx): Promise<void> {

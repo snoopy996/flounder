@@ -368,6 +368,68 @@ test("api: daemon pipeline jobs can append phase runs and keep job linked to the
   });
 });
 
+test("api: daemon pipeline worklist exposes verify candidates before confirm", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", { name: "pipeline-verify-worklist", sourcePaths: ["./src"] }));
+    const store = MetadataStore.openForOutput(out);
+    let token;
+    let suspectedId;
+    try {
+      const daemon = store.createDaemonToken("pipeline-verify-daemon");
+      token = daemon.token;
+      const runId = store.startRun({ projectId: created.id, kind: "run", runDir: path.join(out, "pipeline-verify-run") });
+      store.upsertFindings(created.id, runId, [
+        {
+          findingKey: "suspected-bug",
+          title: "Proof input is not bound",
+          location: "src/Rollup.sol:44",
+          severity: "high",
+          status: "suspected",
+          confidence: 0.82,
+        },
+      ], "synthesis");
+      suspectedId = Number(store.listFindings(created.id)[0].id);
+      store.upsertFindings(created.id, runId, [
+        {
+          findingKey: "confirmed-bug",
+          title: "Confirmed escrow drain",
+          location: "src/Vault.sol:88",
+          severity: "critical",
+          status: "confirmed-executable",
+          confidence: 0.91,
+        },
+      ], "differential");
+    } finally {
+      store.close();
+    }
+
+    const authHeaders = { "content-type": "application/json", authorization: `Bearer ${token}` };
+    const verify = await json(await fetch(base + "/api/daemon/pipeline-worklist", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ project: "pipeline-verify-worklist", phase: "verify" }),
+    }));
+    assert.equal(verify.phase, "verify");
+    assert.equal(verify.verifyFindings.length, 1);
+    assert.equal(verify.verifyFindings[0].id, suspectedId);
+    assert.equal(verify.verifyFindings[0].originId, suspectedId);
+    assert.equal(verify.verifyFindings[0].finding_key, "suspected-bug");
+
+    const confirm = await json(await fetch(base + "/api/daemon/pipeline-worklist", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ project: "pipeline-verify-worklist", phase: "confirm" }),
+    }));
+    assert.deepEqual(confirm.confirmKeys, ["confirmed-bug"]);
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    const suspected = detail.allFindings.find((finding) => finding.finding_key === "suspected-bug");
+    assert.equal(suspected.timeline[0].reason, "synthesis");
+  });
+});
+
 test("api: project prepare reuses prior neutral clue when resolving materials", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();

@@ -234,6 +234,35 @@ async function runPipelineJob(
   });
   await ctx.flushTracker();
 
+  const verify = await pipelineWorklist(base, headers, spec.target, "verify");
+  if (verify.verifyFindings.length > 0) {
+    const verifySpec: LaunchSpec = {
+      ...spec,
+      verb: "audit",
+      dir: undefined,
+      sourcePaths: [staged],
+      buildRoot: staged,
+      verifyFindings: verify.verifyFindings,
+    };
+    const verifyCfg = specToConfig(verifySpec, ctx.out, ctx.workspace);
+    const verifyTempDir = await mkdtemp(path.join(os.tmpdir(), `flounder-verify-${ctx.jobId}-`));
+    try {
+      const vf = path.join(verifyTempDir, "findings.json");
+      await writeFile(vf, JSON.stringify(verify.verifyFindings), "utf8");
+      verifyCfg.auditVerify = vf;
+      await runAudit(verifyCfg, {
+        kind: "audit",
+        signal: ctx.signal,
+        makeTracker: ctx.makeTracker,
+        onActivity: ctx.onActivity,
+        ...(ctx.mockLlm ? { llm: new MockAuditLlmClient() } : {}),
+      });
+    } finally {
+      await rm(verifyTempDir, { recursive: true, force: true });
+    }
+    await ctx.flushTracker();
+  }
+
   const confirm = await pipelineWorklist(base, headers, spec.target, "confirm");
   if (confirm.inputRunDir && confirm.inputRunDirs.length > 0 && confirm.confirmKeys.length > 0) {
     const confirmSpec: LaunchSpec = {
@@ -281,7 +310,8 @@ async function runPipelineJob(
   }
 }
 
-async function pipelineWorklist(base: string, headers: Record<string, string>, project: string, phase: "confirm" | "report"): Promise<{
+async function pipelineWorklist(base: string, headers: Record<string, string>, project: string, phase: "verify" | "confirm" | "report"): Promise<{
+  verifyFindings: unknown[];
   inputRunDir?: string;
   inputRunDirs: string[];
   confirmKeys: string[];
@@ -294,10 +324,12 @@ async function pipelineWorklist(base: string, headers: Record<string, string>, p
     inputRunDirs?: unknown;
     confirmKeys?: unknown;
     reportFindings?: unknown;
+    verifyFindings?: unknown;
   };
   const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0) : [];
   const inputRunDir = typeof body.inputRunDir === "string" ? body.inputRunDir : undefined;
   return {
+    verifyFindings: Array.isArray(body.verifyFindings) ? body.verifyFindings : [],
     ...(inputRunDir ? { inputRunDir } : {}),
     inputRunDirs: strings(body.inputRunDirs),
     confirmKeys: strings(body.confirmKeys),

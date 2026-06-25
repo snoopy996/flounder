@@ -66,7 +66,7 @@ export interface LaunchSpec {
   inputRunDirs?: string[] | undefined; // confirm (aggregate): several run dirs whose confirmed findings are unioned + reproduced together
   confirmKeys?: string[] | undefined; // confirm: restrict the work list to these finding content keys (the pending/target set the control plane resolved from finding status)
   reportFindings?: ReportFindingSpec[] | undefined; // report: confirmed/reproduced bugs to package as formal Markdown reports
-  pipeline?: boolean | undefined; // run: project/CLI clue pipeline (prepare if needed -> map/dig -> confirm -> report)
+  pipeline?: boolean | undefined; // run: project/CLI clue pipeline (prepare if needed -> map/dig -> verify -> confirm -> report)
   region?: string | undefined; // audit: a pinned region
   scope?: string | undefined; // audit: scope id[,id...]
   verifyFindings?: unknown; // audit: inline suspected finding(s) to confirm-or-refute (the --verify file's contents, carried inline so a remote daemon needs no local file)
