@@ -2987,12 +2987,26 @@ function decisionMetaLabel(decision: ConfirmDecision): string {
   ].filter(Boolean).join(" · ");
 }
 
+function badgeToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+}
+
+function badgeLabel(value: string): string {
+  return badgeToken(value).split("-").map((part) => part ? `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}` : "").filter(Boolean).join(" ");
+}
+
+function SeverityBadge({ value }: { value?: string | null }) {
+  if (!value?.trim()) return null;
+  const token = badgeToken(value);
+  return <span className={`severity sev-${token}`}>{badgeLabel(value)}</span>;
+}
+
 function decisionMetaChips(decision: ConfirmDecision): Array<{ label: string; className: string; title: string }> {
   const severity = decision.severity?.trim();
   const confidence = decision.submission_confidence?.trim();
   return [
-    severity ? { label: severity, className: `severity sev-${severity}`, title: "Decision severity" } : null,
-    confidence ? { label: `confidence ${confidence}`, className: `label decision-confidence confidence-${confidence}`, title: "Submission confidence" } : null,
+    severity ? { label: badgeLabel(severity), className: `severity sev-${badgeToken(severity)}`, title: "Decision severity" } : null,
+    confidence ? { label: `${badgeLabel(confidence)} confidence`, className: `label decision-confidence decision-confidence-${badgeToken(confidence)}`, title: "Submission confidence" } : null,
   ].filter((entry): entry is { label: string; className: string; title: string } => Boolean(entry));
 }
 
@@ -3861,7 +3875,7 @@ function FindingList({ findings, compact, empty, onOpenReport }: { findings: Fin
               {origin ? <span className="label origin-label" title={origin.title}>{origin.label}</span> : null}
               <StatusBadge status={finding.status} />
               <FindingChecks finding={finding} />
-              {finding.severity ? <span className={`severity sev-${finding.severity}`}>{finding.severity}</span> : null}
+              <SeverityBadge value={finding.severity} />
               <ConfidenceBadge value={finding.confidence} />
             </span>
           </button>
@@ -3950,7 +3964,7 @@ function FindingTable({
                     <StatusBadge status={finding.status} />
                     <FindingChecks finding={finding} />
                     <span className="finding-evidence-meta">
-                      {finding.severity ? <span className={`severity sev-${finding.severity}`}>{finding.severity}</span> : null}
+                      <SeverityBadge value={finding.severity} />
                       <ConfidenceBadge value={finding.confidence} />
                     </span>
                   </td>

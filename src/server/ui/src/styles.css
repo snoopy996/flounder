@@ -2145,7 +2145,6 @@ small {
   color: white;
   background: var(--danger);
   border-color: transparent;
-  text-transform: uppercase;
 }
 
 .sev-medium {
@@ -3198,9 +3197,33 @@ small {
 }
 
 .decision-confidence {
-  color: var(--accent);
-  background: var(--sel-bg);
-  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--fg-muted);
+  background: var(--canvas-inset);
+  border-color: var(--border);
+}
+
+.decision-confidence-high {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 38%, transparent);
+}
+
+.decision-confidence-medium {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+}
+
+.decision-confidence-low {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.decision-confidence-unknown {
+  color: var(--fg-muted);
+  background: var(--canvas-inset);
+  border-color: var(--border);
 }
 
 .linked-findings {
