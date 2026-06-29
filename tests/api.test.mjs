@@ -84,6 +84,9 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
     assert.match(findingTracking.body.status, /ignored/);
     const runLog = cat.endpoints.find((e) => e.method === "GET" && e.path === "/api/runs/:id/log");
     assert.match(runLog.query.tail, /JSON/);
+    const runPatch = cat.endpoints.find((e) => e.method === "PATCH" && e.path === "/api/runs/:id");
+    assert.match(runPatch.body.scopeCoverageMode, /project-cumulative/);
+    assert.match(runPatch.body.coverageTarget, /until 30/);
   });
 });
 
@@ -3561,6 +3564,41 @@ test("api: run scope target adjustment only applies to running runs", async () =
     assert.match((await json(res)).error, /running/);
     const run = await json(await fetch(base + `/api/runs/${runId}`));
     assert.equal(run.run.run_scopes_target, 30);
+  });
+});
+
+test("api: running run standard coverage adjustment targets 30 cumulative audited scopes", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const patch = (p, body) => fetch(base + p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", { name: "adjust-run-standard", sourcePaths: ["./src"] }));
+    const runDir = await mkdtemp(path.join(out, "adjust-run-standard-"));
+    let runId;
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.upsertScopes(created.id, Array.from({ length: 40 }, (_, index) => ({
+        scopeId: `SCOPE-${index + 1}`,
+        title: `Scope ${index + 1}`,
+        status: index < 12 ? "audited" : "pending",
+        score: 100 - index,
+      })));
+      runId = store.startRun({ projectId: created.id, kind: "run", runDir });
+      store.updateRunScopes(runId, 5, 40);
+      store.updateRunCoverage(runId, { total: 40, audited: 12, pending: 28, deferred: 0 });
+    } finally {
+      store.close();
+    }
+
+    const res = await patch(`/api/runs/${runId}`, { scopeCoverageMode: "standard" });
+    assert.equal(res.status, 200);
+    const adjusted = await json(res);
+    assert.equal(adjusted.runScopesTarget, 23);
+    assert.equal(adjusted.coverageMode, "standard");
+    assert.equal(adjusted.coverageTarget, 30);
+
+    const run = await json(await fetch(base + `/api/runs/${runId}`));
+    assert.equal(run.run.run_scopes_target, 23);
   });
 });
 

@@ -458,9 +458,14 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "PATCH", path: "/api/runs/:id",
-    summary: "Adjust a running run. `runScopesTarget` changes only this run's auto-selected dig batch target; the daemon applies it at the next scope boundary.",
+    summary: "Adjust a running run. `runScopesTarget` changes only this run's auto-selected dig batch target; `scopeCoverageMode`/`coverageTarget` use project-cumulative targets such as Standard until 30 audited scopes. The daemon applies it at the next scope boundary.",
     params: { id: "run id" },
-    body: { runScopesTarget: "number? — new current-run scope target, minimum 1" },
+    body: {
+      runScopesTarget: "number? — new current-run scope target, minimum 1",
+      scopeCoverageMode: "focused|standard|half|full|custom? — focused/standard are project-cumulative targets; full means every pending scope; custom uses maxScopes/runScopesTarget",
+      coverageTarget: "number? — project-cumulative audited-scope target, e.g. 30 means run until 30 project scopes are audited",
+      maxScopes: "number? — direct current-run target, or custom target when scopeCoverageMode=custom",
+    },
     handler: runUpdate,
   }),
   route({
@@ -3064,15 +3069,80 @@ async function runUpdate(c: Ctx): Promise<void> {
   if (!run) return sendJson(c.res, 404, { error: "no such run" });
   if (run.status !== "running") return sendJson(c.res, 409, { error: "only running runs can be adjusted" });
   const body = (await readBody(c.req)) as Record<string, unknown>;
-  const raw = body.runScopesTarget ?? body.maxScopes;
-  if (raw === undefined) return sendJson(c.res, 400, { error: "runScopesTarget is required" });
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return sendJson(c.res, 400, { error: "runScopesTarget must be a number" });
   if (run.run_scopes_target == null) return sendJson(c.res, 409, { error: "run has not entered a scope batch yet" });
-  const target = Math.max(1, Math.floor(raw));
+  const resolved = resolveRunningRunTarget(c.store, run, body);
+  if ("error" in resolved) return sendJson(c.res, resolved.status, { error: resolved.error });
+  const target = resolved.target;
   c.store.updateRunScopesTarget(id, target);
   const job = c.store.getJobByRun(id);
   if (job) c.plane.setRunScopesTarget(Number(job.id), target);
-  sendJson(c.res, 200, { ok: true, runScopesTarget: target, applied: Boolean(job) });
+  sendJson(c.res, 200, { ok: true, runScopesTarget: target, applied: Boolean(job), ...resolved.meta });
+}
+
+type RunningRunTargetResolution =
+  | { target: number; meta: Record<string, unknown> }
+  | { error: string; status: number };
+
+function resolveRunningRunTarget(store: MetadataStore, run: Record<string, unknown>, body: Record<string, unknown>): RunningRunTargetResolution {
+  const direct = body.runScopesTarget ?? body.maxScopes;
+  const mode = body.scopeCoverageMode ?? body.coverageMode;
+  if (mode !== undefined) return resolveRunningCoverageModeTarget(store, run, body, mode);
+  if (body.coverageTarget !== undefined) {
+    const coverageTarget = positiveWholeNumber(body.coverageTarget, "coverageTarget");
+    if ("error" in coverageTarget) return coverageTarget;
+    return {
+      target: cumulativeRunningRunTarget(run, currentRunProgress(store, run), coverageTarget.value),
+      meta: { coverageTarget: coverageTarget.value },
+    };
+  }
+  if (direct === undefined) return { error: "runScopesTarget, scopeCoverageMode, or coverageTarget is required", status: 400 };
+  const target = positiveWholeNumber(direct, "runScopesTarget");
+  if ("error" in target) return target;
+  return { target: target.value, meta: {} };
+}
+
+function resolveRunningCoverageModeTarget(store: MetadataStore, run: Record<string, unknown>, body: Record<string, unknown>, modeInput: unknown): RunningRunTargetResolution {
+  if (modeInput !== "focused" && modeInput !== "standard" && modeInput !== "half" && modeInput !== "full" && modeInput !== "custom") {
+    return { error: "scopeCoverageMode must be focused|standard|half|full|custom", status: 400 };
+  }
+  if (modeInput === "custom") {
+    const target = positiveWholeNumber(body.runScopesTarget ?? body.maxScopes, "maxScopes");
+    if ("error" in target) return target;
+    return { target: target.value, meta: { coverageMode: "custom" } };
+  }
+  const progress = currentRunProgress(store, run);
+  const done = Math.max(0, Math.floor(numberValue(run.run_scopes_done)));
+  if (modeInput === "focused") {
+    return { target: cumulativeRunningRunTarget(run, progress, 10), meta: { coverageMode: "focused", coverageTarget: 10 } };
+  }
+  if (modeInput === "standard") {
+    return { target: cumulativeRunningRunTarget(run, progress, 30), meta: { coverageMode: "standard", coverageTarget: 30 } };
+  }
+  if (modeInput === "half") return { target: Math.max(done, done + Math.ceil(progress.pending / 2)), meta: { coverageMode: "half" } };
+  return { target: Math.max(done, done + progress.pending), meta: { coverageMode: "full" } };
+}
+
+function cumulativeRunningRunTarget(run: Record<string, unknown>, progress: Coverage, projectTarget: number): number {
+  const done = Math.max(0, Math.floor(numberValue(run.run_scopes_done)));
+  return Math.max(done, done + cumulativeCoverageLimit(projectTarget, progress));
+}
+
+function currentRunProgress(store: MetadataStore, run: Record<string, unknown>): Coverage {
+  const projectId = numberValue(run.project_id);
+  if (projectId > 0) {
+    const stored = store.scopeProgress(projectId);
+    if (stored.total > 0) return stored;
+  }
+  const total = Math.max(0, Math.floor(numberValue(run.scopes_total)));
+  const audited = Math.max(0, Math.floor(numberValue(run.scopes_audited)));
+  const pending = Math.max(0, Math.floor(numberValue(run.scopes_pending)));
+  return { total, audited, pending, deferred: Math.max(0, total - audited - pending) };
+}
+
+function positiveWholeNumber(input: unknown, label: string): { value: number } | { error: string; status: number } {
+  if (typeof input !== "number" || !Number.isFinite(input)) return { error: `${label} must be a number`, status: 400 };
+  if (input < 1) return { error: `${label} must be at least 1`, status: 400 };
+  return { value: Math.floor(input) };
 }
 
 function runLog(c: Ctx): void {
