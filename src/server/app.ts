@@ -223,7 +223,7 @@ const ROUTES: Route[] = [
       sourcePaths: "string[] — code paths relative to dir",
       buildRoot: "string? — buildable root relative to dir",
       corpusPaths: "string[]? — specs/docs relative to dir",
-      config: "object? — { prepareClue, projectIntent, phaseProviders, scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency, sandbox... }. Default coverage is full pending coverage; Standard is an explicit cumulative mode that audits until 30 project scopes are done.",
+      config: "object? — { prepareClue, projectIntent, phaseProviders, scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency, sandbox... }. Default coverage is Standard: map/dig turns are unbounded, and each run audits enough pending scopes to reach 30 audited project scopes.",
     },
     handler: projectCreate,
   }),
@@ -458,9 +458,14 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "PATCH", path: "/api/runs/:id",
-    summary: "Adjust a running run. `runScopesTarget` changes only this run's auto-selected dig batch target; the daemon applies it at the next scope boundary.",
+    summary: "Adjust a running run. `runScopesTarget` changes only this run's auto-selected dig batch target; `scopeCoverageMode`/`coverageTarget` use project-cumulative targets such as Standard until 30 audited scopes. The daemon applies it at the next scope boundary.",
     params: { id: "run id" },
-    body: { runScopesTarget: "number? — new current-run scope target, minimum 1" },
+    body: {
+      runScopesTarget: "number? — new current-run scope target, minimum 1",
+      scopeCoverageMode: "focused|standard|half|full|custom? — focused/standard are project-cumulative targets; full means every pending scope; custom uses maxScopes/runScopesTarget",
+      coverageTarget: "number? — project-cumulative audited-scope target, e.g. 30 means run until 30 project scopes are audited",
+      maxScopes: "number? — direct current-run target, or custom target when scopeCoverageMode=custom",
+    },
     handler: runUpdate,
   }),
   route({
@@ -863,6 +868,7 @@ function runApiRow(store: MetadataStore, run: Record<string, unknown>, plane?: C
 }
 
 const RUN_STALE_ACTIVITY_MS = 15 * 60 * 1000;
+const DAEMON_LOST_JOB_GRACE_MS = 30 * 1000;
 
 function runActivityFields(store: MetadataStore, plane: ControlPlane | undefined, run: Record<string, unknown>): Record<string, unknown> {
   if (run.status !== "running") return {};
@@ -881,7 +887,11 @@ function emptyProgress(): Coverage {
 }
 
 function latestPrepareRun(runs: Array<Record<string, unknown>>): Record<string, unknown> | undefined {
-  return runs.find((entry) => entry.kind === "prepare" && typeof entry.started_at === "string");
+  return runs.find(isSuccessfulPrepareRun);
+}
+
+function isSuccessfulPrepareRun(entry: Record<string, unknown>): boolean {
+  return entry.kind === "prepare" && entry.status === "done" && typeof entry.started_at === "string";
 }
 
 function latestScopeInventoryBoundaryRun(runs: Array<Record<string, unknown>>): Record<string, unknown> | undefined {
@@ -930,7 +940,12 @@ function activePrepareRefreshStartedAt(store: MetadataStore, project: Record<str
   const job = (jobs ?? store.runningJobs()).find((entry) => {
     if (stringValue(entry.project) !== projectName) return false;
     const spec = safeParse(entry.spec_json) as { verb?: unknown } | null;
-    return spec?.verb === "prepare";
+    if (spec?.verb === "prepare") return true;
+    if (spec?.verb !== "run") return false;
+    const runId = Number(entry.run_id);
+    if (!Number.isFinite(runId)) return Boolean((spec as { pipeline?: unknown; clue?: unknown; sourcePaths?: unknown }).pipeline && stringValue((spec as { clue?: unknown }).clue));
+    const run = store.getRun(runId);
+    return stringValue(run?.kind) === "prepare" && stringValue(run?.status) === "running";
   });
   const startedAt = stringValue(job?.created_at);
   if (!startedAt) return undefined;
@@ -1124,13 +1139,20 @@ function materialStaleness(run: Record<string, unknown>, boundary?: Record<strin
 }
 
 function materialSummary(runs: Array<Record<string, unknown>>, boundary?: Record<string, unknown>, activePrepareRefreshStartedAt?: string): Record<string, unknown> {
-  if (!boundary) return { currentPrepareRunId: null, staleRunCount: 0, activePrepareRefreshStartedAt };
+  const activePrepareFields = activePrepareRefreshStartedAt
+    ? {
+      currentPrepareStatus: "running",
+      currentPrepareStartedAt: activePrepareRefreshStartedAt,
+      activePrepareRefreshStartedAt,
+    }
+    : {};
+  if (!boundary) return { currentPrepareRunId: null, staleRunCount: 0, ...activePrepareFields };
   const scopeBoundary = latestScopeInventoryBoundaryRun(currentVisibleRuns(runs, boundary, activePrepareRefreshStartedAt));
   const staleRunCount = runs.filter((run) => !isCurrentMaterialRun(run, boundary)).length;
   return {
     currentPrepareRunId: boundary.id,
-    currentPrepareStatus: boundary.status,
-    currentPrepareStartedAt: boundary.started_at,
+    currentPrepareStatus: activePrepareRefreshStartedAt ? "running" : boundary.status,
+    currentPrepareStartedAt: activePrepareRefreshStartedAt ?? boundary.started_at,
     ...(scopeBoundary ? {
       currentScopeInventoryRunId: scopeBoundary.id,
       currentScopeInventoryStatus: scopeBoundary.status,
@@ -1269,11 +1291,11 @@ function composeCheckpointObligation(scope: Record<string, unknown>): string | u
 
 function scoreFromCheckpointExposure(exposure: unknown): number | null {
   const value = stringValue(exposure).toLowerCase();
-  if (value === "critical") return 10;
-  if (value === "high") return 8;
-  if (value === "medium" || value === "moderate") return 5;
-  if (value === "low") return 2;
-  if (value === "info" || value === "informational") return 1;
+  if (value === "critical") return 100;
+  if (value === "high") return 80;
+  if (value === "medium" || value === "moderate") return 50;
+  if (value === "low") return 20;
+  if (value === "info" || value === "informational") return 10;
   return null;
 }
 
@@ -1370,6 +1392,10 @@ function readPrepareSummary(run: Record<string, unknown>): Record<string, unknow
 
   const rawManifestState = stringValue(manifest?.status);
   const runStatus = stringValue(run.status);
+  const unsuccessfulTerminalPrepare = Boolean(runStatus && runStatus !== "running" && runStatus !== "done");
+  if (unsuccessfulTerminalPrepare) {
+    issues.push(`prepare run ended with status ${runStatus}; staged materials are not reusable until Prepare completes successfully`);
+  }
 
   const posture = stringValue(manifest?.posture);
   const answerFirewall = describeAnswerFirewall(manifest?.answer_firewall, posture);
@@ -1464,6 +1490,7 @@ function isBlockingPrepareIssue(issue: string): boolean {
     || raw.includes("prepare_manifest.json is not a json object")
     || raw.includes("manifest lists no components")
     || raw.includes("prepared workspace is empty")
+    || raw.includes("prepare run ended with status")
     || raw.includes("answer firewall is");
 }
 
@@ -1929,6 +1956,8 @@ async function runLaunch(c: Ctx): Promise<void> {
       spec.buildRoot = prepared.workspaceDir;
       spec.clue = undefined;
       if (!spec.scopeNote && prepared.scopeNote) spec.scopeNote = prepared.scopeNote;
+    } else if (spec.clue && spec.sourcePaths.length === 0) {
+      resetPipelineCoverageForUnknownInventory(spec);
     }
   } else if (spec.verb === "prepare") {
     applyProjectPrepareDefaults(spec, project, runs);
@@ -2021,6 +2050,22 @@ function applyProjectPrepareDefaults(spec: LaunchSpec, project: Record<string, u
   if (spec.matchDeployed === undefined) spec.matchDeployed = true;
 }
 
+function resetPipelineCoverageForUnknownInventory(spec: LaunchSpec): void {
+  if (spec.coverageMode === "focused") {
+    spec.coverageTarget = 10;
+    spec.maxScopes = 10;
+  } else if (spec.coverageMode === "standard") {
+    spec.coverageTarget = 30;
+    spec.maxScopes = 30;
+  } else if (spec.coverageMode === "half") {
+    spec.coverageTarget = undefined;
+    spec.maxScopes = 30;
+  } else if (spec.coverageMode === "full") {
+    spec.coverageTarget = undefined;
+    spec.maxScopes = undefined;
+  }
+}
+
 function selectedFindingIds(body: Record<string, unknown>): number[] {
   const ids = new Set<number>();
   if (typeof body.findingId === "number" && Number.isInteger(body.findingId)) ids.add(body.findingId);
@@ -2058,7 +2103,7 @@ function verifyMaterialDrift(store: MetadataStore, projectId: number, verifyFind
     const runId = Number(finding.run_id);
     if (!Number.isFinite(runId)) continue;
     const newerPrepare = store.latestPrepareAfterRun(projectId, runId);
-    if (!newerPrepare) continue;
+    if (!newerPrepare || !isSuccessfulPrepareRun(newerPrepare)) continue;
     drifted.push({
       findingId: id,
       title: stringValue(finding.title),
@@ -2276,7 +2321,7 @@ function reportLinkedFindingRow(row: Record<string, unknown>): Record<string, un
 }
 
 function latestPrepareRequiresRealTargetConfirmation(runs: Array<Record<string, unknown>>): boolean {
-  const run = runs.find((entry) => entry.kind === "prepare" && typeof entry.run_dir === "string");
+  const run = runs.find((entry) => isSuccessfulPrepareRun(entry) && typeof entry.run_dir === "string");
   const manifest = run ? readPrepareManifestObject(run) : undefined;
   const realTarget = summarizePrepareRealTarget(manifest?.real_target ?? manifest?.realTarget);
   return !(realTarget.reported && realTarget.requiresConfirmation === false);
@@ -2303,7 +2348,7 @@ function applyPreparedWorkspaceIfNeeded(spec: LaunchSpec, runs: Array<Record<str
 }
 
 function latestPreparedWorkspace(runs: Array<Record<string, unknown>>): { workspaceDir: string; manifestPath: string; scopeNote?: string } | undefined {
-  const run = runs.find((entry) => entry.kind === "prepare" && typeof entry.run_dir === "string");
+  const run = runs.find((entry) => isSuccessfulPrepareRun(entry) && typeof entry.run_dir === "string");
   if (!run) return undefined;
   const runDir = path.resolve(String(run.run_dir));
   const workspaceDir = path.join(runDir, "prepare", "workspace");
@@ -3040,15 +3085,80 @@ async function runUpdate(c: Ctx): Promise<void> {
   if (!run) return sendJson(c.res, 404, { error: "no such run" });
   if (run.status !== "running") return sendJson(c.res, 409, { error: "only running runs can be adjusted" });
   const body = (await readBody(c.req)) as Record<string, unknown>;
-  const raw = body.runScopesTarget ?? body.maxScopes;
-  if (raw === undefined) return sendJson(c.res, 400, { error: "runScopesTarget is required" });
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return sendJson(c.res, 400, { error: "runScopesTarget must be a number" });
   if (run.run_scopes_target == null) return sendJson(c.res, 409, { error: "run has not entered a scope batch yet" });
-  const target = Math.max(1, Math.floor(raw));
+  const resolved = resolveRunningRunTarget(c.store, run, body);
+  if ("error" in resolved) return sendJson(c.res, resolved.status, { error: resolved.error });
+  const target = resolved.target;
   c.store.updateRunScopesTarget(id, target);
   const job = c.store.getJobByRun(id);
   if (job) c.plane.setRunScopesTarget(Number(job.id), target);
-  sendJson(c.res, 200, { ok: true, runScopesTarget: target, applied: Boolean(job) });
+  sendJson(c.res, 200, { ok: true, runScopesTarget: target, applied: Boolean(job), ...resolved.meta });
+}
+
+type RunningRunTargetResolution =
+  | { target: number; meta: Record<string, unknown> }
+  | { error: string; status: number };
+
+function resolveRunningRunTarget(store: MetadataStore, run: Record<string, unknown>, body: Record<string, unknown>): RunningRunTargetResolution {
+  const direct = body.runScopesTarget ?? body.maxScopes;
+  const mode = body.scopeCoverageMode ?? body.coverageMode;
+  if (mode !== undefined) return resolveRunningCoverageModeTarget(store, run, body, mode);
+  if (body.coverageTarget !== undefined) {
+    const coverageTarget = positiveWholeNumber(body.coverageTarget, "coverageTarget");
+    if ("error" in coverageTarget) return coverageTarget;
+    return {
+      target: cumulativeRunningRunTarget(run, currentRunProgress(store, run), coverageTarget.value),
+      meta: { coverageTarget: coverageTarget.value },
+    };
+  }
+  if (direct === undefined) return { error: "runScopesTarget, scopeCoverageMode, or coverageTarget is required", status: 400 };
+  const target = positiveWholeNumber(direct, "runScopesTarget");
+  if ("error" in target) return target;
+  return { target: target.value, meta: {} };
+}
+
+function resolveRunningCoverageModeTarget(store: MetadataStore, run: Record<string, unknown>, body: Record<string, unknown>, modeInput: unknown): RunningRunTargetResolution {
+  if (modeInput !== "focused" && modeInput !== "standard" && modeInput !== "half" && modeInput !== "full" && modeInput !== "custom") {
+    return { error: "scopeCoverageMode must be focused|standard|half|full|custom", status: 400 };
+  }
+  if (modeInput === "custom") {
+    const target = positiveWholeNumber(body.runScopesTarget ?? body.maxScopes, "maxScopes");
+    if ("error" in target) return target;
+    return { target: target.value, meta: { coverageMode: "custom" } };
+  }
+  const progress = currentRunProgress(store, run);
+  const done = Math.max(0, Math.floor(numberValue(run.run_scopes_done)));
+  if (modeInput === "focused") {
+    return { target: cumulativeRunningRunTarget(run, progress, 10), meta: { coverageMode: "focused", coverageTarget: 10 } };
+  }
+  if (modeInput === "standard") {
+    return { target: cumulativeRunningRunTarget(run, progress, 30), meta: { coverageMode: "standard", coverageTarget: 30 } };
+  }
+  if (modeInput === "half") return { target: Math.max(done, done + Math.ceil(progress.pending / 2)), meta: { coverageMode: "half" } };
+  return { target: Math.max(done, done + progress.pending), meta: { coverageMode: "full" } };
+}
+
+function cumulativeRunningRunTarget(run: Record<string, unknown>, progress: Coverage, projectTarget: number): number {
+  const done = Math.max(0, Math.floor(numberValue(run.run_scopes_done)));
+  return Math.max(done, done + cumulativeCoverageLimit(projectTarget, progress));
+}
+
+function currentRunProgress(store: MetadataStore, run: Record<string, unknown>): Coverage {
+  const projectId = numberValue(run.project_id);
+  if (projectId > 0) {
+    const stored = store.scopeProgress(projectId);
+    if (stored.total > 0) return stored;
+  }
+  const total = Math.max(0, Math.floor(numberValue(run.scopes_total)));
+  const audited = Math.max(0, Math.floor(numberValue(run.scopes_audited)));
+  const pending = Math.max(0, Math.floor(numberValue(run.scopes_pending)));
+  return { total, audited, pending, deferred: Math.max(0, total - audited - pending) };
+}
+
+function positiveWholeNumber(input: unknown, label: string): { value: number } | { error: string; status: number } {
+  if (typeof input !== "number" || !Number.isFinite(input)) return { error: `${label} must be a number`, status: 400 };
+  if (input < 1) return { error: `${label} must be at least 1`, status: 400 };
+  return { value: Math.floor(input) };
 }
 
 function runLog(c: Ctx): void {
@@ -3499,7 +3609,9 @@ function reconcileLostExecutorJobs(store: MetadataStore, plane: ControlPlane): n
       ? latestRunActivityAt(store, plane, runId)
       : stringValue(job.updated_at) || stringValue(job.created_at);
     const activity = runInactivity(lastActivityAt);
-    if (!activity?.staleActivity) continue;
+    const jobTouchedAt = stringValue(job.updated_at) || stringValue(job.created_at);
+    const freshDaemonLostJob = daemonHasFreshHeartbeat && timestampOlderThan(jobTouchedAt, DAEMON_LOST_JOB_GRACE_MS);
+    if (!freshDaemonLostJob && !activity?.staleActivity) continue;
 
     store.setJobStatus(jobId, "canceled", daemonOnline ? "executor no longer holds this job" : "executor offline before completion");
     if (runId !== undefined) {
@@ -3563,6 +3675,13 @@ function runInactivity(lastActivityAt: string | undefined): { inactiveSeconds: n
   if (!Number.isFinite(last)) return undefined;
   const inactiveSeconds = Math.max(0, Math.floor((Date.now() - last) / 1000));
   return { inactiveSeconds, staleActivity: inactiveSeconds * 1000 >= RUN_STALE_ACTIVITY_MS };
+}
+
+function timestampOlderThan(value: string | undefined, ageMs: number): boolean {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  return Date.now() - parsed >= ageMs;
 }
 
 function daemonRows(c: Ctx): Array<Record<string, unknown>> {
@@ -3923,7 +4042,7 @@ function resolveCoverage(cfg: Record<string, unknown>, progress?: Coverage, expl
   if (mode === "focused") return { mode, target: 10, maxScopes: cumulativeCoverageLimit(10, progress) };
   if (mode === "standard") return { mode, target: 30, maxScopes: cumulativeCoverageLimit(30, progress) };
   if (mode === "half") return { mode, maxScopes: total > 0 ? Math.max(0, Math.ceil(pending / 2)) : 30 };
-  if (mode === "full") return { mode, maxScopes: total > 0 ? pending : undefined };
+  if (mode === "full") return { mode, maxScopes: total > 0 && pending === 0 ? 0 : undefined };
   if (mode === "custom") return { mode, maxScopes: explicit };
   return { mode, maxScopes: explicit };
 }
@@ -3932,7 +4051,7 @@ function normalizeCoverageMode(input: unknown, explicit?: number): CoverageMode 
   if (input === "focused" || input === "standard" || input === "half" || input === "full" || input === "custom") return input;
   if (explicit === 10) return "focused";
   if (explicit === 30) return "standard";
-  if (explicit === undefined) return "full";
+  if (explicit === undefined) return "standard";
   return "custom";
 }
 

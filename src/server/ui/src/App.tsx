@@ -14,6 +14,7 @@ import {
   type PrepareSummary,
   type PiModel,
   type ProviderProfile,
+  type RunUpdatePayload,
   type RunRow,
   type ScopeRow,
 } from "./api";
@@ -98,8 +99,8 @@ const READ_WATERMARK_LIMIT = 300;
 const SETUP_READ_WATERMARKS_KEY = "flounder-setup-read-watermarks";
 const ACTIVITY_READ_WATERMARKS_KEY = "flounder-activity-read-watermarks";
 const COVERAGE_MODES = [
-  { value: "full", label: "Full - finish every pending scope" },
   { value: "standard", label: "Standard - until 30 audited scopes" },
+  { value: "full", label: "Full - finish every pending scope" },
   { value: "half", label: "Half - finish half of pending scopes" },
   { value: "focused", label: "Focused - until 10 audited scopes" },
   { value: "custom", label: "Custom per-run cap" },
@@ -641,7 +642,7 @@ function coverageModeFromConfig(cfg: { scopeCoverageMode?: string; maxScopes?: n
   if (cfg.scopeCoverageMode && COVERAGE_MODES.some((mode) => mode.value === cfg.scopeCoverageMode)) return cfg.scopeCoverageMode as CoverageMode;
   if (cfg.maxScopes === 10) return "focused";
   if (cfg.maxScopes === 30) return "standard";
-  if (cfg.maxScopes == null) return "full";
+  if (cfg.maxScopes == null) return "standard";
   return "custom";
 }
 
@@ -1923,10 +1924,10 @@ export function App() {
     }
   }
 
-  async function updateRunTarget(run: RunRow, target: number) {
+  async function updateRunTarget(run: RunRow, body: RunUpdatePayload) {
     try {
-      await api.updateRun(run.id, { runScopesTarget: target });
-      setToast({ tone: "success", message: `Run #${run.id} target updated to ${target}.` });
+      const result = await api.updateRun(run.id, body);
+      setToast({ tone: "success", message: `Run #${run.id} target updated to ${result.runScopesTarget}.` });
       if (route.projectUuid) setDetail(await api.project(route.projectUuid));
       await refreshBase();
     } catch (error) {
@@ -2056,7 +2057,7 @@ export function App() {
                   onTracking={updateTracking}
                   onPatchScope={patchScope}
                   onStopRun={setStopConfirmRun}
-                  onUpdateRunTarget={(run, target) => void updateRunTarget(run, target)}
+                  onUpdateRunTarget={(run, body) => void updateRunTarget(run, body)}
                   onOpenRunLog={openRunLog}
                 />
               ) : projects.length || projectsTotal > 0 || projectQuery.trim() || projectStatusFilter !== "all" ? (
@@ -2145,7 +2146,7 @@ export function App() {
           onError={(message) => setToast({ tone: "error", message })}
         />
       ) : null}
-      {modal === "run" && currentDetailForModal ? <RunModal detail={currentDetailForModal} busy={busy} onClose={() => setModal(null)} onLaunch={requestLaunch} onUpdateRunTarget={(run, target) => void updateRunTarget(run, target)} onError={(message) => setToast({ tone: "error", message })} /> : null}
+      {modal === "run" && currentDetailForModal ? <RunModal detail={currentDetailForModal} busy={busy} onClose={() => setModal(null)} onLaunch={requestLaunch} onUpdateRunTarget={(run, body) => void updateRunTarget(run, body)} onError={(message) => setToast({ tone: "error", message })} /> : null}
       {modal === "edit-project" && detail ? <EditProjectModal detail={detail} providers={providers} daemons={daemons} onClose={() => setModal(null)} onSaved={async () => { setDetail(await api.project(detail.project.uuid)); setModal(null); }} onError={(message) => setToast({ tone: "error", message })} /> : null}
       {modal === "report" && reportFinding ? <ReportModal finding={reportFinding} onClose={() => setModal(null)} /> : null}
       {modal === "decision-report" && reportDecision ? <DecisionReportModal decision={reportDecision} onClose={() => setModal(null)} /> : null}
@@ -2543,7 +2544,7 @@ function ProjectDetailView(props: {
   onTracking: (finding: FindingRow, status: string) => void;
   onPatchScope: (scopeId: string, body: unknown) => Promise<void> | void;
   onStopRun: (run: RunRow) => void;
-  onUpdateRunTarget: (run: RunRow, target: number) => void;
+  onUpdateRunTarget: (run: RunRow, body: RunUpdatePayload) => void;
   onOpenRunLog: (run: RunRow) => void;
 }) {
   const { project, detail, providers, daemons, tab, setTab } = props;
@@ -4954,7 +4955,7 @@ function NewProjectModal({ providers, daemons, onClose, onCreated, onError }: { 
   const [advanced, setAdvanced] = useState(false);
   const [phaseOpen, setPhaseOpen] = useState(false);
   const firstDaemon = daemons.find((daemon) => daemonHealth(daemon) === "online") ?? daemons[0];
-  const [form, setForm] = useState({ intent: "", name: "", runAfterCreate: true, daemonId: firstDaemon?.id ? String(firstDaemon.id) : "", providerId: defaultProjectProviderId(providers), dir: "", sourcePaths: ".", buildRoot: ".", corpusPaths: "docs/specs", coverageMode: "full" as CoverageMode, maxScopes: "30", digSamples: "1", mapSteps: "", digSteps: "", digConcurrency: "1" });
+  const [form, setForm] = useState({ intent: "", name: "", runAfterCreate: true, daemonId: firstDaemon?.id ? String(firstDaemon.id) : "", providerId: defaultProjectProviderId(providers), dir: "", sourcePaths: ".", buildRoot: ".", corpusPaths: "docs/specs", coverageMode: "standard" as CoverageMode, maxScopes: "30", digSamples: "1", mapSteps: "", digSteps: "", digConcurrency: "1" });
   const [phaseProviders, setPhaseProviders] = useState<PhaseProviderForm>({ prepare: "", map: "", dig: "", confirm: "" });
   const providerMissing = providers.length === 0;
   const daemonMissing = daemons.length === 0;
@@ -5197,7 +5198,7 @@ function EditProjectModal({ detail, providers, daemons, onClose, onSaved, onErro
   );
 }
 
-function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError }: { detail: ProjectDetail; busy: boolean; onClose: () => void; onLaunch: (action: LaunchAction) => void; onUpdateRunTarget: (run: RunRow, target: number) => void; onError: (message: string) => void }) {
+function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError }: { detail: ProjectDetail; busy: boolean; onClose: () => void; onLaunch: (action: LaunchAction) => void; onUpdateRunTarget: (run: RunRow, body: RunUpdatePayload) => void; onError: (message: string) => void }) {
   const running = currentMaterialRuns(detail.runs, detail.material).find((run) => run.status === "running");
   const pendingScopes = detail.progress.pending ?? 0;
   const requiresConfirmation = needsRealTargetConfirmation(detail);
@@ -5207,20 +5208,27 @@ function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError 
   const missingReports = requiresConfirmation ? pendingDecisionReports(detail.confirmDecisions).length : pendingFormalReports(detail.allFindings, requiresConfirmation).length;
   const hasPipelineRun = detail.runs.some((run) => run.kind === "run");
   const locked = busy || Boolean(running);
+  const projectCoverageMode = coverageModeFromConfig(projectConfig(detail).cfg);
+  const [runCoverageMode, setRunCoverageMode] = useState<CoverageMode>(projectCoverageMode);
   const [runTargetDraft, setRunTargetDraft] = useState("");
   useEffect(() => {
     if (!running) return;
+    setRunCoverageMode(projectCoverageMode);
     setRunTargetDraft(String(running.run_scopes_target ?? 30));
-  }, [running?.id, running?.run_scopes_target]);
+  }, [projectCoverageMode, running?.id, running?.run_scopes_target]);
   const submitRunTarget = (event: FormEvent) => {
     event.preventDefault();
     if (!running) return;
+    if (runCoverageMode !== "custom") {
+      onUpdateRunTarget(running, { scopeCoverageMode: runCoverageMode });
+      return;
+    }
     const target = Number(runTargetDraft);
     if (!Number.isFinite(target) || target < 1) {
       onError("Enter a positive batch target for the active run.");
       return;
     }
-    onUpdateRunTarget(running, Math.floor(target));
+    onUpdateRunTarget(running, { runScopesTarget: Math.floor(target) });
   };
   const prepareQuality = detail.prepareSummary?.quality;
   const prepareActionLabel = prepareQuality === "ready"
@@ -5258,9 +5266,17 @@ function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError 
           {(running.kind === "run" || running.kind === "audit") && running.run_scopes_target != null ? (
             <form className="run-target-control" onSubmit={submitRunTarget}>
               <label>
-                <span>Batch target</span>
-                <input type="number" min="1" value={runTargetDraft} onChange={(event) => setRunTargetDraft(event.target.value)} />
+                <span>Coverage</span>
+                <select value={runCoverageMode} onChange={(event) => setRunCoverageMode(event.target.value as CoverageMode)}>
+                  {COVERAGE_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                </select>
               </label>
+              {runCoverageMode === "custom" ? (
+                <label>
+                  <span>Batch target</span>
+                  <input type="number" min="1" value={runTargetDraft} onChange={(event) => setRunTargetDraft(event.target.value)} />
+                </label>
+              ) : null}
               <Button size="sm" icon="sync">Update</Button>
             </form>
           ) : null}

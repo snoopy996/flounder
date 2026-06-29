@@ -84,6 +84,9 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
     assert.match(findingTracking.body.status, /ignored/);
     const runLog = cat.endpoints.find((e) => e.method === "GET" && e.path === "/api/runs/:id/log");
     assert.match(runLog.query.tail, /JSON/);
+    const runPatch = cat.endpoints.find((e) => e.method === "PATCH" && e.path === "/api/runs/:id");
+    assert.match(runPatch.body.scopeCoverageMode, /project-cumulative/);
+    assert.match(runPatch.body.coverageTarget, /until 30/);
   });
 });
 
@@ -163,7 +166,7 @@ test("api: project list supports archive, unarchive, pin, and manual order", asy
   });
 });
 
-test("api: project run defaults leave map/dig turns and scope selection unbounded", async () => {
+test("api: project run defaults leave map/dig turns unbounded and use standard scope coverage", async () => {
   await withServer(async (base) => {
     const json = (r) => r.json();
     const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -179,8 +182,9 @@ test("api: project run defaults leave map/dig turns and scope selection unbounde
 
     assert.equal(spec.pipeline, true);
     assert.equal(spec.clue, "default-run-budget");
-    assert.equal(spec.coverageMode, "full");
-    assert.equal(spec.maxScopes, undefined);
+    assert.equal(spec.coverageMode, "standard");
+    assert.equal(spec.coverageTarget, 30);
+    assert.equal(spec.maxScopes, 30);
     assert.equal(spec.mapSteps, undefined);
     assert.equal(spec.digSteps, undefined);
     assert.equal(spec.maxSteps, undefined);
@@ -241,6 +245,57 @@ test("api: standard coverage fills the project up to 30 audited scopes instead o
     assert.equal(spec.coverageMode, "standard");
     assert.equal(spec.coverageTarget, 30);
     assert.equal(spec.maxScopes, 10);
+  });
+});
+
+test("api: full coverage continues prepared pending inventory without a scope cap", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "full-prepared-unbounded",
+      config: { prepareClue: "official source clue", scopeCoverageMode: "full" },
+    }));
+    const runDir = path.join(out, "full-prepared-unbounded-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        clue: "official source clue",
+        posture: "blind",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only",
+          ground_truth: [],
+          confirm_guidance: { required: false, not_required_reason: "source-only fixture" },
+        },
+        components: [],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir });
+      store.finishRun(prepareRun, "done");
+      store.upsertScopes(created.id, [
+        ...Array.from({ length: 20 }, (_, i) => ({ scopeId: `audited-${i}`, title: `Audited ${i}`, status: "audited", score: 10 - i })),
+        ...Array.from({ length: 20 }, (_, i) => ({ scopeId: `pending-${i}`, title: `Pending ${i}`, status: "pending", score: 20 - i })),
+      ]);
+    } finally {
+      store.close();
+    }
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run" }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.pipeline, true);
+    assert.equal(spec.coverageMode, "full");
+    assert.equal(spec.maxScopes, undefined);
+    assert.deepEqual(spec.sourcePaths, [workspace]);
+    assert.equal(spec.buildRoot, workspace);
   });
 });
 
@@ -676,16 +731,15 @@ test("api: verify launch rejects findings produced before a newer prepare run", 
   });
 });
 
-test("api: verify launch treats killed newer prepare as material drift", async () => {
+test("api: verify launch ignores killed newer prepare as material drift", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
     const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const created = await json(await post("/api/projects", { name: "verify-killed-material-drift", sourcePaths: ["./src"] }));
+    const created = await json(await post("/api/projects", { name: "verify-killed-material-current", sourcePaths: ["./src"] }));
     const store = MetadataStore.openForOutput(out);
-    let prepareRun;
     let findingId;
     try {
-      const auditRun = store.startRun({ projectId: created.id, kind: "audit", runDir: path.join(out, "verify-killed-material-drift-audit") });
+      const auditRun = store.startRun({ projectId: created.id, kind: "audit", runDir: path.join(out, "verify-killed-material-current-audit") });
       store.db.prepare("UPDATE run SET started_at = ? WHERE id = ?").run("2026-01-01T00:00:00.000Z", auditRun);
       store.upsertFindings(created.id, auditRun, [
         {
@@ -697,19 +751,106 @@ test("api: verify launch treats killed newer prepare as material drift", async (
         },
       ]);
       findingId = Number(store.listFindings(created.id)[0].id);
-      prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir: path.join(out, "verify-killed-material-drift-prepare") });
+      const prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir: path.join(out, "verify-killed-material-current-prepare") });
       store.db.prepare("UPDATE run SET started_at = ? WHERE id = ?").run("2026-01-02T00:00:00.000Z", prepareRun);
       store.finishRun(prepareRun, "killed");
     } finally {
       store.close();
     }
 
-    const rejected = await post(`/api/projects/${created.uuid}/runs`, { verb: "audit", verifyFindings: [{ id: findingId }] });
-    assert.equal(rejected.status, 409);
-    const rejectedBody = await json(rejected);
-    assert.equal(rejectedBody.materialDrift, true);
-    assert.equal(rejectedBody.findings[0].findingId, findingId);
-    assert.equal(rejectedBody.findings[0].prepareRunId, prepareRun);
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "audit", verifyFindings: [{ id: findingId }] }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+    assert.equal(spec.verifyFindings[0].originId, findingId);
+  });
+});
+
+test("api: run launch does not reuse killed prepared workspace", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "killed-prepared-workspace",
+      config: { prepareClue: "fresh official source clue" },
+    }));
+    const runDir = path.join(out, "killed-prepared-workspace-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "Target.sol"), "contract Target {}\n");
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        status: "done",
+        clue: "stale killed prepare clue",
+        posture: "blind",
+        answer_firewall: "clean",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only",
+          reason: "fixture source only",
+          ground_truth: [],
+        },
+        components: [
+          {
+            identity: "Target",
+            platform: "github",
+            revision: "abc123",
+            staged_path: "src/Target.sol",
+            in_scope: true,
+            match: "n/a-source-only-pinned",
+          },
+        ],
+      }),
+    );
+
+    const staleRunDir = path.join(out, "killed-prepared-workspace-stale-run");
+    await mkdir(path.join(staleRunDir, "audit", "workspace"), { recursive: true });
+    await writeFile(
+      path.join(staleRunDir, "audit", "workspace", "scopes.json"),
+      JSON.stringify([
+        { id: "S1", title: "old pending scope 1", region: "src/Old.sol:1-10", status: "pending", score: 100 },
+        { id: "S2", title: "old pending scope 2", region: "src/Old.sol:11-20", status: "pending", score: 80 },
+      ]),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(prepareRun, "killed");
+      const staleRun = store.startRun({ projectId: created.id, kind: "run", runDir: staleRunDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(staleRun, "killed");
+    } finally {
+      store.close();
+    }
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.prepareSummary.status, "killed");
+    assert.equal(detail.prepareSummary.auditReady, false);
+    assert.equal(detail.prepareSummary.blocked, true);
+    assert.equal(detail.material.currentPrepareRunId, null);
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run" }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.pipeline, true);
+    assert.equal(spec.coverageMode, "standard");
+    assert.equal(spec.coverageTarget, 30);
+    assert.equal(spec.maxScopes, 30);
+    assert.deepEqual(spec.sourcePaths, []);
+    assert.equal(spec.buildRoot, undefined);
+    assert.equal(spec.clue, "fresh official source clue");
+
+    const fullLaunch = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run", scopeCoverageMode: "full" }));
+    assert.equal(fullLaunch.queued, true);
+    const fullJob = (await json(await fetch(base + "/api/jobs/" + fullLaunch.jobId))).job;
+    const fullSpec = JSON.parse(fullJob.spec_json);
+    assert.equal(fullSpec.pipeline, true);
+    assert.equal(fullSpec.coverageMode, "full");
+    assert.equal(fullSpec.maxScopes, undefined);
+    assert.deepEqual(fullSpec.sourcePaths, []);
   });
 });
 
@@ -989,6 +1130,43 @@ test("api: running prepare resets the project current view to the new material s
     assert.equal(snapshot.reproducedBugs, 0);
     assert.equal(snapshot.confirmDecisionCount, 0);
     assert.equal(snapshot.currentRunCount, 1);
+    assert.equal(snapshot.latestRun.kind, "prepare");
+  });
+});
+
+test("api: running pipeline prepare resets stale scope checkpoints from the current view", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", { name: "pipeline-prepare-refresh", sourcePaths: ["./src"] }));
+    const staleRunDir = path.join(out, "pipeline-prepare-refresh-stale-run");
+    await mkdir(path.join(staleRunDir, "audit", "workspace"), { recursive: true });
+    await writeFile(
+      path.join(staleRunDir, "audit", "workspace", "scopes.json"),
+      JSON.stringify([
+        { id: "OLD-1", title: "Old scope", region: "src/Old.sol:1-10", status: "pending", score: 100 },
+      ]),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const staleRun = store.startRun({ projectId: created.id, kind: "run", runDir: staleRunDir });
+      store.finishRun(staleRun, "killed");
+      const jobId = store.enqueueJob(created.name, { verb: "run", pipeline: true, clue: "fresh target", sourcePaths: [] });
+      const prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir: path.join(out, "pipeline-prepare-refresh-prepare") });
+      store.setJobRun(jobId, prepareRun);
+    } finally {
+      store.close();
+    }
+
+    const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.deepEqual(detail.progress, { total: 0, audited: 0, deferred: 0, pending: 0 });
+    assert.equal(detail.material.activePrepareRefreshStartedAt.length > 0, true);
+    assert.equal(detail.runs.find((run) => !run.material_stale)?.kind, "prepare");
+
+    const list = await json(await fetch(base + "/api/projects"));
+    const snapshot = list.projects.find((project) => project.uuid === created.uuid);
+    assert.deepEqual(snapshot.progress, { total: 0, audited: 0, deferred: 0, pending: 0 });
     assert.equal(snapshot.latestRun.kind, "prepare");
   });
 });
@@ -1507,8 +1685,9 @@ test("api: project detail summarizes the latest prepare manifest and workspace q
     );
 
     const store = MetadataStore.openForOutput(out);
+    let prepareRunId;
     try {
-      store.startRun({
+      prepareRunId = store.startRun({
         projectId: created.id,
         kind: "prepare",
         runDir,
@@ -1545,6 +1724,13 @@ test("api: project detail summarizes the latest prepare manifest and workspace q
     const artifactJson = JSON.parse(await artifact.text());
     assert.equal(artifactJson.scope_declaration, "First-party source and official docs only.");
     assert.equal(artifactJson.components.length, 1);
+
+    const finishedStore = MetadataStore.openForOutput(out);
+    try {
+      finishedStore.finishRun(prepareRunId, "done");
+    } finally {
+      finishedStore.close();
+    }
 
     const launched = await json(await post(projectPath + "/runs", { verb: "run" }));
     assert.equal(launched.queued, true);
@@ -2397,7 +2583,7 @@ test("api: project detail previews live scope checkpoints before daemon ingest",
     assert.equal(detailS1.region, "src/A.sol:1-40");
     assert.equal(detailS3.title, "Verifier public input binding");
     assert.equal(detailS3.obligation, "Spec: The proof input must bind the committed root. Value at risk: Invalid proofs could release escrowed funds. Inputs/trust boundary: Proof bytes, public input, committed root.");
-    assert.equal(detailS3.score, 10);
+    assert.equal(detailS3.score, 100);
 
     const scopes = await json(await fetch(base + projectPath + "/scopes"));
     assert.deepEqual(scopes.progress, detail.progress);
@@ -3225,6 +3411,54 @@ test("api: stale jobs not held by daemon heartbeat are reconciled automatically"
   });
 });
 
+test("api: daemon heartbeat reconciles recently active jobs lost across executor restart", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body, token) => fetch(base + p, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    const daemon = await json(await post("/api/daemons", { name: "heartbeat-restart-lost" }));
+    const created = await json(await post("/api/projects", { name: "heartbeat-restart-lost-project", sourcePaths: ["./src"], daemonId: daemon.id }));
+    const runDir = path.join(out, "heartbeat-restart-lost-run");
+    const recentActivity = new Date(Date.now() - 60_000).toISOString();
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, "events.jsonl"), `${JSON.stringify({ ts: recentActivity, kind: "audit_action", detail: "recent activity before machine restart" })}\n`);
+
+    let jobId;
+    let runId;
+    let store = MetadataStore.openForOutput(out);
+    try {
+      jobId = store.enqueueJob(created.name, { verb: "run" }, daemon.id);
+      runId = store.startRun({ projectId: created.id, kind: "run", runDir });
+      store.setJobRun(jobId, runId);
+      store.db.prepare("UPDATE job SET updated_at = ? WHERE id = ?").run(new Date(Date.now() - 60_000).toISOString(), jobId);
+    } finally {
+      store.close();
+    }
+
+    const before = await json(await fetch(base + "/api/active"));
+    const row = before.active.find((entry) => entry.jobId === jobId);
+    assert.equal(row.status, "running");
+    assert.equal(row.staleActivity, false);
+
+    const heartbeat = await json(await post("/api/daemon/heartbeat", { instanceId: "new-worker-after-restart", activeJobIds: [] }, daemon.token));
+    assert.equal(heartbeat.reconciled, 1);
+    const active = await json(await fetch(base + "/api/active"));
+    assert.equal(active.active.some((entry) => entry.jobId === jobId), false);
+
+    store = MetadataStore.openForOutput(out);
+    try {
+      assert.equal(store.getJob(jobId).status, "canceled");
+      assert.equal(store.getJob(jobId).error, "executor no longer holds this job");
+      assert.equal(store.getRun(runId).status, "killed");
+    } finally {
+      store.close();
+    }
+  });
+});
+
 test("api: empty killed runs do not replace the latest material project snapshot", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
@@ -3340,6 +3574,41 @@ test("api: run scope target adjustment only applies to running runs", async () =
     assert.match((await json(res)).error, /running/);
     const run = await json(await fetch(base + `/api/runs/${runId}`));
     assert.equal(run.run.run_scopes_target, 30);
+  });
+});
+
+test("api: running run standard coverage adjustment targets 30 cumulative audited scopes", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const patch = (p, body) => fetch(base + p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", { name: "adjust-run-standard", sourcePaths: ["./src"] }));
+    const runDir = await mkdtemp(path.join(out, "adjust-run-standard-"));
+    let runId;
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.upsertScopes(created.id, Array.from({ length: 40 }, (_, index) => ({
+        scopeId: `SCOPE-${index + 1}`,
+        title: `Scope ${index + 1}`,
+        status: index < 12 ? "audited" : "pending",
+        score: 100 - index,
+      })));
+      runId = store.startRun({ projectId: created.id, kind: "run", runDir });
+      store.updateRunScopes(runId, 5, 40);
+      store.updateRunCoverage(runId, { total: 40, audited: 12, pending: 28, deferred: 0 });
+    } finally {
+      store.close();
+    }
+
+    const res = await patch(`/api/runs/${runId}`, { scopeCoverageMode: "standard" });
+    assert.equal(res.status, 200);
+    const adjusted = await json(res);
+    assert.equal(adjusted.runScopesTarget, 23);
+    assert.equal(adjusted.coverageMode, "standard");
+    assert.equal(adjusted.coverageTarget, 30);
+
+    const run = await json(await fetch(base + `/api/runs/${runId}`));
+    assert.equal(run.run.run_scopes_target, 23);
   });
 });
 

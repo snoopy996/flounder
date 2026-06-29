@@ -334,6 +334,13 @@ export interface ProjectConfig {
   phaseProviders?: PhaseProviderConfig;
 }
 
+export interface RunUpdatePayload {
+  runScopesTarget?: number;
+  scopeCoverageMode?: "focused" | "standard" | "half" | "full" | "custom";
+  coverageTarget?: number;
+  maxScopes?: number;
+}
+
 export interface ProjectPayload {
   name?: string;
   providerId?: number;
@@ -418,7 +425,7 @@ export const api = {
   reorderProjects: (uuids: string[]) => patchJson<{ ok: true; changed: number }>("/api/projects/order", { uuids }),
   deleteProject: (uuid: string) => fetchJson<{ ok: true }>(`/api/projects/${encodeURIComponent(uuid)}`, { method: "DELETE" }),
   launchRun: (uuid: string, body: LaunchPayload) => postJson<unknown>(`/api/projects/${encodeURIComponent(uuid)}/runs`, body),
-  updateRun: (id: number, body: { runScopesTarget?: number }) => patchJson<unknown>(`/api/runs/${id}`, body),
+  updateRun: (id: number, body: RunUpdatePayload) => patchJson<{ ok: true; runScopesTarget: number; applied: boolean; coverageMode?: string; coverageTarget?: number }>(`/api/runs/${id}`, body),
   stopRun: (id: number) => postJson<unknown>(`/api/runs/${id}/stop`, {}),
   deleteRun: (id: number) => fetchJson<unknown>(`/api/runs/${id}`, { method: "DELETE" }),
   runLog: (id: number, tail = 80) => fetchJson<{ events: ActivityRecord[] }>(`/api/runs/${id}/log?tail=${tail}&format=json`),
