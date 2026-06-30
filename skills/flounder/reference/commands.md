@@ -65,9 +65,9 @@ CLI naming convention:
 | Verb | What it does |
 | --- | --- |
 | `flounder prepare <clue>` | Open-world acquisition before map: tx/address/project/repo/link -> staged source, corpus, dependency closure, and deployment match |
-| `flounder run <clue>` | One-command pipeline: prepare -> sealed map/dig -> confirm -> report unless disabled |
+| `flounder run <clue>` | One-command pipeline: prepare -> sealed map/dig/synthesize/verify -> confirm -> report unless disabled |
 | `flounder continue --project <uuid\|name>` | Continue a stored project pipeline; CLI equivalent of the UI Continue button |
-| `flounder run --source <paths...> --target <name>` | Source-provided sealed audit: map -> dig |
+| `flounder run --source <paths...> --target <name>` | Source-provided sealed audit: map -> dig -> synthesize -> verify |
 | `flounder map --target <name> --source <paths...>` | Enumerate and persist scope inventory only |
 | `flounder audit <region> --source ...` | Deep-audit one region |
 | `flounder audit --scope <id,...> --source ...` | Deep-audit selected inventory scopes |
@@ -167,10 +167,22 @@ curl http://127.0.0.1:4500/api/projects
 curl http://127.0.0.1:4500/api/providers
 curl http://127.0.0.1:4500/api/daemons
 curl http://127.0.0.1:4500/api/projects/<uuid>
+curl 'http://127.0.0.1:4500/api/projects/<uuid>/backlog?status=open'
 curl 'http://127.0.0.1:4500/api/projects/<uuid>/findings?tracking=active'
 curl 'http://127.0.0.1:4500/api/projects/<uuid>/findings?tracking=ignored'
 curl http://127.0.0.1:4500/api/projects/<uuid>/confirm-decisions
 curl http://127.0.0.1:4500/api/runs/<id>/log
+```
+
+Discovery backlog rows can be filtered with
+`kind=coverage-gap|resource-request|followup-scope` and
+`status=open|resolved|stale|ignored|all`. Update operator state without deleting
+provenance:
+
+```bash
+curl -X PATCH http://127.0.0.1:4500/api/backlog/<id> \
+  -H 'content-type: application/json' \
+  -d '{"status":"resolved"}'
 ```
 
 Creating a project requires both a provider profile and a daemon. `dir` is the
@@ -227,6 +239,10 @@ Each audit run writes:
 - `audit_findings.json`
 - `audit_hypotheses.json`
 - `audit_command_runs.json`
+- `run_health.json`
+- `coverage_gaps.json`
+- `resource_requests.json`
+- `followup_scopes.json`
 - `audit_report.md`
 - `summary.json`
 - `events.jsonl`
@@ -256,7 +272,7 @@ only for short-lived scratch.
 When loaded through pi, Flounder registers:
 
 - `flounder_prepare`: open-world target acquisition from a clue
-- `flounder_run`: with a clue, prepare -> sealed map/dig -> confirm -> report; with source paths, sealed map/dig source audit
+- `flounder_run`: with a clue, prepare -> sealed map/dig/synthesize/verify -> confirm -> report; with source paths, sealed map/dig/synthesize/verify source audit
 - `flounder_map`: sealed scope inventory only
 - `flounder_audit`: sealed dig, pinned region audit, selected scope audit, or inline finding verification
 - `flounder_confirm`: open-world reproduction for a finished run

@@ -258,7 +258,7 @@ const ROUTES: Route[] = [
     summary: "Queue project work (Run/Continue pipeline, map, audit a region/scope, verify, confirm, report, or prepare). The job is dispatched to a connected daemon, which executes it and reports back. Uses the project's stored materials + config unless overridden. This is the single action behind the UI's primary and More actions controls.",
     params: { uuid: "project UUID" },
     body: {
-      verb: "'run' | 'map' | 'audit' | 'confirm' | 'report' | 'prepare' (default 'run'; project run = prepare-if-needed→map/dig→verify→confirm→report; source run = map→dig→verify)",
+      verb: "'run' | 'map' | 'audit' | 'confirm' | 'report' | 'prepare' (default 'run'; project run = prepare-if-needed→map/dig→synthesize→verify→confirm→report; source run = map→dig→synthesize→verify)",
       remap: "boolean? — re-enumerate scopes (restart)", fresh: "boolean? — confirm: ignore a prior interrupted confirm",
       quick: "boolean? — run: single breadth pass", mockLlm: "boolean? — offline mock model",
       verifyFromStart: "boolean? — run/continue pipeline: re-run Verify from the beginning instead of only pending candidates",
@@ -436,7 +436,7 @@ const ROUTES: Route[] = [
       provider: "string?", model: "string?", thinking: "string?",
       scopeCoverageMode: "focused|standard|half|full|custom? — standard/focused are cumulative project targets, not per-run additions", maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
       sandboxBackend: "'auto'|'oci'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
-      remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> verify -> confirm -> report", verifyFromStart: "boolean? — pipeline: re-run Verify from the beginning instead of only pending candidates", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
+      remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> synthesize -> verify -> confirm -> report", verifyFromStart: "boolean? — pipeline: re-run Verify from the beginning instead of only pending candidates", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
       inputRunDir: "string? — confirm", fresh: "boolean? — confirm",
       clue: "string? — prepare", posture: "string? — prepare", matchDeployed: "boolean? — prepare", endpoint: "string? — prepare",
     },

@@ -41,12 +41,15 @@ short command and status summary is enough.
 
 - Turn a security-audit request into a public-source or authorized Flounder project or run.
 - Keep the operator on the current workflow: `run <clue>` lets Flounder prepare
-  the target, then map/dig, confirm, and report; `run --source` is the
-  source-provided entry path for sealed map/dig.
+  the target, then map/dig/synthesize/verify, confirm, and report; `run --source`
+  is the source-provided entry path for sealed map/dig/synthesize/verify.
 - Prefer the dashboard/API control plane for project work so state, daemon
   ownership, live logs, findings, and reports stay durable.
 - Preserve the evidence ladder: suspected, locally confirmed, real-target
   reproduced, submission-ready. Do not collapse these into one "bug" bucket.
+- Use run health and discovery backlog rows when judging progress: a shallow
+  or resource-blocked zero-finding run is not a negative result, and follow-up
+  scopes should stay as pending coverage rather than becoming findings.
 - Separate machine noise from active work by marking dismissed findings
   `ignored`, never by deleting them.
 - Stop with a clear next action or blocker; do not call an audit complete just
@@ -103,9 +106,10 @@ Use these when the user is not asking for a full end-to-end audit:
   produced `confirmed-executable`, `confirmed-differential`, or a reproduced
   confirm decision.
 - `flounder run <clue>` is the one-command workflow: open-world prepare,
-  sealed map/dig, open-world confirm, then report generation. `flounder run
-  --source`, `map`, and `audit` are sealed discovery phases. `prepare` and
-  `confirm` are open-world phases, still under white-hat no-broadcast rules.
+  sealed map/dig/synthesize/verify, open-world confirm, then report generation.
+  `flounder run --source`, `map`, and `audit` are sealed discovery phases.
+  `prepare` and `confirm` are open-world phases, still under white-hat
+  no-broadcast rules.
 - Never broadcast transactions, move funds, submit writes, persist access, or
   target systems outside the declared local audit boundary or explicit authorized
   scope.
@@ -227,7 +231,7 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
 
 8. Monitor progress from the dashboard, CLI stream, or REST API:
 
-   - current phase: prepare, map, dig, confirm, report
+   - current phase: prepare, map, dig, synthesis, verify, confirm, report
    - live activity: `GET /api/runs/:id/log`
    - project state: `GET /api/projects/:uuid`
    - prepare quality: `prepareSummary.quality` is `ready`, `limited`,
@@ -239,6 +243,12 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
    - findings: `GET /api/projects/:uuid/findings?tracking=active`
    - ignored findings recovery: `GET /api/projects/:uuid/findings?tracking=ignored`
    - confirm decisions: `GET /api/projects/:uuid/confirm-decisions`
+   - run health: `latestRunHealth.status` is `healthy`,
+     `needs-coverage`, `needs-resource`, `shallow`, or `infra-failed`
+   - discovery backlog: `GET /api/projects/:uuid/backlog?status=open`
+     lists coverage gaps, resource requests, and follow-up scopes; use
+     `PATCH /api/backlog/:id` to mark rows `resolved`, `ignored`, `stale`, or
+     back to `open`
 
    Project names are display labels. Resolve a project UUID from `POST /api/projects`
    or `GET /api/projects`; do not build a project URL from the name.
@@ -332,7 +342,11 @@ prerequisite for local sealed audit.
      -d '{"verb":"run"}'
    ```
 
-4. If many mapped scopes are pending, prefer continuing coverage before drawing
+4. Inspect `latestRunHealth`, `backlogCounts`, and open backlog rows before
+   drawing conclusions. Resolve `resource-request` rows before rerunning the
+   same blocked work; continue coverage or prioritize follow-up scopes for
+   `needs-coverage`; do not treat `shallow` as a meaningful negative result.
+5. If many mapped scopes are pending, prefer continuing coverage before drawing
    a negative conclusion.
 
 ### Project Setup And Housekeeping
@@ -343,6 +357,11 @@ project rail, or how to recover archived work.
 - Open the project setup disclosure first when the overview reports setup
   attention. Fix daemon selection, provider auth, source paths, or prepared
   material blockers before launching new work.
+- Treat the Project setup disclosure as the home for the stored project clue
+  and prepare caveats. Do not expect the clue to appear as a separate dashboard
+  card; inspect setup before assuming Prepare did not receive context.
+- If open `resource-request` backlog rows explain a setup limitation, resolve
+  or ignore those rows after the operator fixes or dismisses the blocker.
 - Pin active projects that need daily attention; archive dormant projects from
   the project card menu. Archiving hides the project from the rail, clears pin,
   and keeps runs, scopes, findings, and reports.
@@ -389,7 +408,7 @@ Open only the references needed for the current task:
   [reference/commands.md](reference/commands.md)
 - Solidity/EVM and ZK examples:
   [reference/examples.md](reference/examples.md)
-- dashboard, project lifecycle, run phases, and artifact model:
+- dashboard, project lifecycle, run phases, discovery backlog, and artifact model:
   [reference/product.md](reference/product.md)
 - white-hat policy, sandbox boundary, and evidence ladder:
   [reference/safety.md](reference/safety.md)
@@ -404,7 +423,7 @@ Open only the references needed for the current task:
 | "Map the attack surface first" | `flounder map`, then inspect scopes and run `flounder audit --scope ...` |
 | "Dig this file/function/region" | `flounder audit <region> --source ... --build-root ...` |
 | "Verify this suspected bug" | Write a claims JSON and run `flounder verify <file>` or `flounder audit --verify <file>` |
-| "Continue coverage" | Use project Continue or audit pending scopes from the inventory |
+| "Continue coverage" | Use project Continue or audit pending scopes from the inventory; inspect discovery backlog first for resource blockers or follow-up scopes |
 | "Confirm whether this is real" | `flounder confirm <run-dir>` or project/finding Confirm in the UI |
 | "Collect bugs for disclosure" | Read findings, selected reports, confirm decisions, and artifacts; return only execution-backed items |
 | "Ignore this false positive" | Set finding tracking to `ignored`; do not delete it |
@@ -434,6 +453,17 @@ Open only the references needed for the current task:
   caveats instead of requiring manual review.
 - Map is done but many high-score scopes are pending: continue the audit or
   prioritize scopes.
+- Latest run health is `needs-resource`: inspect open `resource-request` rows,
+  fix the missing tool/artifact/environment, mark the row `resolved`, then
+  rerun the blocked phase.
+- Latest run health is `needs-coverage`: continue pending scopes or prioritize
+  follow-up scopes from the backlog. Do not ask the model to "report more bugs"
+  as a substitute for coverage.
+- Latest run health is `shallow`: treat the run as inconclusive; inspect logs
+  and rerun or fix setup before summarizing.
+- Discovery backlog has open `coverage-gap` or `followup-scope` rows: carry
+  them as coverage work. They are not findings and should not appear in a bug
+  list unless a later execution-backed audit confirms one.
 - Findings are only `suspected`: make the target buildable and run verify or
   dig again.
 - Findings are confirmed locally but not reproduced: run confirm.
@@ -492,6 +522,7 @@ The task is not complete until the agent can report:
 - Prepared materials are `ready` or `limited`; if limited, every caveat needed
   for verify, confirm, or report decisions is called out as a known limitation.
 - The audit run reached a terminal state or a meaningful blocker.
+- Latest run health and open discovery backlog rows are summarized when present.
 - Scope coverage is summarized: mapped, audited, pending, deferred.
 - Findings are grouped by status.
 - Confirmed findings have been sent through confirm when real-target
