@@ -117,6 +117,72 @@ export function confirmedDecisions(rows: ConfirmDecision[] | undefined): Confirm
   return (rows ?? []).filter((row) => row.reproduced === "yes");
 }
 
+const DECISION_RECOMMENDATION_RANK: Record<string, number> = {
+  "submit-candidate": 4,
+  "needs-human": 2,
+  drop: 0,
+};
+
+const DECISION_REPRODUCTION_RANK: Record<string, number> = {
+  yes: 4,
+  pending: 2,
+  "could-not-set-up": 2,
+  no: 1,
+};
+
+const DECISION_SEVERITY_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+const DECISION_CONFIDENCE_RANK: Record<string, number> = { high: 4, medium: 3, low: 2, unknown: 1 };
+const DECISION_EVIDENCE_RANK: Record<string, number> = {
+  "real-target-reproduced": 5,
+  "fork-reproduced": 4,
+  "local-fork-reproduced": 4,
+  "execution-reproduced": 3,
+  "locally-reproduced": 3,
+  "source-supported": 2,
+  "reasoned": 1,
+};
+
+function rankToken(value?: string | null): string {
+  return value?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") ?? "";
+}
+
+function confirmDecisionPriority(decision: ConfirmDecision): number {
+  const recommendation = rankToken(decision.recommendation);
+  const reproduced = rankToken(decision.reproduced);
+  const group = recommendation === "drop"
+    ? 0
+    : reproduced === "yes" && recommendation === "submit-candidate"
+      ? 5
+      : reproduced === "yes"
+        ? 4
+        : recommendation === "needs-human"
+          ? 3
+          : reproduced === "pending" || reproduced === "could-not-set-up"
+            ? 2
+            : reproduced === "no"
+              ? 1
+              : 2;
+  const severity = (DECISION_SEVERITY_RANK[rankToken(decision.severity)] ?? 0) * 10000;
+  const confidence = (DECISION_CONFIDENCE_RANK[rankToken(decision.submission_confidence)] ?? 0) * 1000;
+  const evidence = (DECISION_EVIDENCE_RANK[rankToken(decision.evidence_level)] ?? 0) * 100;
+  const recommendationRank = (DECISION_RECOMMENDATION_RANK[recommendation] ?? 1) * 10;
+  const reproduction = DECISION_REPRODUCTION_RANK[reproduced] ?? 0;
+  return group * 100000 + severity + confidence + evidence + recommendationRank + reproduction;
+}
+
+export function sortConfirmDecisionsForSubmission(rows: ConfirmDecision[] | undefined): ConfirmDecision[] {
+  return [...(rows ?? [])].sort((a, b) => {
+    const priority = confirmDecisionPriority(b) - confirmDecisionPriority(a);
+    if (priority !== 0) return priority;
+    const aId = typeof a.id === "number" ? a.id : Number.MAX_SAFE_INTEGER;
+    const bId = typeof b.id === "number" ? b.id : Number.MAX_SAFE_INTEGER;
+    if (aId !== bId) return aId - bId;
+    const aBug = a.bug ?? "";
+    const bBug = b.bug ?? "";
+    return aBug.localeCompare(bBug);
+  });
+}
+
 function reportPackageStats(findings: FindingRow[], decisions: ConfirmDecision[], requiresConfirmation: boolean): { ready: number; total: number; submissions: number } {
   if (!requiresConfirmation) {
     const reportable = findings.filter(isExecutionConfirmedFinding);
@@ -275,6 +341,20 @@ export function pct(a: number | null | undefined, t: number | null | undefined):
 
 interface RunStages {
   synthesis?: { scopes?: number; produced?: number; pool?: number; status?: string; startedAt?: string; at?: string };
+  confirm?: {
+    status?: string;
+    findings?: number;
+    rows?: number;
+    reproducedYes?: number;
+    submitCandidates?: number;
+    needsHuman?: number;
+    commandRuns?: number;
+    confirmRuns?: number;
+    passed?: number;
+    failed?: number;
+    startedAt?: string;
+    at?: string;
+  };
 }
 
 function stages(run: RunRow | undefined): RunStages {
@@ -284,6 +364,48 @@ function stages(run: RunRow | undefined): RunStages {
 
 function latestRunWithStage(runs: RunRow[], stage: keyof RunStages): RunRow | undefined {
   return runs.find((run) => Boolean(stages(run)[stage]));
+}
+
+function latestCoverageTimelineRun(runs: RunRow[]): RunRow | undefined {
+  return runs.find((run) => {
+    if (run.kind === "map") return true;
+    if (run.kind !== "run") return false;
+    return Boolean(run.dig_started_at || run.scopes_total != null || run.run_scopes_target != null || stages(run).synthesis);
+  }) ?? runs.find((run) => run.kind === "run" || run.kind === "map");
+}
+
+function confirmProgressStat(run: RunRow | undefined): string {
+  const progress = stages(run).confirm;
+  if (!progress) return "";
+  const rows = Number(progress.rows ?? 0);
+  if (rows > 0) {
+    const reproduced = Number(progress.reproducedYes ?? 0);
+    const needsHuman = Number(progress.needsHuman ?? 0);
+    const parts = [
+      `${reproduced}/${rows} reproduced`,
+      needsHuman > 0 ? `${needsHuman} need human` : "",
+    ].filter(Boolean);
+    return parts.join(" · ");
+  }
+  const confirmRuns = Number(progress.confirmRuns ?? 0);
+  if (confirmRuns > 0) {
+    const passed = Number(progress.passed ?? 0);
+    const failed = Number(progress.failed ?? 0);
+    const parts = [
+      `${confirmRuns} real-target ${confirmRuns === 1 ? "check" : "checks"}`,
+      passed > 0 ? `${passed} passed` : "",
+      failed > 0 ? `${failed} failed` : "",
+    ].filter(Boolean);
+    return parts.join(" · ");
+  }
+  const commandRuns = Number(progress.commandRuns ?? 0);
+  if (commandRuns > 0) return `${commandRuns} ${commandRuns === 1 ? "command" : "commands"} run · preparing reproduction`;
+  const findings = Number(progress.findings ?? 0);
+  return findings > 0 ? `${findings} ${findings === 1 ? "finding" : "findings"} in confirmation` : "";
+}
+
+function completedScopeBatch(run: RunRow | undefined): boolean {
+  return Boolean(run?.status === "done" && run.run_scopes_target != null && (run.run_scopes_done ?? 0) >= run.run_scopes_target);
 }
 
 function startedAtMs(value: string | null | undefined): number {
@@ -342,6 +464,7 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const needsEvidence = findings.filter((finding) => finding.status === "needs-evidence").length;
   const audit = runs.find((r) => r.status === "running" && ["run", "audit", "map"].includes(r.kind));
   const auditLatest = latest("run", "audit", "map");
+  const coverageTimelineRun = latestCoverageTimelineRun(runs);
   const verifyLatest = runs.find((run) => isVerifyRun(run));
   const reportLatest = latest("report");
   const reportRunning = reportLatest?.status === "running";
@@ -356,6 +479,7 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const pendingConfirm = verifyRechecksConfirmed ? 0 : pendingConfirmRaw;
   const finalizingAudit = Boolean(batchDone && audit && !isVerify && !activeScope);
   const digRunning = Boolean(audit && !isVerify && (audit.kind === "audit" || digStarted) && !finalizingAudit);
+  const synthesisWaiting = Boolean(audit && !isVerify && !finalizingAudit && !synthesis && progress.audited > 0);
   const thisRun = audit && audit.run_scopes_target != null
     ? batchDone
       ? " · finalizing"
@@ -364,14 +488,18 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const verifyStat = verifyProgress
     ? `Verifying ${verifyProgress.done}/${verifyProgress.target} findings${detail.findingsTotal ? ` · ${detail.findingsTotal} in project` : ""}`
     : "";
-  const auditRun = audit ?? auditLatest;
+  const auditRun = audit ?? coverageTimelineRun ?? auditLatest;
+  const auditRunStages = stages(auditRun);
   const startMs = auditRun?.started_at ? new Date(auditRun.started_at).getTime() : 0;
-  const endMs = auditLatest?.ended_at ? new Date(auditLatest.ended_at).getTime() : 0;
+  const runEndMs = auditRun?.ended_at ? new Date(auditRun.ended_at).getTime() : 0;
+  const synthesisBeginMs = auditRunStages.synthesis?.startedAt ? new Date(auditRunStages.synthesis.startedAt).getTime() : 0;
+  const digEndMs = synthesisBeginMs > 0 ? synthesisBeginMs : runEndMs;
   const boundMs = auditRun?.dig_started_at ? new Date(auditRun.dig_started_at).getTime() : 0;
+  const finishedSelectedDigBatch = completedScopeBatch(coverageTimelineRun ?? auditLatest);
   const mapDur = mapRunning
     ? runDur(audit, true)
-    : progress.total > 0 && auditLatest?.kind === "map"
-      ? runDur(auditLatest, false)
+    : progress.total > 0 && auditRun?.kind === "map"
+      ? runDur(auditRun, false)
       : progress.total > 0 && startMs && boundMs > startMs
         ? fmtDur(boundMs - startMs)
         : "";
@@ -380,8 +508,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
       ? fmtDur(Date.now() - boundMs)
       : runDur(audit, true)
     : progress.audited > 0
-      ? boundMs && endMs > boundMs
-        ? fmtDur(endMs - boundMs)
+      ? boundMs && digEndMs > boundMs
+        ? fmtDur(digEndMs - boundMs)
         : runDur(auditLatest, false)
       : "";
   const synthesisStartMs = synthesis?.startedAt ? new Date(synthesis.startedAt).getTime() : 0;
@@ -392,12 +520,13 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
       ? fmtDur(synthesisEndMs - synthesisStartMs)
       : "";
   const reportPackages = reportPackageStats(findings, decisions, requiresConfirmation);
+  const confirmRunningProgress = conf?.status === "running" ? confirmProgressStat(conf) : "";
 
   return {
     prepare: { status: prep ? prep.status : "none", stat: prep ? (prep.status === "done" ? "Source staged" : prep.status === "running" ? "Preparing source" : prep.status) : "Not started", dur: runDur(prep, prep?.status === "running") },
     map: { status: mapRunning ? "running" : progress.total > 0 ? "done" : "none", stat: progress.total > 0 ? `${progress.total} scopes mapped` : mapRunning ? "Mapping scopes" : "Not started", dur: mapDur },
     dig: {
-      status: digRunning ? "running" : progress.audited > 0 ? (progress.pending > 0 ? "partial" : "done") : progress.total > 0 ? "pending" : "none",
+      status: digRunning ? "running" : progress.audited > 0 ? (progress.pending > 0 && !finishedSelectedDigBatch ? "partial" : "done") : progress.total > 0 ? "pending" : "none",
       stat: finalizingAudit
           ? `Verifying candidates · ${progress.audited}/${progress.total} scopes audited${detail.findingsTotal ? ` · ${detail.findingsTotal} in project` : ""}`
           : progress.total > 0
@@ -410,6 +539,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
         ? "running"
         : synthesis
           ? "done"
+          : synthesisWaiting
+            ? "pending"
           : progress.audited > 0
             ? "done"
             : "none",
@@ -417,6 +548,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
         ? "Synthesizing bug candidates"
         : synthesis
           ? `${synthesis.produced ?? 0} synthesized ${synthesis.produced === 1 ? "candidate" : "candidates"}`
+          : synthesisWaiting
+            ? "Waiting for dig to finish"
           : progress.audited > 0
             ? "No cross-scope candidate"
             : "Not started",
@@ -461,6 +594,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
           ? "Waiting for Verify to finish"
         : decisions.length
         ? `${repro}/${decisions.length} reproduced${confirmDecisionTail(decisions)}${pendingConfirm ? ` · ${pendingConfirm} ${pendingConfirm === 1 ? "finding" : "findings"} waiting` : ""}`
+        : confirmRunningProgress
+          ? confirmRunningProgress
         : pendingConfirm > 0
           ? `${pendingConfirm} waiting for real-target confirmation`
           : "Not started",
@@ -493,7 +628,8 @@ export function reportName(kind: string): string {
 export function runProgress(run: RunRow, decisions: ConfirmDecision[]): string {
   if (run.kind === "confirm") {
     const rows = decisions.filter((d) => d.run_id === run.id);
-    return rows.length ? `${rows.filter((d) => d.reproduced === "yes").length}/${rows.length} reproduced` : "No decisions recorded yet";
+    if (rows.length) return `${rows.filter((d) => d.reproduced === "yes").length}/${rows.length} reproduced`;
+    return confirmProgressStat(run) || "No decisions recorded yet";
   }
   if (isVerifyRun(run) && run.run_scopes_target != null) {
     if (runScopeBatchComplete(run)) return `Finalizing verification after ${run.run_scopes_done ?? 0}/${run.run_scopes_target} findings`;

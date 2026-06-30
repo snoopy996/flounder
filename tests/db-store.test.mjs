@@ -92,6 +92,56 @@ test("store: stage timing preserves startedAt across updates", async () => {
   db.close();
 });
 
+test("store: discovery health and backlog are persisted and operator-actionable", async () => {
+  const db = await tempDb();
+  const projectId = db.upsertProject({ name: "discovery-project" });
+  const runId = db.startRun({ projectId, kind: "run", runDir: "/runs/discovery-1" });
+
+  db.recordRunHealth(runId, {
+    status: "needs-resource",
+    reasons: ["1 resource request blocks confirmation"],
+    signals: { toolSteps: 9, resourceRequests: 1 },
+  });
+  db.replaceScopes(projectId, [
+    { scopeId: "S1", title: "Withdrawals must bind signer", location: "src/Vault.sol:10", status: "pending", source: "followup", parentScopeId: "S0" },
+  ]);
+  db.replaceDiscoveryBacklog(projectId, runId, [
+    { kind: "coverage-gap", status: "open", scopeId: "S1", title: "Replay domain not audited", location: "src/Vault.sol:10", reason: "Budget ended first", nextAction: "Dig the follow-up scope", priority: "high", payload: { id: "G1" } },
+    { kind: "resource-request", status: "open", title: "Foundry cache", location: "dependency", reason: "Build needs dependency install", nextAction: "Run forge install", priority: "high", payload: { id: "R1" } },
+  ]);
+
+  const health = db.latestRunHealth(projectId);
+  assert.equal(health.health_status, "needs-resource");
+  assert.deepEqual(JSON.parse(health.health_reasons_json), ["1 resource request blocks confirmation"]);
+  assert.equal(JSON.parse(health.health_signals_json).toolSteps, 9);
+
+  const scope = db.listScopes(projectId)[0];
+  assert.equal(scope.source, "followup");
+  assert.equal(scope.parent_scope_id, "S0");
+
+  assert.deepEqual(db.discoveryBacklogCounts(projectId), {
+    total: 2,
+    open: 2,
+    "coverage-gap:open": 1,
+    "coverage-gap": 1,
+    "resource-request:open": 1,
+    "resource-request": 1,
+  });
+  const resource = db.listDiscoveryBacklog(projectId, { kind: "resource-request", status: "open" })[0];
+  assert.equal(resource.title, "Foundry cache");
+  assert.equal(JSON.parse(resource.payload_json).id, "R1");
+
+  assert.equal(db.setDiscoveryBacklogStatus(resource.id, "resolved"), true);
+  assert.equal(db.discoveryBacklogCounts(projectId)["resource-request:resolved"], 1);
+  assert.equal(db.discoveryBacklogCounts(projectId).open, 1);
+
+  db.deleteRun(runId);
+  assert.equal(db.latestRunHealth(projectId), undefined);
+  assert.equal(db.discoveryBacklogCounts(projectId).total, 0);
+  assert.equal(db.listScopes(projectId).length, 1);
+  db.close();
+});
+
 test("store: finding status transitions land on a timeline", async () => {
   const db = await tempDb();
   const projectId = db.upsertProject({ name: "p" });

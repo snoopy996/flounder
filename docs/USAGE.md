@@ -4,17 +4,19 @@ Practical guide to driving Flounder from the CLI, the dashboard, the API, and th
 
 Flounder is an autonomous white-hat security auditor. The operator supplies the public-source or authorized target boundary, daemon, provider profile, and budget; the model decides what to read, test, and report. Flags shape *what* it may audit and *how thoroughly* it audits, never *what the bug is*.
 
-The product workflow is prepare -> map -> dig -> confirm -> report:
+The product workflow is prepare -> map -> dig -> synthesize -> verify -> confirm -> report:
 
 - `prepare`: open-world acquisition from a clue, such as a transaction, address, project, repository, package, or link.
 - `map`: sealed scope inventory and scoring.
 - `dig`: sealed deep audit of selected scopes with local execution proof.
+- `synthesize`: sealed cross-scope composition into distinct bug candidates.
+- `verify`: sealed local confirm-or-refute pass for suspected or synthesized candidates.
 - `confirm`: open-world reproduction against real-world ground truth, with white-hat no-broadcast rules.
 - `report`: formal Markdown packaging for reproduced or source-provided locally confirmed bugs.
 
 ## Agentic flow
 
-`flounder run` has two entry shapes. With a clue, it is the one-command pipeline: open-world prepare, sealed map/dig, open-world confirm, then report generation for reproduced bugs. With source paths already supplied, it runs the sealed **map → dig** audit directly. Each phase — and each other verb — runs the same thin agent session; `flounder run --quick`, `flounder audit`, and `flounder map` enter that session directly, and `flounder confirm` runs it open-world.
+`flounder run` has two entry shapes. With a clue, it is the one-command pipeline: open-world prepare, sealed map/dig/synthesize/verify, open-world confirm, then report generation for reproduced bugs. With source paths already supplied, it runs the sealed **map -> dig -> synthesize -> verify** audit directly. Each phase — and each other verb — runs the same thin agent session; `flounder run --quick`, `flounder audit`, `flounder verify`, and `flounder map` enter that session directly, and `flounder confirm` runs it open-world.
 
 ```mermaid
 flowchart TD
@@ -25,8 +27,11 @@ flowchart TD
   DIG -. "checkpoint after MAP and after each dig — resumable, never drops a scope" .-> MAP
   QUICK["flounder run --quick · flounder audit &lt;region&gt;/--scope/--verify · flounder map"] --> SESSION["one agent session (the loop below)"]
   DIG --> SESSION
+  DIG --> SYNTH["SYNTHESIZE — compose cross-scope bug candidates"]
+  SYNTH --> VERIFY["VERIFY — confirm or refute candidates by local execution"]
+  VERIFY --> SESSION
   CONFIRM["flounder confirm (open-world, networked)"] --> SESSION
-  DIG --> CONFIRM
+  VERIFY --> CONFIRM
   CONFIRM --> REPORT["REPORT — generate formal Markdown reports for reproduced bugs"]
 ```
 
@@ -269,7 +274,7 @@ pi -e flounders
 The extension registers workflow tools that mirror the top-level verbs:
 
 - `flounder_prepare`: open-world target acquisition from a clue.
-- `flounder_run`: current `run` semantics. With a clue, it runs prepare -> sealed map/dig -> confirm -> report; with `sourcePaths`, it runs the sealed source audit.
+- `flounder_run`: current `run` semantics. With a clue, it runs prepare -> sealed map/dig/synthesize/verify -> confirm -> report; with `sourcePaths`, it runs the sealed source audit.
 - `flounder_map`: sealed scope inventory only.
 - `flounder_audit`: sealed dig/region/scope/verify workflow.
 - `flounder_confirm`: open-world reproduction of finished run findings.
@@ -305,6 +310,8 @@ Each audit writes:
 - `audit_transcript.json`: replayable action/observation trace.
 - `audit_findings.json`: raw agent-reported findings.
 - `audit_command_runs.json`: local sandbox command records.
+- `run_health.json`: health verdict for the run (`healthy`, `needs-coverage`, `needs-resource`, `shallow`, or `infra-failed`).
+- `coverage_gaps.json`, `resource_requests.json`, `followup_scopes.json`: discovery backlog artifacts for coverage gaps, missing resources, and adjacent scopes to audit later.
 - `summary.json`: ranked finding summary and coverage.
 - `report_<id>.md`: private disclosure drafts.
 - `events.jsonl` and `calls/*.json`: audit trace and model-call records.
@@ -325,7 +332,7 @@ Run artifacts are private by default. Redact before sharing outside the trusted 
 
 Every run records its metadata to a local tracking store at `<out>/flounder.db`. The default `<out>` is `~/.flounder`, so a normal install keeps the tracking database at `~/.flounder/flounder.db`, run artifacts at `~/.flounder/<target>-<timestamp>/`, durable history/build cache at `~/.flounder/history/<target>/`, provider auth at `~/.flounder/agent/auth.json`, and the default daemon workspace at `~/.flounder/workspace`. Existing pi provider credentials can be imported from `~/.pi/agent/auth.json` into the Flounder auth file. System temp directories are reserved for short-lived scratch such as CLI subprocess working directories and inline verify payloads.
 
-The tracking store records the project, the run lifecycle, scope coverage (mapped vs audited, updated live), findings and their status transitions (suspect → confirm → refute, on a timeline), and confirm decisions. It holds metadata and **paths** to the on-disk artifacts above, not their content. Inspect it across all projects without reading run dirs:
+The tracking store records the project, the run lifecycle, run health, discovery backlog rows, scope coverage (mapped vs audited, updated live), findings and their status transitions (suspect → confirm → refute, on a timeline), and confirm decisions. It holds metadata and **paths** to the on-disk artifacts above, not their content. Inspect it across all projects without reading run dirs:
 
 ```bash
 flounder server project list                    # every project: scope coverage, finding counts, latest run
@@ -352,7 +359,7 @@ A web dashboard to track and drive audits across projects, updating live via SSE
 
 Project creation starts with a task/clue composer so the operator can say what the audit should do. The clue is stored as `config.prepareClue` and reused by Prepare unless a launch supplies a new one. Project directories live under the daemon workspace and default to the project UUID, not the display name. The project list defaults to newest-created first, supports pinning, drag ordering, and archive/unarchive; archived projects move to Settings and lose their pin.
 
-A project's detail is the **prepare → map → dig → confirm → report** workflow: it shows the current phase, elapsed phase timing, scope coverage, live model activity, and the scope being dug. Below it are the scope queue you can prioritize, skip, or resume; findings that stream in as scopes land and change status through refutation; per-finding workflow state; per-finding tracking; real-target outcomes (`reproduced` / `not-reproduced`); and viewable Markdown reports. The primary button is **Run** before the first pipeline run and **Continue** afterward; the CLI equivalent is `flounder continue --project <uuid|name>`. More actions exposes the individual Prepare, Map, Dig, Verify, Confirm, and Report controls; Verify and Report can target selected findings. **Stop** cooperatively cancels a running job.
+A project's detail is the **prepare -> map -> dig -> synthesize -> verify -> confirm -> report** workflow: it shows the current phase, elapsed phase timing, scope coverage, run health, discovery backlog, live model activity, and the scope being dug. Below it are the scope queue you can prioritize, skip, or resume; findings that stream in as scopes land and change status through refutation; per-finding workflow state; per-finding tracking; real-target outcomes (`reproduced` / `not-reproduced`); and viewable Markdown reports. The primary button is **Run** before the first pipeline run and **Continue** afterward; the CLI equivalent is `flounder continue --project <uuid|name>`. More actions exposes the individual Prepare, Map, Dig, Verify, Confirm, and Report controls; Verify and Report can target selected findings. **Stop** cooperatively cancels a running job.
 
 The cross-project **Findings** view tracks every finding and its submission state. It supports project, audit-status, and tracking filters. The default **Active findings** filter hides rows marked `ignored`, while the **Ignored** view lets an operator recover machine false positives later by changing their tracking state back to `open`. Settings holds provider profiles, daemon CRUD (mint token, rename, revoke), and archived projects.
 
@@ -370,12 +377,13 @@ PROJECT_UUID=$(curl -s localhost:4500/api/projects \
 curl -X POST localhost:4500/api/projects/$PROJECT_UUID/runs -d '{"verb":"run"}'   # enqueue a run for a daemon
 flounder continue --project $PROJECT_UUID                                         # same project Continue action from the CLI
 curl localhost:4500/api/projects/$PROJECT_UUID                        # progress, counts, runs, confirm decisions
+curl "localhost:4500/api/projects/$PROJECT_UUID/backlog?status=open"  # coverage gaps, resource requests, follow-up scopes
 curl "localhost:4500/api/projects/$PROJECT_UUID/findings?tracking=active"
 curl "localhost:4500/api/projects/$PROJECT_UUID/findings?status=confirmed-differential"
 curl "localhost:4500/api/projects/$PROJECT_UUID/confirm-decisions?reproduced=yes"  # the confirmed bugs
 ```
 
-Resources: **project** (CRUD, including selected daemon, provider profile, task/clue, source/build/corpus paths, archive/pin/manual order; project URLs are UUID-only), **provider** (model strategy profiles), **daemon** (CRUD — mint/rename/revoke), **run** (`POST /api/projects/:uuid/runs` enqueues a job a daemon claims; `verb:"run"` is the automatic prepare-if-needed -> map/dig -> confirm -> report pipeline; `GET /api/runs/:id`; `POST /api/runs/:id/stop`; `GET /api/runs/:id/artifact?name=` reads a report file), and read-only **scope** / **finding** / **confirm-decision** (paginated + filterable). Operator actions: `PATCH …/scopes/:id {prioritize:true}` reorders the dig queue; `PATCH /api/findings/:id/tracking` advances a finding's submission state, including `ignored` for human-dismissed machine findings; a confirm `POST …/runs {verb:"confirm"}` reproduces all pending findings (or selected findings with `findingId`/`findingIds`); a report `POST …/runs {verb:"report", findingIds:[...]}` regenerates selected reports, `{"verb":"report","regenerateReports":true}` regenerates every current reportable finding, and an unselected report run writes only missing reports. `flounder continue --project <uuid|name>` drives the same Run/Continue project pipeline from the CLI. `flounder report --project <uuid|name>` drives the same project action from the CLI; add `--finding <id>` for selected regeneration or `--all` for full regeneration. `GET /api/bugs` powers the cross-project Findings view and supports `project=<uuid>`, `status=...`, `tracking=active/ignored/...`, `limit`, and `offset`. `GET /api/stream` is an SSE feed for live updates; `GET /api/runs/:id/log` streams a run's live token-level activity, fed by the executing daemon.
+Resources: **project** (CRUD, including selected daemon, provider profile, task/clue, source/build/corpus paths, archive/pin/manual order; project URLs are UUID-only), **provider** (model strategy profiles), **daemon** (CRUD — mint/rename/revoke), **run** (`POST /api/projects/:uuid/runs` enqueues a job a daemon claims; `verb:"run"` is the automatic prepare-if-needed -> map/dig -> synthesize -> verify -> confirm -> report pipeline; `GET /api/runs/:id`; `POST /api/runs/:id/stop`; `GET /api/runs/:id/artifact?name=` reads an allowlisted report or discovery-health artifact), and read-only **scope** / **finding** / **confirm-decision** (paginated + filterable). **Discovery-backlog** rows are project-scoped and operator-actionable: `GET /api/projects/:uuid/backlog?kind=&status=` lists coverage gaps, resource requests, and follow-up scopes; `PATCH /api/backlog/:id {"status":"resolved"|"ignored"|"stale"|"open"}` updates the operator state without deleting provenance. Operator actions: `PATCH …/scopes/:id {prioritize:true}` reorders the dig queue; `PATCH /api/findings/:id/tracking` advances a finding's submission state, including `ignored` for human-dismissed machine findings; a confirm `POST …/runs {verb:"confirm"}` reproduces all pending findings (or selected findings with `findingId`/`findingIds`); a report `POST …/runs {verb:"report", findingIds:[...]}` regenerates selected reports, `{"verb":"report","regenerateReports":true}` regenerates every current reportable finding, and an unselected report run writes only missing reports. `flounder continue --project <uuid|name>` drives the same Run/Continue project pipeline from the CLI. `flounder report --project <uuid|name>` drives the same project action from the CLI; add `--finding <id>` for selected regeneration or `--all` for full regeneration. `GET /api/bugs` powers the cross-project Findings view and supports `project=<uuid>`, `status=...`, `tracking=active/ignored/...`, `limit`, and `offset`. `GET /api/stream` is an SSE feed for live updates; `GET /api/runs/:id/log` streams a run's live token-level activity, fed by the executing daemon.
 
 ## Library API
 

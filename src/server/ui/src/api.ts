@@ -43,6 +43,8 @@ export interface ProjectSnapshot {
   currentRunCount?: number;
   runCount?: number;
   latestRun?: RunRow | null;
+  latestRunHealth?: RunHealth | null;
+  backlogCounts?: Record<string, number>;
   material?: MaterialSummary;
 }
 
@@ -96,6 +98,10 @@ export interface RunRow {
   job_id?: number | null;
   job_status?: string | null;
   job_error?: string | null;
+  health_status?: string | null;
+  health_reasons_json?: string | null;
+  health_signals_json?: string | null;
+  runHealth?: RunHealth | null;
 }
 
 export interface ScopeRow {
@@ -106,7 +112,43 @@ export interface ScopeRow {
   score?: number | null;
   priority?: number | null;
   status: ScopeStatus;
+  source?: string | null;
+  parent_scope_id?: string | null;
   dig_seconds?: number | null;
+}
+
+export interface RunHealth {
+  runId?: number | null;
+  runKind?: string | null;
+  runStatus?: string | null;
+  status?: string | null;
+  reasons?: string[];
+  signals?: Record<string, unknown>;
+  startedAt?: string | null;
+  endedAt?: string | null;
+}
+
+export type DiscoveryBacklogKind = "coverage-gap" | "resource-request" | "followup-scope" | string;
+export type DiscoveryBacklogStatus = "open" | "resolved" | "stale" | "ignored" | string;
+
+export interface DiscoveryBacklogRow {
+  id: number;
+  project_id?: number;
+  run_id?: number | null;
+  kind: DiscoveryBacklogKind;
+  status: DiscoveryBacklogStatus;
+  scope_id?: string | null;
+  title?: string | null;
+  location?: string | null;
+  reason?: string | null;
+  next_action?: string | null;
+  priority?: string | null;
+  payload_json?: string | null;
+  payload?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+  run_kind?: string | null;
+  run_started_at?: string | null;
 }
 
 export interface FindingRow {
@@ -183,6 +225,10 @@ export interface ProjectDetail {
   activeScopeCount?: number;
   confirmDecisions: ConfirmDecision[];
   scopes?: ScopeRow[];
+  latestRunHealth?: RunHealth | null;
+  backlogCounts?: Record<string, number>;
+  discoveryBacklog?: DiscoveryBacklogRow[];
+  openResourceRequests?: DiscoveryBacklogRow[];
   allFindings?: FindingRow[];
   prepareSummary?: PrepareSummary | null;
   material?: MaterialSummary;
@@ -418,6 +464,8 @@ export const api = {
   project: (uuid: string) => fetchJson<ProjectDetail>(`/api/projects/${encodeURIComponent(uuid)}`),
   scopes: (uuid: string, params = new URLSearchParams()) =>
     fetchJson<{ scopes: ScopeRow[]; progress: Coverage; total: number; limit: number; offset: number }>(`/api/projects/${encodeURIComponent(uuid)}/scopes?${params.toString()}`),
+  backlog: (uuid: string, params = new URLSearchParams()) =>
+    fetchJson<{ backlog: DiscoveryBacklogRow[]; counts: Record<string, number>; total: number; limit: number; offset: number }>(`/api/projects/${encodeURIComponent(uuid)}/backlog?${params.toString()}`),
   findings: (uuid: string, params: URLSearchParams) =>
     fetchJson<{ findings: FindingRow[]; total: number; limit: number; offset: number }>(`/api/projects/${encodeURIComponent(uuid)}/findings?${params.toString()}`),
   createProject: (body: ProjectPayload) => postJson<{ ok: true; id: number; uuid: string; name: string }>("/api/projects", body),
@@ -431,6 +479,7 @@ export const api = {
   runLog: (id: number, tail = 80) => fetchJson<{ events: ActivityRecord[] }>(`/api/runs/${id}/log?tail=${tail}&format=json`),
   patchScope: (uuid: string, scopeId: string, body: unknown) =>
     patchJson<unknown>(`/api/projects/${encodeURIComponent(uuid)}/scopes/${encodeURIComponent(scopeId)}`, body),
+  patchBacklog: (id: number, body: { status: string }) => patchJson<unknown>(`/api/backlog/${id}`, body),
   providers: () => fetchJson<{ providers: ProviderProfile[] }>("/api/providers"),
   piProviders: () => fetchJson<{ providers: string[] }>("/api/pi/providers"),
   piModels: (provider: string) => fetchJson<{ models: PiModel[] }>(`/api/pi/models/${encodeURIComponent(provider)}`),

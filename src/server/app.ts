@@ -18,7 +18,7 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultOutputDir } from "../config.js";
-import { MetadataStore, type RunKind, type Coverage, type ProviderInput, type ProviderProfile, type ProjectInput, type ProjectListOptions, type ProviderRoles, type RoleOverride } from "../db/store.js";
+import { MetadataStore, type RunKind, type Coverage, type DiscoveryBacklogFilter, type DiscoveryBacklogKind, type DiscoveryBacklogStatus, type ProviderInput, type ProviderProfile, type ProjectInput, type ProjectListOptions, type ProviderRoles, type RoleOverride } from "../db/store.js";
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getProviders, getModels } from "@earendil-works/pi-ai/compat";
 import { type LaunchSpec, ActivityBus, type Activity, type ReportFindingSpec, type ConfirmSettledRow } from "./run-manager.js";
@@ -258,7 +258,7 @@ const ROUTES: Route[] = [
     summary: "Queue project work (Run/Continue pipeline, map, audit a region/scope, verify, confirm, report, or prepare). The job is dispatched to a connected daemon, which executes it and reports back. Uses the project's stored materials + config unless overridden. This is the single action behind the UI's primary and More actions controls.",
     params: { uuid: "project UUID" },
     body: {
-      verb: "'run' | 'map' | 'audit' | 'confirm' | 'report' | 'prepare' (default 'run'; project run = prepare-if-needed→map/dig→verify→confirm→report; source run = map→dig→verify)",
+      verb: "'run' | 'map' | 'audit' | 'confirm' | 'report' | 'prepare' (default 'run'; project run = prepare-if-needed→map/dig→synthesize→verify→confirm→report; source run = map→dig→synthesize→verify)",
       remap: "boolean? — re-enumerate scopes (restart)", fresh: "boolean? — confirm: ignore a prior interrupted confirm",
       quick: "boolean? — run: single breadth pass", mockLlm: "boolean? — offline mock model",
       verifyFromStart: "boolean? — run/continue pipeline: re-run Verify from the beginning instead of only pending candidates",
@@ -285,11 +285,25 @@ const ROUTES: Route[] = [
     handler: projectScopesGet,
   }),
   route({
+    method: "GET", path: "/api/projects/:uuid/backlog",
+    summary: "List discovery backlog rows for a project: coverage gaps, resource requests, and follow-up scopes from audit runs. Filter with ?kind=coverage-gap|resource-request|followup-scope and ?status=open|resolved|stale|ignored|all.",
+    params: { uuid: "project UUID" },
+    query: { kind: "coverage-gap|resource-request|followup-scope?", status: "open|resolved|stale|ignored|all? (default open)", limit: "number? (default 100)", offset: "number? (default 0)" },
+    handler: projectBacklogGet,
+  }),
+  route({
     method: "PATCH", path: "/api/projects/:uuid/scopes/:scopeId",
     summary: "Edit a mapped scope queue item. Use {prioritize:true} to move it to the top of the next auto-dig batch, or set status=`deferred` to skip it / `pending` to resume it. Updates the persisted inventory the audit reads, so the next run honors it.",
     params: { uuid: "project UUID", scopeId: "scope id from the inventory" },
     body: { prioritize: "boolean? — move this pending scope to the top of the dig queue", status: "'deferred' (skip) | 'pending' (resume) | 'audited'" },
     handler: scopeSetStatus,
+  }),
+  route({
+    method: "PATCH", path: "/api/backlog/:id",
+    summary: "Update one discovery backlog row's operator state. Use resolved when the missing resource/coverage is handled; ignored hides a non-actionable item without deleting provenance.",
+    params: { id: "backlog row id" },
+    body: { status: "open|resolved|stale|ignored" },
+    handler: backlogUpdate,
   }),
   route({
     method: "GET", path: "/api/projects/:uuid/findings",
@@ -422,7 +436,7 @@ const ROUTES: Route[] = [
       provider: "string?", model: "string?", thinking: "string?",
       scopeCoverageMode: "focused|standard|half|full|custom? — standard/focused are cumulative project targets, not per-run additions", maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
       sandboxBackend: "'auto'|'oci'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
-      remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> verify -> confirm -> report", verifyFromStart: "boolean? — pipeline: re-run Verify from the beginning instead of only pending candidates", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
+      remap: "boolean?", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> synthesize -> verify -> confirm -> report", verifyFromStart: "boolean? — pipeline: re-run Verify from the beginning instead of only pending candidates", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
       inputRunDir: "string? — confirm", fresh: "boolean? — confirm",
       clue: "string? — prepare", posture: "string? — prepare", matchDeployed: "boolean? — prepare", endpoint: "string? — prepare",
     },
@@ -520,8 +534,8 @@ export function apiCatalog(): {
 } {
   return {
     name: "flounder",
-    description: "REST API for tracking and driving white-hat audits. Resources: project (CRUD), run (launch/stop/read), scope, finding, confirm-decision. Runs execute on connected daemons; every UI operation is one of these calls.",
-    resources: ["project", "provider", "daemon", "run", "scope", "finding", "confirm-decision"],
+    description: "REST API for tracking and driving white-hat audits. Resources: project (CRUD), run (launch/stop/read), scope, discovery-backlog, finding, confirm-decision. Runs execute on connected daemons; every UI operation is one of these calls.",
+    resources: ["project", "provider", "daemon", "run", "scope", "discovery-backlog", "finding", "confirm-decision"],
     endpoints: ROUTES.filter((r) => !r.hidden).map((r) => ({
       method: r.method,
       path: r.path,
@@ -838,6 +852,10 @@ async function projectGet(c: Ctx): Promise<void> {
       activeScopeCount: scopeView.hasInventory ? c.store.countScopesByStatus(id, "auditing") : 0,
       confirmDecisions: confirmDecisions.map(confirmDecisionDisplayRow),
       scopes,
+      latestRunHealth: runHealthDisplayRow(c.store.latestRunHealth(id)),
+      backlogCounts: c.store.discoveryBacklogCounts(id),
+      discoveryBacklog: c.store.listDiscoveryBacklog(id, { status: "open", limit: 50 }).map(discoveryBacklogDisplayRow),
+      openResourceRequests: c.store.listDiscoveryBacklog(id, { kind: "resource-request", status: "open", limit: 10 }).map(discoveryBacklogDisplayRow),
       allFindings: findingSummaries,
       prepareSummary: activePrepareRefresh && currentRunsRaw.length === 0 ? null : latestPrepareSummary(runs),
       material: materialSummary(allRunsRaw, materialBoundary, activePrepareRefresh),
@@ -854,13 +872,15 @@ function runApiRow(store: MetadataStore, run: Record<string, unknown>, plane?: C
   const job = Number.isFinite(runId) ? store.getJobByRun(runId) : undefined;
   const activity = runActivityFields(store, plane, run);
   const material = materialStaleness(run, materialBoundary);
-  if (!job) return { ...run, ...activity, ...material };
+  const health = run.health_status ? { runHealth: runHealthDisplayRow(run) } : {};
+  if (!job) return { ...run, ...activity, ...material, ...health };
   const runStatus = typeof run.status === "string" ? run.status : "";
   const jobError = runStatus === "done" ? undefined : stringValue(job.error) || undefined;
   return {
     ...run,
     ...activity,
     ...material,
+    ...health,
     job_id: job.id,
     job_status: job.status,
     job_error: jobError,
@@ -1195,6 +1215,26 @@ async function projectScopesGet(c: Ctx): Promise<void> {
   });
 }
 
+function projectBacklogGet(c: Ctx): void {
+  withProject(c, (id) => {
+    const filter: DiscoveryBacklogFilter = {
+      limit: clampInt(c.url.searchParams.get("limit"), 100, 1, 500),
+      offset: clampInt(c.url.searchParams.get("offset"), 0, 0, 1_000_000),
+    };
+    const kind = discoveryBacklogKind(c.url.searchParams.get("kind"));
+    const status = discoveryBacklogStatus(c.url.searchParams.get("status") ?? "open", true);
+    if (kind) filter.kind = kind;
+    if (status) filter.status = status;
+    sendJson(c.res, 200, {
+      backlog: c.store.listDiscoveryBacklog(id, filter).map(discoveryBacklogDisplayRow),
+      counts: c.store.discoveryBacklogCounts(id),
+      total: c.store.countDiscoveryBacklog(id, filter),
+      limit: filter.limit,
+      offset: filter.offset,
+    });
+  });
+}
+
 function scopeApiRows(scopes: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return scopes.map((scope) => {
     const title = stringValue(scope.title) || stringValue(scope.scope_id);
@@ -1205,6 +1245,27 @@ function scopeApiRows(scopes: Array<Record<string, unknown>>): Array<Record<stri
       region: stringValue(scope.region) || location,
     };
   });
+}
+
+function discoveryBacklogDisplayRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    payload: safeParse(row.payload_json),
+  };
+}
+
+function runHealthDisplayRow(row: Record<string, unknown> | undefined): Record<string, unknown> | null {
+  if (!row) return null;
+  return {
+    runId: row.id,
+    runKind: row.kind,
+    runStatus: row.run_status ?? row.status,
+    status: row.health_status,
+    reasons: parseStringArray(row.health_reasons_json),
+    signals: safeParse(row.health_signals_json) ?? {},
+    startedAt: row.started_at ?? null,
+    endedAt: row.ended_at ?? null,
+  };
 }
 
 function latestPrepareSummary(runs: Array<Record<string, unknown>>): Record<string, unknown> | null {
@@ -1855,6 +1916,22 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+function parseStringArray(value: unknown): string[] {
+  const parsed = typeof value === "string" ? safeParse(value) : value;
+  return Array.isArray(parsed) ? parsed.map((entry) => stringValue(entry)).filter(Boolean) : [];
+}
+
+function discoveryBacklogKind(value: unknown): DiscoveryBacklogKind | undefined {
+  return value === "coverage-gap" || value === "resource-request" || value === "followup-scope" ? value : undefined;
+}
+
+function discoveryBacklogStatus(value: unknown, allowAll: true): DiscoveryBacklogStatus | "all" | undefined;
+function discoveryBacklogStatus(value: unknown, allowAll: false): DiscoveryBacklogStatus | undefined;
+function discoveryBacklogStatus(value: unknown, allowAll: boolean): DiscoveryBacklogStatus | "all" | undefined {
+  if (allowAll && value === "all") return "all";
+  return value === "open" || value === "resolved" || value === "stale" || value === "ignored" ? value : undefined;
+}
+
 async function projectUpdate(c: Ctx): Promise<void> {
   const uuid = c.params.uuid ?? "";
   const project = c.store.getProjectByRef(uuid);
@@ -1925,6 +2002,16 @@ async function scopeSetStatus(c: Ctx): Promise<void> {
   }
   c.store.setScopeStatus(Number(project.id), scopeId, status);
   sendJson(c.res, 200, { ok: true, scopeId, status });
+}
+
+async function backlogUpdate(c: Ctx): Promise<void> {
+  const id = Number(c.params.id);
+  if (!Number.isFinite(id) || id <= 0) return sendJson(c.res, 400, { error: "invalid backlog id" });
+  const body = (await readBody(c.req)) as { status?: unknown };
+  const status = discoveryBacklogStatus(body.status, false);
+  if (!status) return sendJson(c.res, 400, { error: "status must be open, resolved, stale, or ignored" });
+  const ok = c.store.setDiscoveryBacklogStatus(id, status);
+  ok ? sendJson(c.res, 200, { ok: true, id, status }) : sendJson(c.res, 404, { error: "no such backlog row" });
 }
 
 // Queue a run for the project. The job lands in the DB queue; connected daemons are nudged
@@ -3038,7 +3125,7 @@ async function findingTracking(c: Ctx): Promise<void> {
 
 // Serve a run's raw artifact (text) from its run dir. Allowlisted filenames only (no slashes,
 // so no path traversal); the file must resolve directly inside the run dir.
-const ALLOWED_ARTIFACT = /^(audit_report\.md|confirm_report\.md|report_[a-z0-9_.-]+\.md|prepare_manifest\.json|confirm_decision\.json|confirm_provenance\.json|audit_findings\.json)$/;
+const ALLOWED_ARTIFACT = /^(audit_report\.md|confirm_report\.md|report_[a-z0-9_.-]+\.md|prepare_manifest\.json|confirm_decision\.json|confirm_provenance\.json|audit_findings\.json|run_health\.json|coverage_gaps\.json|resource_requests\.json|followup_scopes\.json)$/;
 function runArtifact(c: Ctx): void {
   const run = c.store.getRun(Number(c.params.id));
   if (!run || !run.run_dir) return sendJson(c.res, 404, { error: "no such run, or it has no run dir" });
@@ -3453,6 +3540,8 @@ async function daemonRunUpdate(c: Ctx): Promise<void> {
     decisionPath?: string;
     runScopes?: { done: number; target: number };
     stage?: { name: string; info: Record<string, unknown> };
+    health?: Parameters<MetadataStore["recordRunHealth"]>[1];
+    backlog?: Parameters<MetadataStore["replaceDiscoveryBacklog"]>[2];
     finish?: { status: Parameters<MetadataStore["finishRun"]>[1]; coverage?: Coverage; findingsTotal?: number };
   };
   if (body.scopes) {
@@ -3461,6 +3550,8 @@ async function daemonRunUpdate(c: Ctx): Promise<void> {
   }
   if (body.runScopes) c.store.updateRunScopes(runId, body.runScopes.done, body.runScopes.target);
   if (body.stage) c.store.recordStage(runId, body.stage.name, body.stage.info);
+  if (body.health) c.store.recordRunHealth(runId, body.health);
+  if (body.backlog) c.store.replaceDiscoveryBacklog(projectId, runId, body.backlog);
   if (body.findings) c.store.upsertFindings(projectId, runId, body.findings, body.reason);
   if (body.findingReports) {
     for (const report of body.findingReports) {
@@ -3848,6 +3939,8 @@ function projectSnapshots(store: MetadataStore, options: ProjectListOptions = {}
       runCount: store.countRuns(id),
       currentRunCount: currentResultRows.length,
       latestRun: runApiRows(store, latestDisplayRun(currentRuns), undefined, viewBoundary)[0] ?? null,
+      latestRunHealth: runHealthDisplayRow(store.latestRunHealth(id)),
+      backlogCounts: store.discoveryBacklogCounts(id),
       activeRuns: activeByTarget.get(String(project.name)) ?? 0,
       material: materialSummary(allRuns, materialBoundary, activePrepareRefresh),
     };

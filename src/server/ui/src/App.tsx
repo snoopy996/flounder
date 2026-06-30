@@ -4,6 +4,7 @@ import {
   type ActivityRecord,
   type ConfirmDecision,
   type DaemonRow,
+  type DiscoveryBacklogRow,
   type FindingRow,
   type ProjectDetail,
   type ProjectConfig,
@@ -42,6 +43,7 @@ import {
   rankCandidates,
   runProgress,
   runScopeBatchComplete,
+  sortConfirmDecisionsForSubmission,
   STATUSES,
   THINKING_LEVELS,
   TRACKING,
@@ -251,6 +253,8 @@ function detailSnapshotDiffers(project: ProjectSnapshot, detail: ProjectDetail |
     || (project.currentRunCount ?? 0) !== (detail.currentRunsTotal ?? detailRuns.length)
     || (project.latestRun?.id ?? null) !== (detailLatest?.id ?? null)
     || (project.latestRun?.status ?? null) !== (detailLatest?.status ?? null)
+    || (project.latestRunHealth?.status ?? null) !== (detail.latestRunHealth?.status ?? null)
+    || (project.backlogCounts?.open ?? 0) !== (detail.backlogCounts?.open ?? 0)
     || (project.material?.currentPrepareRunId ?? null) !== (detail.material?.currentPrepareRunId ?? null)
     || (project.material?.currentPrepareStatus ?? null) !== (detail.material?.currentPrepareStatus ?? null)
     || (project.material?.activePrepareRefreshStartedAt ?? null) !== (detail.material?.activePrepareRefreshStartedAt ?? null)
@@ -275,6 +279,8 @@ function snapshotFromDetail(project: ProjectSnapshot, detail: ProjectDetail): Pr
     confirmPendingFindings: pendingConfirmFindings(current.allFindings, requiresConfirmation, current.confirmDecisions).length,
     confirmDecisionCount: current.confirmDecisions.length,
     latestRun: currentRuns[0] ?? null,
+    latestRunHealth: current.latestRunHealth,
+    backlogCounts: current.backlogCounts,
     currentRunCount: current.currentRunsTotal ?? currentRuns.length,
     activeRuns: Math.max(project.activeRuns ?? 0, currentRunningRuns, materialRefreshActive ? 1 : 0),
     material: current.material,
@@ -304,6 +310,8 @@ function snapshotFromProjectDetail(detail: ProjectDetail): ProjectSnapshot {
     confirmedBugs: current.confirmedBugs,
     confirmDecisionCount: current.confirmDecisions.length,
     latestRun: currentRuns[0] ?? null,
+    latestRunHealth: current.latestRunHealth,
+    backlogCounts: current.backlogCounts,
     activeRuns: currentRuns.filter((run) => run.status === "running").length,
     currentRunCount: current.currentRunsTotal ?? currentRuns.length,
     material: current.material,
@@ -824,7 +832,7 @@ function pendingFormalReports(rows: FindingRow[] | undefined, requiresConfirmati
 }
 
 function reportableDecisions(decisions: ConfirmDecision[] | undefined): ConfirmDecision[] {
-  return (decisions ?? []).filter((decision) => decision.reproduced === "yes" && decision.recommendation !== "drop");
+  return sortConfirmDecisionsForSubmission(decisions).filter((decision) => decision.reproduced === "yes" && decision.recommendation !== "drop");
 }
 
 function pendingDecisionReports(decisions: ConfirmDecision[] | undefined): ConfirmDecision[] {
@@ -1143,6 +1151,21 @@ function eventSummary(event: ActivityRecord, fallbackBody: string): { label: str
         label: payloadBoolean(payload, "hasDecision") === false ? "Decision sheet missing" : "Decision sheet ready",
         body: payloadBoolean(payload, "hasDecision") === false ? "The confirm run finished without a decision sheet." : "The confirm run produced its decision sheet.",
       };
+    case "audit_confirm_checkpoint": {
+      const rows = payloadNumber(payload, "rows");
+      const reproduced = payloadNumber(payload, "reproducedYes");
+      const needsHuman = payloadNumber(payload, "needsHuman");
+      const submit = payloadNumber(payload, "submitCandidates");
+      return {
+        label: "Decision checkpoint",
+        body: [
+          rows !== undefined ? `${rows} decisions` : undefined,
+          reproduced !== undefined ? `${reproduced} reproduced` : undefined,
+          needsHuman ? `${needsHuman} need human` : undefined,
+          submit ? `${submit} submit candidates` : undefined,
+        ].filter(Boolean).join(" · ") || fallbackBody,
+      };
+    }
     case "audit_confirm_equiv_skipped": {
       const items = payloadNumber(payload, "items");
       const maxItems = payloadNumber(payload, "maxItems");
@@ -1909,6 +1932,17 @@ export function App() {
     }
   }
 
+  async function patchBacklog(id: number, status: string) {
+    if (!route.projectUuid) return;
+    try {
+      await api.patchBacklog(id, { status });
+      const [nextDetail] = await Promise.all([api.project(route.projectUuid), refreshBase()]);
+      setDetail(nextDetail);
+    } catch (error) {
+      setToast({ tone: "error", message: String(error instanceof Error ? error.message : error) });
+    }
+  }
+
   async function stopRun(run: RunRow) {
     setBusy(true);
     try {
@@ -2056,6 +2090,7 @@ export function App() {
                   }}
                   onTracking={updateTracking}
                   onPatchScope={patchScope}
+                  onPatchBacklog={patchBacklog}
                   onStopRun={setStopConfirmRun}
                   onUpdateRunTarget={(run, body) => void updateRunTarget(run, body)}
                   onOpenRunLog={openRunLog}
@@ -2543,6 +2578,7 @@ function ProjectDetailView(props: {
   onOpenArtifact: (artifact: ArtifactPreview) => void;
   onTracking: (finding: FindingRow, status: string) => void;
   onPatchScope: (scopeId: string, body: unknown) => Promise<void> | void;
+  onPatchBacklog: (id: number, status: string) => Promise<void> | void;
   onStopRun: (run: RunRow) => void;
   onUpdateRunTarget: (run: RunRow, body: RunUpdatePayload) => void;
   onOpenRunLog: (run: RunRow) => void;
@@ -2674,6 +2710,7 @@ function ProjectDetailView(props: {
     currentRunCount: detail.currentRunsTotal ?? currentRuns.length,
     material: detail.material,
   };
+  const prepareClue = config.cfg.prepareClue?.trim() ?? "";
   const readyItems = [
     {
       label: "Daemon",
@@ -2860,7 +2897,7 @@ function ProjectDetailView(props: {
           <Stat n={reportStat} label={reportLabel} onClick={() => openProjectSection("decisions", "project-real-target-decisions")} />
         </div>
         <RealTargetCallout decisions={confirmDecisions} onOpen={() => openProjectSection("decisions", "project-real-target-decisions")} />
-        <ProjectSetupDisclosure items={readyItems} />
+        <ProjectSetupDisclosure items={readyItems} clue={prepareClue} />
       </Card>
       <div className="tabs" role="tablist" aria-label="Project sections">
         {PROJECT_TABS.map((t) => (
@@ -2890,6 +2927,7 @@ function ProjectDetailView(props: {
           onOpenDecisionReport={props.onOpenDecisionReport}
           onOpenDecisions={() => openProjectSection("decisions", "project-real-target-decisions")}
           onOpenActivity={() => openProjectSection("activity")}
+          onPatchBacklog={props.onPatchBacklog}
         />
       ) : null}
       {tab === "decisions" ? <ProjectDecisions detail={currentDetail} onOpenFinding={openLinkedFinding} onOpenDecisionReport={props.onOpenDecisionReport} /> : null}
@@ -3034,13 +3072,13 @@ type SetupDisclosureItem = {
   title?: string;
 };
 
-function ProjectSetupDisclosure({ items }: { items: SetupDisclosureItem[] }) {
+function ProjectSetupDisclosure({ items, clue }: { items: SetupDisclosureItem[]; clue?: string }) {
   const warnings = items.filter((item) => !item.ok).length;
   return (
     <details id="project-setup" className="setup-disclosure section-anchor">
       <summary>
         <span>Project setup</span>
-        <small>{warnings ? `${plural(warnings, "setup issue")} needs attention` : "Provider, daemon, source, and coverage details"}</small>
+        <small>{warnings ? `${plural(warnings, "setup issue")} needs attention` : clue ? "Provider, daemon, source, coverage, and clue" : "Provider, daemon, source, and coverage details"}</small>
       </summary>
       <div className="setup-detail-grid">
         {items.map((item) => (
@@ -3060,6 +3098,12 @@ function ProjectSetupDisclosure({ items }: { items: SetupDisclosureItem[] }) {
           </button>
         ))}
       </div>
+      {clue ? (
+        <div className="setup-clue">
+          <strong>Project clue</strong>
+          <p>{clue}</p>
+        </div>
+      ) : null}
     </details>
   );
 }
@@ -3092,6 +3136,7 @@ function ProjectOverview({
   onOpenDecisionReport,
   onOpenDecisions,
   onOpenActivity,
+  onPatchBacklog,
 }: {
   detail: ProjectDetail;
   candidates: FindingRow[];
@@ -3102,6 +3147,7 @@ function ProjectOverview({
   onOpenDecisionReport: (decision: ConfirmDecision) => void;
   onOpenDecisions: () => void;
   onOpenActivity: () => void;
+  onPatchBacklog: (id: number, status: string) => Promise<void> | void;
 }) {
   const currentRuns = currentMaterialRuns(detail.runs, detail.material);
   const current = currentRuns.find((run) => run.status === "running") ?? currentRuns[0];
@@ -3155,6 +3201,9 @@ function ProjectOverview({
     : decisions
       ? `${reproduced}/${decisions} confirm decisions reproduced`
       : "Available after an audit-confirmed finding exists";
+  const health = detail.latestRunHealth ?? current?.runHealth ?? null;
+  const healthValue = runHealthLabel(health?.status);
+  const healthDetail = runHealthDetail(health);
   const candidateTitle = runningVerifyProgress ? "Verification in progress" : verifyCount ? "Candidates to verify" : "Prioritized findings";
   const candidateSummary = runningVerifyProgress
     ? `${runningVerifyProgress.done}/${runningVerifyProgress.target} findings checked`
@@ -3198,11 +3247,88 @@ function ProjectOverview({
             <QueueItem label="Synthesize" value={synthesisValue} detail={synthesisDetail} />
             <QueueItem label="Candidate verification" value={verifyValue} detail={verifyDetail} />
             <QueueItem label="Real-target proof" value={plural(reproduced, "real-target reproduction")} detail={proofDetail} />
+            <QueueItem label="Run health" value={healthValue} detail={healthDetail} />
           </div>
         </Card>
       </div>
+      <DiscoveryBacklogCard
+        items={detail.discoveryBacklog ?? []}
+        counts={detail.backlogCounts ?? {}}
+        onPatch={onPatchBacklog}
+      />
     </>
   );
+}
+
+function runHealthLabel(status: string | null | undefined): string {
+  if (!status) return "No health signal";
+  return status.split("-").map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1) : part).join(" ");
+}
+
+function runHealthDetail(health: ProjectDetail["latestRunHealth"] | RunRow["runHealth"] | null | undefined): string {
+  if (!health?.status) return "Run health appears after an audit writes run_health.json.";
+  const reasons = health.reasons?.filter(Boolean) ?? [];
+  if (reasons.length > 0) return compactText(reasons.join(" "), 150);
+  const signals = health.signals ?? {};
+  const steps = typeof signals.toolSteps === "number" ? `${signals.toolSteps} tool steps` : "";
+  const commands = typeof signals.commandRuns === "number" ? `${signals.commandRuns} command runs` : "";
+  return [steps, commands].filter(Boolean).join(" · ") || "No framework health blocker detected.";
+}
+
+function DiscoveryBacklogCard({ items, counts, onPatch }: { items: DiscoveryBacklogRow[]; counts: Record<string, number>; onPatch: (id: number, status: string) => Promise<void> | void }) {
+  const open = counts.open ?? items.filter((item) => item.status === "open").length;
+  if (open === 0 && items.length === 0) return null;
+  const gapCount = counts["coverage-gap"] ?? 0;
+  const resourceCount = counts["resource-request"] ?? 0;
+  const followupCount = counts["followup-scope"] ?? 0;
+  const shown = items.slice(0, 6);
+  const summary = [
+    gapCount ? `${gapCount} coverage` : "",
+    resourceCount ? `${resourceCount} resource` : "",
+    followupCount ? `${followupCount} follow-up` : "",
+  ].filter(Boolean).join(" · ") || `${open} open`;
+  return (
+    <div id="project-discovery-backlog" className="section-anchor">
+      <Card title={<span>Discovery backlog <Counter>{open}</Counter></span>}>
+        <div className="candidate-head">
+          <div>
+            <strong>{summary}</strong>
+            <small>Open items from the latest audited coverage trail.</small>
+          </div>
+        </div>
+        {shown.length ? (
+          <div className="resource-list">
+            {shown.map((item) => (
+              <div className="resource-card backlog-card" key={item.id}>
+                <span className={`label s-${item.kind}`}>{backlogKindLabel(item.kind)}</span>
+                <div className="grow">
+                  <strong>{item.title || "Untitled backlog item"}</strong>
+                  <small>{backlogDetail(item)}</small>
+                </div>
+                <span className="resource-actions">
+                  {item.status === "open" ? <Button size="sm" onClick={() => onPatch(item.id, "resolved")}>Resolve</Button> : null}
+                  {item.status === "open" ? <Button size="sm" onClick={() => onPatch(item.id, "ignored")}>Ignore</Button> : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyInline>No open discovery backlog items.</EmptyInline>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function backlogKindLabel(kind: string): string {
+  if (kind === "coverage-gap") return "Coverage";
+  if (kind === "resource-request") return "Resource";
+  if (kind === "followup-scope") return "Follow-up";
+  return kind;
+}
+
+function backlogDetail(item: DiscoveryBacklogRow): string {
+  return [item.location, item.scope_id ? `scope ${item.scope_id}` : "", item.reason, item.next_action].filter(Boolean).join(" · ");
 }
 
 function ProjectOverviewDecisions({
@@ -3345,9 +3471,10 @@ function isSubmitCandidateDecision(decision: ConfirmDecision): boolean {
 }
 
 function overviewDecisionPreview(decisions: ConfirmDecision[]): ConfirmDecision[] {
-  const submitCandidates = decisions.filter(isSubmitCandidateDecision);
-  const reproduced = decisions.filter((decision) => decision.reproduced === "yes" && !isSubmitCandidateDecision(decision));
-  const unresolved = decisions.filter((decision) => decision.reproduced !== "yes");
+  const ordered = sortConfirmDecisionsForSubmission(decisions);
+  const submitCandidates = ordered.filter(isSubmitCandidateDecision);
+  const reproduced = ordered.filter((decision) => decision.reproduced === "yes" && !isSubmitCandidateDecision(decision));
+  const unresolved = ordered.filter((decision) => decision.reproduced !== "yes");
   return [...submitCandidates, ...reproduced, ...unresolved].slice(0, 5);
 }
 
@@ -3474,11 +3601,12 @@ function ConfirmDecisionsCard({
       </div>
     );
   }
+  const orderedDecisions = sortConfirmDecisionsForSubmission(decisions);
   return (
     <div id="project-real-target-decisions" className="section-anchor">
       <Card title={<span>Real-target decisions <Counter>{decisions.length}</Counter></span>}>
         <div className="decision-list">
-          {decisions.map((decision) => {
+          {orderedDecisions.map((decision) => {
             const linkedFindings = decisionFindings(decision, findings);
             const metaChips = decisionMetaChips(decision);
             return (
@@ -4099,10 +4227,13 @@ function ScopesView({ detail, onPatchScope }: { detail: ProjectDetail; onPatchSc
           <div className="scope-list">
             {scopes.map((scope) => (
               <div className="scope-row" key={scope.scope_id}>
-                <span className={`label s-${scope.status}`}>{scope.status}</span>
+                <span className="scope-label-stack">
+                  <span className={`label s-${scope.status}`}>{scope.status}</span>
+                  {scope.source === "followup" ? <span className="label s-followup">Follow-up</span> : null}
+                </span>
                 <div>
                   <strong>{scope.title || scope.scope_id}</strong>
-                  <small>{scope.location || scope.scope_id}</small>
+                  <small>{scope.location || scope.scope_id}{scope.parent_scope_id ? ` · parent ${scope.parent_scope_id}` : ""}</small>
                 </div>
                 <span className="score">{scope.score ?? scope.priority ?? ""}</span>
                 <div className="row-actions">

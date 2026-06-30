@@ -15,7 +15,7 @@ import { findingContentKey } from "../util/finding-key.js";
 import { matchConfirmSelector, parseConfirmSelectors } from "../util/confirm-selector.js";
 import { ProjectMemory } from "./memory.js";
 import { isPiSessionProvider, runAuditSession } from "./pi-session.js";
-import { buildTools, newSession, type AgentSession, type FixPatch, type ToolContext } from "./tools.js";
+import { buildTools, newSession, type AgentSession, type CommandRunRecord, type FixPatch, type ToolContext } from "./tools.js";
 
 // `flounder confirm` — the open-world counterpart to the network-sealed `flounder run`. It does
 // NOT discover: it takes a prior run's CONFIRMED findings, freezes their provenance
@@ -103,6 +103,36 @@ export async function runConfirm(
   // SQLite tracking: record a `confirm` run under the same project (failure-isolated).
   const recorder = (options.makeTracker ?? RunRecorder.start)(confirmCfg, logger.runDir, "confirm", logger);
   if (recorder.runDbId !== undefined) options.onRun?.(recorder.runDbId);
+  const confirmProgress = {
+    commandRuns: 0,
+    confirmRuns: 0,
+    passed: 0,
+    failed: 0,
+    rows: 0,
+    reproducedYes: 0,
+    submitCandidates: 0,
+    needsHuman: 0,
+  };
+  const recordConfirmStage = (extra: Record<string, unknown> = {}) => {
+    recorder.stage("confirm", {
+      status: "running",
+      findings: priorFindings.length,
+      startedAt: startedAt.toISOString(),
+      ...confirmProgress,
+      at: new Date().toISOString(),
+      ...extra,
+    });
+  };
+  const recordCommandProgress = (record: CommandRunRecord) => {
+    confirmProgress.commandRuns += 1;
+    if (record.purpose === "confirm") {
+      confirmProgress.confirmRuns += 1;
+      if (record.passed) confirmProgress.passed += 1;
+      else confirmProgress.failed += 1;
+    }
+    recordConfirmStage();
+  };
+  recordConfirmStage();
   // RESUME (auto, unless --fresh): an interrupted prior confirm of THIS input run left a
   // decision sheet; carry its already-SETTLED rows (reproduced yes/no) forward and tell
   // the model to skip them, so a re-run continues instead of re-reproducing from scratch.
@@ -128,7 +158,7 @@ export async function runConfirm(
   session.buildCacheDir = path.join(projectHistoryDir(historyLocation(confirmCfg)), "build-cache");
 
   const memory = new ProjectMemory(path.join(projectHistoryDir(historyLocation(confirmCfg)), "memory.jsonl"));
-  const ctx: ToolContext = { cfg: confirmCfg, source, corpus: frozenDocs, memory, logger, session };
+  const ctx: ToolContext = { cfg: confirmCfg, source, corpus: frozenDocs, memory, logger, session, onCommandRun: recordCommandProgress };
   const tools = buildTools();
 
   await logger.event("audit_confirm_start", {
@@ -152,7 +182,21 @@ export async function runConfirm(
     confirm: seed,
     // Project the decision rows to SQLite each turn so a UI shows live reproduction
     // progress (reproduced X / N) during the run, not only at the end.
-    onConfirmCheckpoint: (raw) => recorder.confirmDecisions(toLiveConfirmRows(raw)),
+    onConfirmCheckpoint: (raw) => {
+      const liveRows = toLiveConfirmRows(raw);
+      recorder.confirmDecisions(liveRows);
+      confirmProgress.rows = liveRows.length;
+      confirmProgress.reproducedYes = liveRows.filter((row) => row.reproduced === "yes").length;
+      confirmProgress.submitCandidates = liveRows.filter((row) => row.recommendation === "submit-candidate").length;
+      confirmProgress.needsHuman = liveRows.filter((row) => row.recommendation === "needs-human").length;
+      recordConfirmStage();
+      void logger.event("audit_confirm_checkpoint", {
+        rows: confirmProgress.rows,
+        reproducedYes: confirmProgress.reproducedYes,
+        submitCandidates: confirmProgress.submitCandidates,
+        needsHuman: confirmProgress.needsHuman,
+      });
+    },
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.onActivity ? { onActivity: options.onActivity } : {}),
   });
@@ -202,6 +246,20 @@ export async function runConfirm(
     rows: rows.length,
     reproducedYes: rows.filter((row) => row.reproduced === "yes").length,
     submitCandidates: rows.filter((row) => row.recommendation === "submit-candidate").length,
+  });
+  recorder.stage("confirm", {
+    status: "done",
+    findings: priorFindings.length,
+    startedAt: startedAt.toISOString(),
+    commandRuns: confirmProgress.commandRuns,
+    confirmRuns: confirmProgress.confirmRuns,
+    passed: confirmProgress.passed,
+    failed: confirmProgress.failed,
+    rows: rows.length,
+    reproducedYes: rows.filter((row) => row.reproduced === "yes").length,
+    submitCandidates: rows.filter((row) => row.recommendation === "submit-candidate").length,
+    needsHuman: rows.filter((row) => row.recommendation === "needs-human").length,
+    at: new Date().toISOString(),
   });
   await writeLastRunPointer(path.dirname(logger.runDir), logger.runDir, `${confirmCfg.targetName}-confirm`);
 

@@ -17,8 +17,9 @@ import { deriveScopeNote } from "../scope-note.js";
 import { specToConfig, type LaunchSpec, type ReportFindingSpec } from "./run-manager.js";
 import { toScopeRow, toFindingRow, configSnapshot, type RunTracker, type ConfirmDecisionInput, type FindingReportInput } from "../db/record.js";
 import { defaultConfig, defaultOutputDir, defaultWorkspaceDir, sandboxExecutionOptions, type AuditorConfig } from "../config.js";
-import type { Coverage, RunKind, RunStatus } from "../db/store.js";
+import type { Coverage, DiscoveryBacklogInput, RunKind, RunStatus } from "../db/store.js";
 import type { AgentFinding, AuditScope } from "../agent/tools.js";
+import type { RunHealth } from "../agent/discovery-artifacts.js";
 import { assertProviderAuthenticated, knownRuntimeProviders, providerAuthStatus } from "../provider-auth.js";
 import { buildDefaultSandboxImage, checkSandboxReadiness, DEFAULT_SANDBOX_IMAGE, isDefaultSandboxImage, type SandboxImageBuildResult, type SandboxReadiness } from "../security/sandbox.js";
 import { RunLogger } from "../trace/logger.js";
@@ -528,6 +529,14 @@ class RemoteTracker implements RunTracker {
 
   stage(name: string, info: Record<string, unknown>): void {
     this.enqueue(() => (this.runId ? this.req("PATCH", `/api/daemon/runs/${this.runId}`, { stage: { name, info } }) : Promise.resolve()));
+  }
+
+  health(health: RunHealth): void {
+    this.enqueue(() => (this.runId ? this.req("PATCH", `/api/daemon/runs/${this.runId}`, { health }) : Promise.resolve()));
+  }
+
+  backlog(rows: DiscoveryBacklogInput[]): void {
+    this.enqueue(() => (this.runId ? this.req("PATCH", `/api/daemon/runs/${this.runId}`, { backlog: rows }) : Promise.resolve()));
   }
 
   confirmDecisions(rows: ConfirmDecisionInput[], decisionPath?: string): void {

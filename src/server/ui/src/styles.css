@@ -1312,6 +1312,29 @@ small {
   font-weight: 620;
 }
 
+.setup-clue {
+  min-width: 0;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-muted);
+  display: grid;
+  gap: 6px;
+}
+
+.setup-clue strong {
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.setup-clue p {
+  margin: 0;
+  color: var(--fg-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .tabs {
   display: flex;
   width: 100%;
@@ -2045,6 +2068,13 @@ small {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
 }
 
+.scope-label-stack {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .run-row {
   grid-template-columns: auto minmax(0, 1fr) minmax(180px, auto) auto auto;
 }
@@ -2127,6 +2157,10 @@ small {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.backlog-card {
+  align-items: flex-start;
 }
 
 .resource-list-more {

@@ -67,6 +67,8 @@ export interface ScopeRow {
   score?: number | undefined;
   priority?: number | undefined; // manual dig-queue ordering (separate from score)
   status: ScopeStatus;
+  source?: string | undefined;
+  parentScopeId?: string | undefined;
   digSeconds?: number | undefined; // per-scope deep-audit duration (set when it finishes)
 }
 
@@ -118,6 +120,34 @@ export interface Coverage {
   deferred: number;
 }
 
+export type DiscoveryBacklogKind = "coverage-gap" | "resource-request" | "followup-scope";
+export type DiscoveryBacklogStatus = "open" | "resolved" | "stale" | "ignored";
+
+export interface RunHealthInput {
+  status: string;
+  reasons: string[];
+  signals: Record<string, unknown>;
+}
+
+export interface DiscoveryBacklogInput {
+  kind: DiscoveryBacklogKind;
+  status?: DiscoveryBacklogStatus | undefined;
+  scopeId?: string | undefined;
+  title?: string | undefined;
+  location?: string | undefined;
+  reason?: string | undefined;
+  nextAction?: string | undefined;
+  priority?: string | number | undefined;
+  payload?: unknown;
+}
+
+export interface DiscoveryBacklogFilter {
+  kind?: DiscoveryBacklogKind | undefined;
+  status?: DiscoveryBacklogStatus | "all" | undefined;
+  limit?: number | undefined;
+  offset?: number | undefined;
+}
+
 // A provider profile = the model-selection part of the config, named + reusable. A project
 // selects one; launch resolves it into provider/model/thinking (+ per-phase overrides for
 // the map/dig/refute roles, mirroring AuditorConfig.models / resolveRole).
@@ -156,7 +186,7 @@ export interface FindingQuery extends FindingFilter {
   offset?: number | undefined;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -191,6 +221,9 @@ CREATE TABLE IF NOT EXISTS run(
   thinking TEXT,
   budgets_json TEXT,
   stages_json TEXT,               -- post-dig stage outcomes (synthesis / differential / refutation / discharge-challenge) for the funnel view
+  health_status TEXT,             -- latest run-health verdict emitted by the audit kernel
+  health_reasons_json TEXT,       -- human-readable reasons for the health verdict
+  health_signals_json TEXT,       -- numeric/structured health signals for UI/API triage
   scopes_total INTEGER,
   scopes_audited INTEGER,
   scopes_pending INTEGER,
@@ -212,11 +245,33 @@ CREATE TABLE IF NOT EXISTS scope(
   score REAL,
   priority INTEGER DEFAULT 0,     -- manual dig-queue ordering (operator "↑ Top"); orders ABOVE score, never overwrites it
   status TEXT NOT NULL,
+  source TEXT,                    -- map | followup | coverage-gap; model-proposed provenance for coverage work
+  parent_scope_id TEXT,           -- optional parent scope for follow-up work
   dig_seconds INTEGER,            -- per-scope deep-audit duration, set when the scope finishes
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, scope_id)
 );
 CREATE INDEX IF NOT EXISTS idx_scope_project ON scope(project_id);
+
+CREATE TABLE IF NOT EXISTS discovery_backlog(
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES project(id),
+  run_id INTEGER REFERENCES run(id),
+  kind TEXT NOT NULL,             -- coverage-gap | resource-request | followup-scope
+  status TEXT NOT NULL DEFAULT 'open',
+  scope_id TEXT,
+  title TEXT,
+  location TEXT,
+  reason TEXT,
+  next_action TEXT,
+  priority TEXT,
+  payload_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_backlog_project_status ON discovery_backlog(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_backlog_project_kind ON discovery_backlog(project_id, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_run_item ON discovery_backlog(run_id, kind, title, location, scope_id);
 
 CREATE TABLE IF NOT EXISTS finding(
   id INTEGER PRIMARY KEY,
@@ -428,6 +483,11 @@ export class MetadataStore {
       "ALTER TABLE finding ADD COLUMN fix TEXT",
       "ALTER TABLE finding ADD COLUMN confidence REAL",
       "ALTER TABLE run ADD COLUMN stages_json TEXT", // funnel: post-dig stage outcomes
+      "ALTER TABLE run ADD COLUMN health_status TEXT", // audit discovery health verdict
+      "ALTER TABLE run ADD COLUMN health_reasons_json TEXT",
+      "ALTER TABLE run ADD COLUMN health_signals_json TEXT",
+      "ALTER TABLE scope ADD COLUMN source TEXT", // map | followup | coverage-gap
+      "ALTER TABLE scope ADD COLUMN parent_scope_id TEXT",
       "ALTER TABLE confirm_decision ADD COLUMN distinct_fix TEXT",
       "ALTER TABLE confirm_decision ADD COLUMN repro_evidence TEXT",
       "ALTER TABLE confirm_decision ADD COLUMN corroboration TEXT",
@@ -446,6 +506,27 @@ export class MetadataStore {
         // column already exists
       }
     }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS discovery_backlog(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES project(id),
+        run_id INTEGER REFERENCES run(id),
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        scope_id TEXT,
+        title TEXT,
+        location TEXT,
+        reason TEXT,
+        next_action TEXT,
+        priority TEXT,
+        payload_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_backlog_project_status ON discovery_backlog(project_id, status);
+      CREATE INDEX IF NOT EXISTS idx_backlog_project_kind ON discovery_backlog(project_id, kind);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_run_item ON discovery_backlog(run_id, kind, title, location, scope_id);
+    `);
     this.ensureProjectUuids();
     this.reconcileConfirmStatuses();
     this.runDataMigrations();
@@ -768,6 +849,7 @@ export class MetadataStore {
       this.db.prepare("DELETE FROM finding_status_event WHERE finding_id IN (SELECT id FROM finding WHERE project_id = ?)").run(id);
       this.db.prepare("DELETE FROM finding WHERE project_id = ?").run(id);
       this.db.prepare("DELETE FROM scope WHERE project_id = ?").run(id);
+      this.db.prepare("DELETE FROM discovery_backlog WHERE project_id = ?").run(id);
       this.db.prepare("DELETE FROM confirm_decision WHERE project_id = ?").run(id);
       this.db.prepare("DELETE FROM job WHERE project = ?").run(String(project.name)); // jobs FK-reference runs
       this.db.prepare("DELETE FROM run WHERE project_id = ?").run(id);
@@ -879,6 +961,12 @@ export class MetadataStore {
     this.db.prepare("UPDATE run SET stages_json = ? WHERE id = ?").run(JSON.stringify(stages), runId);
   }
 
+  recordRunHealth(runId: number, health: RunHealthInput): void {
+    this.db
+      .prepare("UPDATE run SET health_status = ?, health_reasons_json = ?, health_signals_json = ? WHERE id = ?")
+      .run(health.status, JSON.stringify(health.reasons), JSON.stringify(health.signals), runId);
+  }
+
   listRuns(projectId?: number, limit?: number): Array<Record<string, unknown>> {
     const tail = typeof limit === "number" ? " LIMIT " + Math.max(1, Math.floor(limit)) : "";
     return projectId === undefined
@@ -922,6 +1010,7 @@ export class MetadataStore {
     this.transaction(() => {
       this.db.prepare("DELETE FROM finding_status_event WHERE finding_id IN (SELECT id FROM finding WHERE run_id = ?)").run(id);
       this.db.prepare("DELETE FROM finding WHERE run_id = ?").run(id);
+      this.db.prepare("DELETE FROM discovery_backlog WHERE run_id = ?").run(id);
       this.db.prepare("DELETE FROM confirm_decision WHERE run_id = ?").run(id);
       this.db.prepare("UPDATE job SET run_id = NULL WHERE run_id = ?").run(id); // keep the job record, drop the dangling ref
       this.db.prepare("DELETE FROM run WHERE id = ?").run(id);
@@ -938,19 +1027,21 @@ export class MetadataStore {
    * later inventory-wide upsert that omits it doesn't wipe a scope's recorded duration. */
   upsertScopes(projectId: number, scopes: ScopeRow[]): void {
     const stmt = this.db.prepare(
-      `INSERT INTO scope(project_id, scope_id, title, location, score, priority, status, dig_seconds, updated_at)
-       VALUES (?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?, ?)
+      `INSERT INTO scope(project_id, scope_id, title, location, score, priority, status, source, parent_scope_id, dig_seconds, updated_at)
+       VALUES (?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?, ?, ?, ?)
        ON CONFLICT(project_id, scope_id) DO UPDATE SET
          title = excluded.title, location = excluded.location, score = excluded.score,
          status = excluded.status,
          priority = COALESCE(excluded.priority, scope.priority),
+         source = COALESCE(excluded.source, scope.source),
+         parent_scope_id = COALESCE(excluded.parent_scope_id, scope.parent_scope_id),
          dig_seconds = COALESCE(excluded.dig_seconds, scope.dig_seconds),
          updated_at = CASE WHEN scope.status != excluded.status THEN excluded.updated_at ELSE scope.updated_at END`,
     );
     const ts = now();
     this.transaction(() => {
       for (const s of scopes) {
-        stmt.run(projectId, s.scopeId, s.title ?? null, s.location ?? null, s.score ?? null, s.priority ?? null, s.status, s.digSeconds ?? null, ts);
+        stmt.run(projectId, s.scopeId, s.title ?? null, s.location ?? null, s.score ?? null, s.priority ?? null, s.status, s.source ?? null, s.parentScopeId ?? null, s.digSeconds ?? null, ts);
       }
     });
   }
@@ -960,12 +1051,14 @@ export class MetadataStore {
    * prevents obsolete scopes from older maps from leaking into current coverage. */
   replaceScopes(projectId: number, scopes: ScopeRow[]): void {
     const upsert = this.db.prepare(
-      `INSERT INTO scope(project_id, scope_id, title, location, score, priority, status, dig_seconds, updated_at)
-       VALUES (?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?, ?)
+      `INSERT INTO scope(project_id, scope_id, title, location, score, priority, status, source, parent_scope_id, dig_seconds, updated_at)
+       VALUES (?, ?, ?, ?, ?, COALESCE(?, 0), ?, ?, ?, ?, ?)
        ON CONFLICT(project_id, scope_id) DO UPDATE SET
          title = excluded.title, location = excluded.location, score = excluded.score,
          status = excluded.status,
          priority = COALESCE(excluded.priority, scope.priority),
+         source = COALESCE(excluded.source, scope.source),
+         parent_scope_id = COALESCE(excluded.parent_scope_id, scope.parent_scope_id),
          dig_seconds = COALESCE(excluded.dig_seconds, scope.dig_seconds),
          updated_at = CASE WHEN scope.status != excluded.status THEN excluded.updated_at ELSE scope.updated_at END`,
     );
@@ -976,7 +1069,7 @@ export class MetadataStore {
         return;
       }
       for (const s of scopes) {
-        upsert.run(projectId, s.scopeId, s.title ?? null, s.location ?? null, s.score ?? null, s.priority ?? null, s.status, s.digSeconds ?? null, ts);
+        upsert.run(projectId, s.scopeId, s.title ?? null, s.location ?? null, s.score ?? null, s.priority ?? null, s.status, s.source ?? null, s.parentScopeId ?? null, s.digSeconds ?? null, ts);
       }
       const ids = scopes.map((scope) => scope.scopeId);
       const placeholders = ids.map(() => "?").join(", ");
@@ -1051,6 +1144,112 @@ export class MetadataStore {
     return this.db
       .prepare("UPDATE scope SET priority = ?, updated_at = ? WHERE project_id = ? AND scope_id = ?")
       .run(top + 1, now(), projectId, scopeId).changes > 0;
+  }
+
+  // --- discovery health + backlog -----------------------------------------
+
+  replaceDiscoveryBacklog(projectId: number, runId: number, rows: DiscoveryBacklogInput[]): void {
+    this.transaction(() => {
+      this.db.prepare("DELETE FROM discovery_backlog WHERE run_id = ?").run(runId);
+      if (rows.length === 0) return;
+      const stmt = this.db.prepare(
+        `INSERT INTO discovery_backlog(project_id, run_id, kind, status, scope_id, title, location, reason, next_action, priority, payload_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const ts = now();
+      for (const row of rows) {
+        stmt.run(
+          projectId,
+          runId,
+          row.kind,
+          normalizeDiscoveryBacklogStatus(row.status),
+          row.scopeId ?? null,
+          row.title ?? null,
+          row.location ?? null,
+          row.reason ?? null,
+          row.nextAction ?? null,
+          row.priority === undefined ? null : String(row.priority),
+          jsonOrNull(row.payload),
+          ts,
+          ts,
+        );
+      }
+    });
+  }
+
+  listDiscoveryBacklog(projectId: number, filter: DiscoveryBacklogFilter = {}): Array<Record<string, unknown>> {
+    const clauses = ["b.project_id = ?"];
+    const params: Array<string | number> = [projectId];
+    if (filter.kind) {
+      clauses.push("b.kind = ?");
+      params.push(filter.kind);
+    }
+    if (filter.status && filter.status !== "all") {
+      clauses.push("b.status = ?");
+      params.push(filter.status);
+    }
+    const limit = Math.max(1, Math.floor(filter.limit ?? 100));
+    const offset = Math.max(0, Math.floor(filter.offset ?? 0));
+    return this.db
+      .prepare(
+        `SELECT b.*, r.kind AS run_kind, r.started_at AS run_started_at
+           FROM discovery_backlog b
+           LEFT JOIN run r ON r.id = b.run_id
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY CASE b.status WHEN 'open' THEN 0 WHEN 'stale' THEN 1 WHEN 'resolved' THEN 2 ELSE 3 END,
+                   b.updated_at DESC, b.id DESC
+          LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset) as Array<Record<string, unknown>>;
+  }
+
+  discoveryBacklogCounts(projectId: number): Record<string, number> {
+    const out: Record<string, number> = { total: 0, open: 0 };
+    const rows = this.db
+      .prepare("SELECT kind, status, COUNT(*) AS n FROM discovery_backlog WHERE project_id = ? GROUP BY kind, status")
+      .all(projectId) as Array<{ kind: string; status: string; n: number }>;
+    for (const row of rows) {
+      const n = Number(row.n);
+      out.total = (out.total ?? 0) + n;
+      out[`${row.kind}:${row.status}`] = n;
+      if (row.status === "open") {
+        out.open = (out.open ?? 0) + n;
+        out[row.kind] = (out[row.kind] ?? 0) + n;
+      }
+    }
+    return out;
+  }
+
+  countDiscoveryBacklog(projectId: number, filter: DiscoveryBacklogFilter = {}): number {
+    const clauses = ["project_id = ?"];
+    const params: Array<string | number> = [projectId];
+    if (filter.kind) {
+      clauses.push("kind = ?");
+      params.push(filter.kind);
+    }
+    if (filter.status && filter.status !== "all") {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM discovery_backlog WHERE ${clauses.join(" AND ")}`).get(...params) as { n: number }).n);
+  }
+
+  setDiscoveryBacklogStatus(id: number, status: DiscoveryBacklogStatus): boolean {
+    return this.db
+      .prepare("UPDATE discovery_backlog SET status = ?, updated_at = ? WHERE id = ?")
+      .run(normalizeDiscoveryBacklogStatus(status), now(), id).changes > 0;
+  }
+
+  latestRunHealth(projectId: number): Record<string, unknown> | undefined {
+    return this.db
+      .prepare(
+        `SELECT id, kind, status AS run_status, health_status, health_reasons_json, health_signals_json, started_at, ended_at
+           FROM run
+          WHERE project_id = ? AND health_status IS NOT NULL AND health_status <> ''
+          ORDER BY started_at DESC, id DESC
+          LIMIT 1`,
+      )
+      .get(projectId) as Record<string, unknown> | undefined;
   }
 
   // --- findings + status transitions ---------------------------------------
@@ -1656,6 +1855,10 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeDiscoveryBacklogStatus(status: unknown): DiscoveryBacklogStatus {
+  return status === "resolved" || status === "stale" || status === "ignored" ? status : "open";
 }
 
 function reportRunKey(projectId: number, runDir: string): string {

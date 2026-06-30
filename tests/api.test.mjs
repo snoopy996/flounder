@@ -26,13 +26,14 @@ async function withServer(fn) {
 test("api: GET /api is a self-describing catalog of every resource + operation", async () => {
   await withServer(async (base) => {
     const cat = await (await fetch(base + "/api")).json();
-    assert.deepEqual(cat.resources, ["project", "provider", "daemon", "run", "scope", "finding", "confirm-decision"]);
+    assert.deepEqual(cat.resources, ["project", "provider", "daemon", "run", "scope", "discovery-backlog", "finding", "confirm-decision"]);
     const sigs = cat.endpoints.map((e) => e.method + " " + e.path);
     for (const expected of [
       "GET /api/projects", "PATCH /api/projects/order", "POST /api/projects", "GET /api/projects/:uuid",
       "PATCH /api/projects/:uuid", "DELETE /api/projects/:uuid",
       "POST /api/projects/:uuid/runs", "GET /api/projects/:uuid/findings",
-      "GET /api/projects/:uuid/scopes", "GET /api/projects/:uuid/confirm-decisions",
+      "GET /api/projects/:uuid/scopes", "GET /api/projects/:uuid/backlog", "GET /api/projects/:uuid/confirm-decisions",
+      "PATCH /api/backlog/:id",
       "GET /api/providers", "POST /api/providers", "GET /api/providers/:id",
       "PATCH /api/providers/:id", "DELETE /api/providers/:id",
       "GET /api/daemons", "POST /api/daemons",
@@ -72,6 +73,11 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
     const projectScopes = cat.endpoints.find((e) => e.method === "GET" && e.path === "/api/projects/:uuid/scopes");
     assert.match(projectScopes.query.limit, /default 50/);
     assert.match(projectScopes.query.offset, /default 0/);
+    const projectBacklog = cat.endpoints.find((e) => e.method === "GET" && e.path === "/api/projects/:uuid/backlog");
+    assert.match(projectBacklog.summary, /coverage gaps/);
+    assert.match(projectBacklog.query.kind, /resource-request/);
+    const backlogPatch = cat.endpoints.find((e) => e.method === "PATCH" && e.path === "/api/backlog/:id");
+    assert.match(backlogPatch.body.status, /ignored/);
     const projectFindings = cat.endpoints.find((e) => e.method === "GET" && e.path === "/api/projects/:uuid/findings");
     assert.match(projectFindings.query.status, /execution-confirmed/);
     assert.match(projectFindings.query.q, /#finding-id/);
@@ -163,6 +169,55 @@ test("api: project list supports archive, unarchive, pin, and manual order", asy
     assert.equal((await deleteReq(`/api/projects/${archivedDelete.uuid}`)).status, 200);
     archived = await json(await fetch(base + "/api/projects?archived=1"));
     assert.deepEqual(archived.projects, []);
+  });
+});
+
+test("api: project detail exposes discovery health and operator backlog actions", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const patch = (p, body) => fetch(base + p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    const created = await json(await post("/api/projects", { name: "discovery-health-api", sourcePaths: ["./src"] }));
+    const runDir = path.join(out, "discovery-health-api-run");
+    await mkdir(runDir, { recursive: true });
+    await writeFile(path.join(runDir, "run_health.json"), JSON.stringify({ status: "needs-resource" }));
+
+    const store = MetadataStore.openForOutput(out);
+    const runId = store.startRun({ projectId: created.id, kind: "audit", runDir, provider: "openai-codex", model: "gpt-5.5" });
+    store.recordRunHealth(runId, {
+      status: "needs-resource",
+      reasons: ["1 resource request blocks deeper exploration"],
+      signals: { toolSteps: 7, resourceRequests: 1 },
+    });
+    store.replaceDiscoveryBacklog(created.id, runId, [
+      { kind: "resource-request", status: "open", title: "Foundry dependencies", location: "dependency", reason: "forge build needs package install", nextAction: "Run npm install at the package root", priority: "high", payload: { id: "R1" } },
+      { kind: "followup-scope", status: "open", scopeId: "FU1", title: "Permit replay domain", location: "src/Permit.sol:40", reason: "Follow-up from S1", nextAction: "Dig this pending scope", priority: 8, payload: { id: "FU1" } },
+    ]);
+    store.finishRun(runId, "done");
+    store.close();
+
+    let detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.latestRunHealth.status, "needs-resource");
+    assert.equal(detail.latestRunHealth.signals.resourceRequests, 1);
+    assert.equal(detail.backlogCounts.open, 2);
+    assert.equal(detail.backlogCounts["resource-request"], 1);
+    assert.equal(detail.discoveryBacklog.length, 2);
+    assert.equal(detail.openResourceRequests[0].title, "Foundry dependencies");
+
+    const backlog = await json(await fetch(base + `/api/projects/${created.uuid}/backlog?kind=resource-request`));
+    assert.equal(backlog.total, 1);
+    assert.equal(backlog.backlog[0].payload.id, "R1");
+
+    const patched = await json(await patch(`/api/backlog/${backlog.backlog[0].id}`, { status: "resolved" }));
+    assert.equal(patched.ok, true);
+    detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    assert.equal(detail.backlogCounts.open, 1);
+    assert.equal(detail.openResourceRequests.length, 0);
+
+    const artifact = await fetch(base + `/api/runs/${runId}/artifact?name=run_health.json`);
+    assert.equal(artifact.status, 200);
+    assert.equal(JSON.parse(await artifact.text()).status, "needs-resource");
   });
 });
 

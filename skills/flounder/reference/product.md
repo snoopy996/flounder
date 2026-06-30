@@ -8,6 +8,7 @@ REST automation, or artifact layout.
 - [Product Surfaces](#product-surfaces)
 - [Project Lifecycle](#project-lifecycle)
 - [Run Phases](#run-phases)
+- [Discovery Health And Backlog](#discovery-health-and-backlog)
 - [Findings And Tracking](#findings-and-tracking)
 - [REST Automation](#rest-automation)
 - [Artifact Model](#artifact-model)
@@ -38,6 +39,10 @@ The CLI equivalent of the Continue button is
 Dig, Verify, Confirm, and Report when the user asks for a precise phase. Leave
 **Run after create** checked when immediate execution is wanted.
 
+The project setup disclosure is the place to inspect stored project clue,
+daemon/provider/source configuration, prepared-material caveats, and setup
+attention. A clue is not shown as a separate project card after creation.
+
 Project list behavior:
 
 - default order is newest-created first;
@@ -49,17 +54,39 @@ Project list behavior:
 
 ## Run Phases
 
-The normal project run is prepare-if-needed -> map/dig -> confirm -> report.
+The normal project run is prepare-if-needed -> map/dig -> synthesize -> verify
+-> confirm -> report.
 
 - Prepare acquires or stages source, corpus, dependency closure, and
   deployment-match evidence from a clue.
 - Map enumerates and scores the audit surface without producing findings.
 - Dig deep-audits selected scopes and execution-confirms local findings.
+- Synthesize composes findings across scopes into distinct bug candidates.
+- Verify confirms or refutes suspected and synthesized candidates by local
+  execution before real-target confirmation.
 - Confirm reproduces locally confirmed findings on real-world ground truth.
 - Report writes formal Markdown reports for eligible non-ignored findings.
 
 `flounder run <clue>` uses the full pipeline. `flounder run --source ...`,
 `map`, and `audit` enter the sealed discovery path directly.
+
+## Discovery Health And Backlog
+
+Audit runs may write discovery-health artifacts in addition to findings:
+
+- `run_health.json`: health verdict (`healthy`, `needs-coverage`,
+  `needs-resource`, `shallow`, or `infra-failed`) derived from objective run
+  signals.
+- `coverage_gaps.json`: obligations or evidence paths that still need coverage.
+- `resource_requests.json`: missing tooling, artifacts, dependency state, fork
+  setup, credentials, or environment that blocked deeper work.
+- `followup_scopes.json`: adjacent audit units proposed by the model; accepted
+  rows become pending follow-up scopes rather than immediate side quests.
+
+These rows are not findings. They explain what to do next when a run has few or
+zero bugs: fix resource blockers, continue coverage, or prioritize follow-up
+scopes. Mark non-actionable backlog rows `ignored`; mark handled blockers
+`resolved`; keep unresolved coverage rows `open`.
 
 ## Findings And Tracking
 
@@ -90,6 +117,7 @@ curl http://127.0.0.1:4500/api/projects
 curl http://127.0.0.1:4500/api/providers
 curl http://127.0.0.1:4500/api/daemons
 curl http://127.0.0.1:4500/api/projects/<uuid>
+curl 'http://127.0.0.1:4500/api/projects/<uuid>/backlog?status=open'
 curl 'http://127.0.0.1:4500/api/projects/<uuid>/findings?tracking=active'
 curl 'http://127.0.0.1:4500/api/projects/<uuid>/findings?tracking=ignored'
 curl http://127.0.0.1:4500/api/projects/<uuid>/confirm-decisions
@@ -125,7 +153,8 @@ Default local state lives under `~/.flounder`:
 - `agent/auth.json`: daemon-local provider auth.
 
 Run artifacts include `audit_scopes.json`, `audit_findings.json`,
-`audit_hypotheses.json`, `audit_command_runs.json`, `events.jsonl`,
-`audit_transcript.json`, `summary.json`, and report files. Confirm artifacts
-include `confirm_provenance.json`, `confirm_decision.json`,
+`audit_hypotheses.json`, `audit_command_runs.json`, `run_health.json`,
+`coverage_gaps.json`, `resource_requests.json`, `followup_scopes.json`,
+`events.jsonl`, `audit_transcript.json`, `summary.json`, and report files.
+Confirm artifacts include `confirm_provenance.json`, `confirm_decision.json`,
 `confirm_report.md`, and `confirm_equivalence.json`.

@@ -9,8 +9,9 @@ import { renderDisclosure, reportArtifactName } from "../reports/disclosure.js";
 import { findingContentKey } from "../util/finding-key.js";
 import type { AuditorConfig } from "../config.js";
 import type { AgentFinding, AuditScope } from "../agent/tools.js";
+import type { CoverageGap, ResourceRequest, RunHealth } from "../agent/discovery-artifacts.js";
 import type { RankedFinding } from "../types.js";
-import { MetadataStore, type Coverage, type FindingRow, type FindingStatus, type RunKind, type RunStatus, type ScopeRow } from "./store.js";
+import { MetadataStore, type Coverage, type DiscoveryBacklogInput, type FindingRow, type FindingStatus, type RunKind, type RunStatus, type ScopeRow } from "./store.js";
 
 export interface RunLoggerLike {
   event(kind: string, data?: Record<string, unknown>): Promise<void>;
@@ -51,6 +52,10 @@ export interface RunTracker {
   findings(findings: AgentFinding[], runDir: string, reason?: string): void;
   /** Record one post-dig stage's outcome (synthesis / differential / refutation / discharge-challenge). */
   stage(name: string, info: Record<string, unknown>): void;
+  /** Persist the run-health verdict used by the dashboard and API. */
+  health?(health: RunHealth): void;
+  /** Replace this run's discovery backlog rows (coverage gaps, resource requests, follow-up scopes). */
+  backlog?(rows: DiscoveryBacklogInput[]): void;
   confirmDecisions(rows: ConfirmDecisionInput[], decisionPath?: string): void;
   findingReports(reports: FindingReportInput[]): void;
   finish(status: RunStatus, coverage?: Coverage, findingsTotal?: number): void;
@@ -144,6 +149,24 @@ export class RunRecorder implements RunTracker {
       this.store!.recordStage(this.runId!, name, info);
     } catch (error) {
       this.disable("stage", error);
+    }
+  }
+
+  health(health: RunHealth): void {
+    if (!this.ready()) return;
+    try {
+      this.store!.recordRunHealth(this.runId!, health);
+    } catch (error) {
+      this.disable("health", error);
+    }
+  }
+
+  backlog(rows: DiscoveryBacklogInput[]): void {
+    if (!this.ready()) return;
+    try {
+      this.store!.replaceDiscoveryBacklog(this.projectId!, this.runId!, rows);
+    } catch (error) {
+      this.disable("backlog", error);
     }
   }
 
@@ -287,7 +310,61 @@ export function toScopeRow(scope: AuditScope): ScopeRow {
     status,
     digSeconds: scope.digSeconds,
     priority: scope.priority,
+    source: scope.source,
+    parentScopeId: scope.parentScopeId,
   };
+}
+
+export function toDiscoveryBacklogRows(input: {
+  coverageGaps?: CoverageGap[];
+  resourceRequests?: ResourceRequest[];
+  followupScopes?: AuditScope[];
+}): DiscoveryBacklogInput[] {
+  const rows: DiscoveryBacklogInput[] = [];
+  for (const gap of input.coverageGaps ?? []) {
+    rows.push({
+      kind: "coverage-gap",
+      status: discoveryStatus(gap.status),
+      scopeId: gap.scopeId,
+      title: gap.obligation,
+      location: gap.region ?? gap.phase,
+      reason: gap.reason,
+      nextAction: gap.nextAction,
+      priority: gap.severity,
+      payload: gap,
+    });
+  }
+  for (const request of input.resourceRequests ?? []) {
+    rows.push({
+      kind: "resource-request",
+      status: discoveryStatus(request.status),
+      scopeId: request.scopeId,
+      title: request.needed,
+      location: request.kind,
+      reason: request.reason,
+      nextAction: request.unblock ?? request.retryCommand,
+      priority: request.priority,
+      payload: request,
+    });
+  }
+  for (const scope of input.followupScopes ?? []) {
+    rows.push({
+      kind: "followup-scope",
+      status: "open",
+      scopeId: scope.id,
+      title: scope.obligation,
+      location: scope.region,
+      reason: scope.parentScopeId ? `Follow-up proposed from ${scope.parentScopeId}.` : "Follow-up scope proposed by the audit run.",
+      nextAction: "Dig this pending scope.",
+      priority: scope.score,
+      payload: scope,
+    });
+  }
+  return rows;
+}
+
+function discoveryStatus(status: string | undefined): "open" | "resolved" | "stale" {
+  return status === "resolved" || status === "stale" ? status : "open";
 }
 
 // A readable snapshot of the per-project settings a UI can display/edit. Unbounded
