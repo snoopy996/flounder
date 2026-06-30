@@ -2694,6 +2694,7 @@ function ProjectDetailView(props: {
     currentRunCount: detail.currentRunsTotal ?? currentRuns.length,
     material: detail.material,
   };
+  const prepareClue = config.cfg.prepareClue?.trim() ?? "";
   const readyItems = [
     {
       label: "Daemon",
@@ -2880,7 +2881,7 @@ function ProjectDetailView(props: {
           <Stat n={reportStat} label={reportLabel} onClick={() => openProjectSection("decisions", "project-real-target-decisions")} />
         </div>
         <RealTargetCallout decisions={confirmDecisions} onOpen={() => openProjectSection("decisions", "project-real-target-decisions")} />
-        <ProjectSetupDisclosure items={readyItems} />
+        <ProjectSetupDisclosure items={readyItems} clue={prepareClue} />
       </Card>
       <div className="tabs" role="tablist" aria-label="Project sections">
         {PROJECT_TABS.map((t) => (
@@ -3055,13 +3056,13 @@ type SetupDisclosureItem = {
   title?: string;
 };
 
-function ProjectSetupDisclosure({ items }: { items: SetupDisclosureItem[] }) {
+function ProjectSetupDisclosure({ items, clue }: { items: SetupDisclosureItem[]; clue?: string }) {
   const warnings = items.filter((item) => !item.ok).length;
   return (
     <details id="project-setup" className="setup-disclosure section-anchor">
       <summary>
         <span>Project setup</span>
-        <small>{warnings ? `${plural(warnings, "setup issue")} needs attention` : "Provider, daemon, source, and coverage details"}</small>
+        <small>{warnings ? `${plural(warnings, "setup issue")} needs attention` : clue ? "Provider, daemon, source, coverage, and clue" : "Provider, daemon, source, and coverage details"}</small>
       </summary>
       <div className="setup-detail-grid">
         {items.map((item) => (
@@ -3081,6 +3082,12 @@ function ProjectSetupDisclosure({ items }: { items: SetupDisclosureItem[] }) {
           </button>
         ))}
       </div>
+      {clue ? (
+        <div className="setup-clue">
+          <strong>Project clue</strong>
+          <p>{clue}</p>
+        </div>
+      ) : null}
     </details>
   );
 }

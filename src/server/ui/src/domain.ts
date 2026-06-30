@@ -286,6 +286,18 @@ function latestRunWithStage(runs: RunRow[], stage: keyof RunStages): RunRow | un
   return runs.find((run) => Boolean(stages(run)[stage]));
 }
 
+function latestCoverageTimelineRun(runs: RunRow[]): RunRow | undefined {
+  return runs.find((run) => {
+    if (run.kind === "map") return true;
+    if (run.kind !== "run") return false;
+    return Boolean(run.dig_started_at || run.scopes_total != null || run.run_scopes_target != null || stages(run).synthesis);
+  }) ?? runs.find((run) => run.kind === "run" || run.kind === "map");
+}
+
+function completedScopeBatch(run: RunRow | undefined): boolean {
+  return Boolean(run?.status === "done" && run.run_scopes_target != null && (run.run_scopes_done ?? 0) >= run.run_scopes_target);
+}
+
 function startedAtMs(value: string | null | undefined): number {
   if (!value) return 0;
   const time = new Date(value).getTime();
@@ -342,6 +354,7 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const needsEvidence = findings.filter((finding) => finding.status === "needs-evidence").length;
   const audit = runs.find((r) => r.status === "running" && ["run", "audit", "map"].includes(r.kind));
   const auditLatest = latest("run", "audit", "map");
+  const coverageTimelineRun = latestCoverageTimelineRun(runs);
   const verifyLatest = runs.find((run) => isVerifyRun(run));
   const reportLatest = latest("report");
   const reportRunning = reportLatest?.status === "running";
@@ -356,6 +369,7 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const pendingConfirm = verifyRechecksConfirmed ? 0 : pendingConfirmRaw;
   const finalizingAudit = Boolean(batchDone && audit && !isVerify && !activeScope);
   const digRunning = Boolean(audit && !isVerify && (audit.kind === "audit" || digStarted) && !finalizingAudit);
+  const synthesisWaiting = Boolean(audit && !isVerify && !finalizingAudit && !synthesis && progress.audited > 0);
   const thisRun = audit && audit.run_scopes_target != null
     ? batchDone
       ? " · finalizing"
@@ -364,14 +378,18 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const verifyStat = verifyProgress
     ? `Verifying ${verifyProgress.done}/${verifyProgress.target} findings${detail.findingsTotal ? ` · ${detail.findingsTotal} in project` : ""}`
     : "";
-  const auditRun = audit ?? auditLatest;
+  const auditRun = audit ?? coverageTimelineRun ?? auditLatest;
+  const auditRunStages = stages(auditRun);
   const startMs = auditRun?.started_at ? new Date(auditRun.started_at).getTime() : 0;
-  const endMs = auditLatest?.ended_at ? new Date(auditLatest.ended_at).getTime() : 0;
+  const runEndMs = auditRun?.ended_at ? new Date(auditRun.ended_at).getTime() : 0;
+  const synthesisBeginMs = auditRunStages.synthesis?.startedAt ? new Date(auditRunStages.synthesis.startedAt).getTime() : 0;
+  const digEndMs = synthesisBeginMs > 0 ? synthesisBeginMs : runEndMs;
   const boundMs = auditRun?.dig_started_at ? new Date(auditRun.dig_started_at).getTime() : 0;
+  const finishedSelectedDigBatch = completedScopeBatch(coverageTimelineRun ?? auditLatest);
   const mapDur = mapRunning
     ? runDur(audit, true)
-    : progress.total > 0 && auditLatest?.kind === "map"
-      ? runDur(auditLatest, false)
+    : progress.total > 0 && auditRun?.kind === "map"
+      ? runDur(auditRun, false)
       : progress.total > 0 && startMs && boundMs > startMs
         ? fmtDur(boundMs - startMs)
         : "";
@@ -380,8 +398,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
       ? fmtDur(Date.now() - boundMs)
       : runDur(audit, true)
     : progress.audited > 0
-      ? boundMs && endMs > boundMs
-        ? fmtDur(endMs - boundMs)
+      ? boundMs && digEndMs > boundMs
+        ? fmtDur(digEndMs - boundMs)
         : runDur(auditLatest, false)
       : "";
   const synthesisStartMs = synthesis?.startedAt ? new Date(synthesis.startedAt).getTime() : 0;
@@ -397,7 +415,7 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
     prepare: { status: prep ? prep.status : "none", stat: prep ? (prep.status === "done" ? "Source staged" : prep.status === "running" ? "Preparing source" : prep.status) : "Not started", dur: runDur(prep, prep?.status === "running") },
     map: { status: mapRunning ? "running" : progress.total > 0 ? "done" : "none", stat: progress.total > 0 ? `${progress.total} scopes mapped` : mapRunning ? "Mapping scopes" : "Not started", dur: mapDur },
     dig: {
-      status: digRunning ? "running" : progress.audited > 0 ? (progress.pending > 0 ? "partial" : "done") : progress.total > 0 ? "pending" : "none",
+      status: digRunning ? "running" : progress.audited > 0 ? (progress.pending > 0 && !finishedSelectedDigBatch ? "partial" : "done") : progress.total > 0 ? "pending" : "none",
       stat: finalizingAudit
           ? `Verifying candidates · ${progress.audited}/${progress.total} scopes audited${detail.findingsTotal ? ` · ${detail.findingsTotal} in project` : ""}`
           : progress.total > 0
@@ -410,6 +428,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
         ? "running"
         : synthesis
           ? "done"
+          : synthesisWaiting
+            ? "pending"
           : progress.audited > 0
             ? "done"
             : "none",
@@ -417,6 +437,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
         ? "Synthesizing bug candidates"
         : synthesis
           ? `${synthesis.produced ?? 0} synthesized ${synthesis.produced === 1 ? "candidate" : "candidates"}`
+          : synthesisWaiting
+            ? "Waiting for dig to finish"
           : progress.audited > 0
             ? "No cross-scope candidate"
             : "Not started",
