@@ -1837,6 +1837,10 @@ function describeAnswerFirewall(value: unknown, posture = ""): string {
   if (typeof value === "string" && value.trim()) {
     const text = value.trim();
     if (text.toLowerCase() === "clean") return "clean";
+    const notes = splitAnswerFirewallNotes(text);
+    if (notes.length > 1 && notes.every(isCleanFirewallNote)) {
+      return `clean · ${notes.length} guardrail note${notes.length === 1 ? "" : "s"}`;
+    }
     return isCleanFirewallNote(text) ? `clean · ${text}` : text;
   }
   if (Array.isArray(value)) {
@@ -1856,6 +1860,10 @@ function describeAnswerFirewall(value: unknown, posture = ""): string {
   }
   if (posture.trim().toLowerCase() === "blind") return "clean · blind posture";
   return "not reported";
+}
+
+function splitAnswerFirewallNotes(text: string): string[] {
+  return text.split(";").map((part) => part.trim()).filter(Boolean);
 }
 
 function isNonBlockingAnswerFirewall(text: string): boolean {
@@ -2337,11 +2345,11 @@ function decisionReportWorklist(
     const missing = [...selected].filter((id) => !selectedCovered.has(id));
     if (missing.length > 0) {
       const unknown = missing.filter((id) => !findingsById.has(id));
-      const suffix = unknown.length > 0 ? " is not a current finding for this project" : " is not linked to a reproduced, non-dropped real-target decision";
+      const suffix = unknown.length > 0 ? " is not a current finding for this project" : " is not linked to a reproduced, non-dropped decision";
       return { error: `finding ${missing.join(", ")}${suffix}` };
     }
   }
-  if (decisions.length === 0) return { error: "no reproduced real-target decisions are missing submission reports" };
+  if (decisions.length === 0) return { error: "no reproduced decisions are missing submission reports" };
 
   return {
     findings: decisions.map((decision) => {
@@ -2349,14 +2357,15 @@ function decisionReportWorklist(
       const primary = linkedFindings[0];
       const decisionId = Number(decision.id);
       const severity = stringValue(decision.severity) || maxSeverityFromRows(linkedFindings) || undefined;
+      const evidenceLevel = stringValue(decision.evidence_level) || "unknown";
       return {
         unit: "decision",
         decisionId,
         findingId: primary ? Number(primary.id) : undefined,
         findingKey: `decision-${decisionId}`,
         reportKey: `decision-${decisionId}`,
-        evidenceMode: "real-target-reproduced",
-        evidenceLevel: stringValue(decision.evidence_level) || "real-target-reproduced",
+        evidenceMode: isRealTargetDecisionEvidence(evidenceLevel) ? "real-target-reproduced" : "source-only-local-confirmed",
+        evidenceLevel,
         submissionConfidence: stringValue(decision.submission_confidence) || undefined,
         title: stringValue(decision.bug),
         location: primary ? stringValue(primary.location) || undefined : undefined,
@@ -2387,6 +2396,11 @@ function decisionLinkedFindingRows(decision: Record<string, unknown>, findingsBy
     out.push(row);
   }
   return out;
+}
+
+function isRealTargetDecisionEvidence(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "real-target-reproduced" || normalized === "fork-reproduced" || normalized === "local-fork-reproduced";
 }
 
 function maxSeverityFromRows(rows: Array<Record<string, unknown>>): string | undefined {
@@ -2799,9 +2813,10 @@ function renderDecisionReportMarkdown(decision: Record<string, unknown>, linkedF
     "",
   ];
 
+  const confirmationNoun = isRealTargetDecisionEvidence(evidenceLevel) ? "real-target confirmation run" : "confirmation run";
   const summary = descriptions[0]
     || (evidence ? evidence.split(/\n\s*\n/)[0] : "")
-    || `A real-target confirmation run evaluated "${title}" and recorded reproduction status "${reproduced}" with recommendation "${recommendation}".`;
+    || `A ${confirmationNoun} evaluated "${title}" and recorded reproduction status "${reproduced}" with recommendation "${recommendation}".`;
   pushReportSection(lines, "Summary", summary);
   pushReportBullets(lines, "Evidence Basis", [
     `Reproduction status: ${reproduced}`,
