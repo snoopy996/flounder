@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { AuditorConfig } from "../config.js";
-import { loadSource } from "../ingest/source.js";
 import { listWorkspaceFiles, normalizeRelativePath, prepareSandboxWorkspace, writeSandboxFiles, type SandboxWorkspace } from "../security/sandbox.js";
 import { projectHistoryDir } from "../trace/history.js";
 import { writeLastRunPointer } from "../trace/last-run.js";
@@ -147,20 +146,20 @@ export async function runConfirm(
 
   // 3. Workspace: copy the build root (reproducible) and the FROZEN report + per-finding
   // disclosures as corpus, so the model can read each finding's claimed exploit/fix.
-  const source = await loadSource(confirmCfg.sourcePaths);
-  if (source.length === 0) throw new Error("flounder confirm requires at least one readable source file (use --source)");
   const workspaceRoots = confirmCfg.buildRoot ? [confirmCfg.buildRoot] : confirmCfg.sourcePaths;
   const workspace = await prepareSandboxWorkspace(workspaceRoots, logger.runDir, "confirm/workspace");
+  const baselineFiles = await listWorkspaceFiles(workspace.absolute);
+  if (baselineFiles.size === 0) throw new Error("flounder confirm requires at least one readable source file (use --source)");
   const frozenDocs = (await Promise.all(runDirs.map((dir) => loadFrozenReportDocs(dir)))).flat();
   const corpusManifest = await copyDocsIntoWorkspace(workspace, frozenDocs);
 
   const session: AgentSession = newSession();
   session.workspace = workspace;
-  session.baselineFiles = await listWorkspaceFiles(workspace.absolute);
+  session.baselineFiles = baselineFiles;
   session.buildCacheDir = path.join(projectHistoryDir(historyLocation(confirmCfg)), "build-cache");
 
   const memory = new ProjectMemory(path.join(projectHistoryDir(historyLocation(confirmCfg)), "memory.jsonl"));
-  const ctx: ToolContext = { cfg: confirmCfg, source, corpus: frozenDocs, memory, logger, session, onCommandRun: recordCommandProgress };
+  const ctx: ToolContext = { cfg: confirmCfg, source: [], corpus: frozenDocs, memory, logger, session, onCommandRun: recordCommandProgress };
   const tools = buildTools();
 
   await logger.event("audit_confirm_start", {
@@ -180,7 +179,7 @@ export async function runConfirm(
     tools,
     logger,
     cwd: workspace.absolute,
-    fileManifest: renderFileManifest(source, corpusManifest),
+    fileManifest: renderConfirmFileManifest(baselineFiles, corpusManifest),
     confirm: seed,
     // Project the decision rows to SQLite each turn so a UI shows live reproduction
     // progress (reproduced X / N) during the run, not only at the end.
@@ -385,8 +384,9 @@ async function copyDocsIntoWorkspace(workspace: SandboxWorkspace, docs: Doc[]): 
   return files.map((file) => file.path);
 }
 
-function renderFileManifest(source: Doc[], corpusEntries: string[]): string {
-  const lines = source.slice(0, 600).map((doc) => `- ${doc.path} (${doc.content ? doc.content.split("\n").length : 0} lines)`);
+function renderConfirmFileManifest(sourceFiles: Set<string>, corpusEntries: string[]): string {
+  const source = [...sourceFiles].sort();
+  const lines = source.slice(0, 600).map((filePath) => `- ${filePath}`);
   const more = source.length > 600 ? `\n…and ${source.length - 600} more files` : "";
   let out = `${lines.join("\n")}${more}`;
   if (corpusEntries.length > 0) {
