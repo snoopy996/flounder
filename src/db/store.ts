@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { enforceSubmissionReadiness } from "../util/submission-readiness.js";
 
 // A static `import ... from "node:sqlite"` emits the builtin's ExperimentalWarning at link
 // time, before sqlite-quiet's body can install the filter. Loading it via require() during
@@ -767,7 +768,7 @@ export class MetadataStore {
       .prepare(
         `SELECT id, project_id, reproduced, recommendation, members_json, severity,
                 evidence_level, submission_confidence, repro_evidence, corroboration,
-                novelty, human_gates
+                novelty, human_gates, engagement_profile_json, adjudication_json
            FROM confirm_decision`,
       )
       .all() as Array<{
@@ -783,6 +784,8 @@ export class MetadataStore {
         corroboration: string | null;
         novelty: string | null;
         human_gates: string | null;
+        engagement_profile_json: string | null;
+        adjudication_json: string | null;
       }>;
     if (rows.length === 0) return;
 
@@ -803,7 +806,9 @@ export class MetadataStore {
 
     const update = this.db.prepare(
       `UPDATE confirm_decision
-          SET severity = ?,
+          SET recommendation = ?,
+              human_gates = ?,
+              severity = ?,
               evidence_level = ?,
               submission_confidence = ?
         WHERE id = ?`,
@@ -812,11 +817,14 @@ export class MetadataStore {
       const members = parseJsonArray(row.members_json).filter((member): member is string => typeof member === "string");
       const linked = linkedFindingMetadata(findingsByProject.get(row.project_id), members);
       const input = decisionEvidenceInput(row);
-      const evidenceLevel = decisionEvidenceLevel(input);
+      const enforced = enforceSubmissionReadiness([input], { requireImpactInventory: false })[0] ?? input;
+      const evidenceLevel = decisionEvidenceLevel(enforced);
       update.run(
+        enforced.recommendation ?? row.recommendation,
+        enforced.humanGates ?? row.human_gates,
         row.severity?.trim() || maxSeverity(linked.map((entry) => entry.severity)),
         evidenceLevel,
-        decisionSubmissionConfidence(input, evidenceLevel),
+        decisionSubmissionConfidence(enforced, evidenceLevel),
         row.id,
       );
     }
@@ -1678,6 +1686,7 @@ export class MetadataStore {
 
   upsertConfirmDecisions(projectId: number, runId: number, rows: ConfirmRow[], decisionPath?: string): void {
     this.transaction(() => {
+      const readyRows = enforceSubmissionReadiness(rows, { requireImpactInventory: false });
       // a confirm run's decision sheet is rewritten wholesale, so replace its rows
       this.db.prepare("DELETE FROM confirm_decision WHERE run_id = ?").run(runId);
       const stmt = this.db.prepare(
@@ -1700,7 +1709,7 @@ export class MetadataStore {
         if (row.severity) metadata.severity = row.severity;
         findingsByKey.set(row.finding_key.toLowerCase(), metadata);
       }
-      for (const r of rows) {
+      for (const r of readyRows) {
         const linked = linkedFindingMetadata(findingsByKey, r.members ?? []);
         const evidenceLevel = decisionEvidenceLevel(r);
         const submissionConfidence = decisionSubmissionConfidence(r, evidenceLevel);

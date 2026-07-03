@@ -27,6 +27,7 @@ import { projectHistoryDir } from "../trace/history.js";
 import { loadScopeInventory, saveScopeInventory } from "../agent/scope-store.js";
 import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
+import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionReadinessWork } from "../util/submission-readiness.js";
 
 const UI_HTML_PATH = fileURLToPath(new URL("./public/index.html", import.meta.url));
 const UI_PUBLIC_DIR = path.dirname(UI_HTML_PATH);
@@ -1027,7 +1028,7 @@ function isSettledConfirmDecision(row: Record<string, unknown>): boolean {
 }
 
 function confirmSettledRows(rows: Array<Record<string, unknown>>): ConfirmSettledRow[] {
-  return rows.filter(isSettledConfirmDecision).map((row) => {
+  return rows.filter((row) => isResumeSettledDecision(row)).map((row) => {
     const reproduced = row.reproduced === "yes" || row.reproduced === "no" ? row.reproduced : "unknown";
     const recommendationRaw = stringValue(row.recommendation);
     const recommendation: ConfirmSettledRow["recommendation"] =
@@ -2336,7 +2337,8 @@ function decisionReportWorklist(
   }
   const selectedCovered = new Set<number>();
   const decisions = currentConfirmDecisions(store.listConfirmDecisions(projectId).filter((row) => rowBelongsToCurrentMaterial(row, currentIds, materialBoundary)))
-    .filter((decision) => decision.reproduced === "yes" && decision.recommendation !== "drop")
+    .filter((decision) => isSubmissionReadyDecision(decision, { requireImpactInventory: false }))
+    .filter((decision) => isRealTargetDecisionEvidence(stringValue(decision.evidence_level)))
     .filter((decision) => selected || includeExistingReports || !decisionHasFormalReport(decision))
     .filter((decision) => {
       if (!selected) return true;
@@ -2349,11 +2351,11 @@ function decisionReportWorklist(
     const missing = [...selected].filter((id) => !selectedCovered.has(id));
     if (missing.length > 0) {
       const unknown = missing.filter((id) => !findingsById.has(id));
-      const suffix = unknown.length > 0 ? " is not a current finding for this project" : " is not linked to a reproduced, non-dropped decision";
+      const suffix = unknown.length > 0 ? " is not a current finding for this project" : " is not linked to a submission-ready decision";
       return { error: `finding ${missing.join(", ")}${suffix}` };
     }
   }
-  if (decisions.length === 0) return { error: "no reproduced decisions are missing submission reports" };
+  if (decisions.length === 0) return { error: "no submission-ready decisions are missing formal reports" };
 
   return {
     findings: decisions.map((decision) => {
@@ -3676,17 +3678,18 @@ async function daemonPipelineWorklist(c: Ctx): Promise<void> {
     if (!requiresRealTargetConfirmation) {
       return sendJson(c.res, 200, { phase, requiresRealTargetConfirmation, inputRunDirs: [], confirmKeys: [] });
     }
+    const currentDecisions = currentConfirmDecisions(c.store.listConfirmDecisions(projectId).filter((row) => rowBelongsToCurrentMaterial(row, currentResultRunIds, materialBoundary)));
+    const submissionWorkKeys = new Set(currentDecisions.filter((row) => needsSubmissionReadinessWork(row)).flatMap(confirmDecisionMemberKeys));
     const pending = c.store.pendingConfirmable(projectId)
       .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
       .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
-    if (pending.length === 0) {
+    if (pending.length === 0 && submissionWorkKeys.size === 0) {
       return sendJson(c.res, 200, { phase, requiresRealTargetConfirmation, inputRunDirs: [], confirmKeys: [] });
     }
     const context = c.store.confirmableContext(projectId)
       .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
       .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
     const rows = context.length > 0 ? context : pending;
-    const currentDecisions = currentConfirmDecisions(c.store.listConfirmDecisions(projectId).filter((row) => rowBelongsToCurrentMaterial(row, currentResultRunIds, materialBoundary)));
     return sendJson(c.res, 200, {
       phase,
       requiresRealTargetConfirmation,
@@ -3969,12 +3972,14 @@ function projectSnapshots(store: MetadataStore, options: ProjectListOptions = {}
       ? []
       : currentConfirmDecisions(store.listConfirmDecisions(id).filter((row) => rowBelongsToCurrentMaterial(row, currentRunIds, materialBoundary)));
     const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes").length;
+    const submissionWorkKeys = new Set(confirmDecisions.filter((row) => needsSubmissionReadinessWork(row)).flatMap(confirmDecisionMemberKeys));
     const verifyPendingFindings = (counts.suspected ?? 0) + (counts["confirmed-source"] ?? 0);
     const requiresRealTargetConfirmation = latestPrepareRequiresRealTargetConfirmation(allRuns);
     const confirmPendingFindings = requiresRealTargetConfirmation
       ? findings.filter((finding) => {
           const status = String(finding.status ?? "");
-          return (status === "confirmed-executable" || status === "confirmed-differential") && !finding.confirm_status;
+          const key = stringValue(finding.finding_key).toLowerCase();
+          return (status === "confirmed-executable" || status === "confirmed-differential") && (!finding.confirm_status || (key && submissionWorkKeys.has(key)));
         }).length
       : 0;
     return {

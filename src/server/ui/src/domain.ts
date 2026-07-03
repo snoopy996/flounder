@@ -85,6 +85,104 @@ function findingCoveredByDecision(finding: FindingRow, decidedFindingKeys: Set<s
   return Boolean(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase()));
 }
 
+function parseJsonObject(raw?: string | null): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function decisionObject(decision: ConfirmDecision, objectKey: "engagement_profile" | "adjudication", jsonKey: "engagement_profile_json" | "adjudication_json"): Record<string, unknown> | undefined {
+  const direct = decision[objectKey];
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct as Record<string, unknown>;
+  return parseJsonObject(decision[jsonKey]);
+}
+
+function normalizedWord(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function stringField(obj: Record<string, unknown> | undefined, keys: string[]): string {
+  if (!obj) return "";
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function gateStatus(adjudication: Record<string, unknown> | undefined, needles: string[], fallbackKeys: string[]): string {
+  const gates = Array.isArray(adjudication?.gates) ? adjudication.gates : [];
+  for (const gate of gates) {
+    if (!gate || typeof gate !== "object" || Array.isArray(gate)) continue;
+    const record = gate as Record<string, unknown>;
+    const id = normalizedWord(record.id ?? record.key ?? record.name ?? record.gate);
+    if (needles.some((needle) => id.includes(needle))) return String(record.status ?? record.result ?? record.state ?? "").trim();
+  }
+  return stringField(adjudication, fallbackKeys);
+}
+
+function isNegativeGateStatus(status: string): boolean {
+  const normalized = normalizedWord(status);
+  return [
+    "fail",
+    "failed",
+    "unknown",
+    "needs_human",
+    "blocked",
+    "missing",
+    "unsettled",
+    "unfunded",
+    "not_funded",
+    "not_live",
+    "no_live",
+    "no_funds",
+    "not_novel",
+    "already_disclosed",
+    "duplicate",
+    "disclosed",
+  ].some((token) => normalized === token || normalized.startsWith(`${token}_`));
+}
+
+function isPassingGateStatus(status: string): boolean {
+  const normalized = normalizedWord(status);
+  if (!normalized || isNegativeGateStatus(normalized)) return false;
+  return ["pass", "passed", "satisfied", "confirmed", "established", "eligible", "ok", "yes", "in_scope", "funded", "live_funded", "novel", "estimated", "collectible", "not_duplicate", "not_disclosed"].some((token) => normalized === token || normalized.startsWith(`${token}_`));
+}
+
+function decisionHasOpenSubmissionGate(decision: ConfirmDecision): boolean {
+  const text = (decision.human_gates ?? "").trim().toLowerCase();
+  if (text && !/^(?:none|n\/a|not applicable|no remaining gates?|no human gates?)\.?$/.test(text)) {
+    if (!/\b(?:no|none)\b.{0,32}\b(?:remaining|open|unsettled|human)\b.{0,24}\b(?:gate|gates|blocker|blockers)\b/.test(text)) {
+      if (/\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not established|not confirmed|unknown|unclear|unverified|pending|review|cannot be settled|must)\b/.test(text)) return true;
+    }
+  }
+  const adjudication = decisionObject(decision, "adjudication", "adjudication_json");
+  const directStatuses = [
+    gateStatus(adjudication, ["scope", "venue", "eligib", "asset"], ["scope_status", "scopeStatus"]),
+    gateStatus(adjudication, ["live", "impact", "fund", "exposure", "deployment"], ["live_impact_status", "liveImpactStatus", "funds_status", "fundsStatus"]),
+    gateStatus(adjudication, ["known", "novel", "duplicate", "disclos"], ["known_issue_status", "knownIssueStatus", "novelty_status", "noveltyStatus"]),
+    gateStatus(adjudication, ["payout", "reward", "collectible", "bounty"], ["payout_status", "payoutStatus", "reward_status", "rewardStatus"]),
+  ].filter(Boolean);
+  return directStatuses.some((status) => !isPassingGateStatus(status));
+}
+
+function hasRealTargetEvidence(decision: ConfirmDecision): boolean {
+  const normalized = normalizedWord(decision.evidence_level);
+  return normalized === "real_target_reproduced" || normalized === "fork_reproduced" || normalized === "local_fork_reproduced";
+}
+
+export function isSubmissionReadyDecision(decision: ConfirmDecision): boolean {
+  return decision.reproduced === "yes" && decision.recommendation === "submit-candidate" && hasRealTargetEvidence(decision) && !decisionHasOpenSubmissionGate(decision);
+}
+
+export function needsSubmissionReadinessWork(decision: ConfirmDecision): boolean {
+  return decision.reproduced === "yes" && decision.recommendation !== "drop" && !isSubmissionReadyDecision(decision) && (decision.recommendation === "submit-candidate" || decisionHasOpenSubmissionGate(decision));
+}
+
 function confirmDecisionTail(decisions: ConfirmDecision[]): string {
   const pending = decisions.filter((decision) => !decision.reproduced || decision.reproduced === "pending").length;
   const needsHuman = decisions.filter((decision) => decision.recommendation === "needs-human").length;
@@ -195,7 +293,7 @@ function reportPackageStats(findings: FindingRow[], decisions: ConfirmDecision[]
       submissions: 0,
     };
   }
-  const reproduced = decisions.filter((decision) => decision.reproduced === "yes" && decision.recommendation !== "drop");
+  const reproduced = decisions.filter(isSubmissionReadyDecision);
   return {
     ready: reproduced.filter((decision) => decision.has_report).length,
     total: reproduced.length,
@@ -502,9 +600,11 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const conf = latest("confirm");
   const synthesis = stages(latestRunWithStage(runs, "synthesis")).synthesis;
   const requiresConfirmation = needsRealTargetConfirmation(detail);
-  const decidedFindingKeys = new Set(decisions.flatMap(confirmDecisionMemberKeys));
+  const readinessWorkKeys = new Set(decisions.filter(needsSubmissionReadinessWork).flatMap(confirmDecisionMemberKeys));
+  const decidedFindingKeys = new Set(decisions.filter((decision) => !needsSubmissionReadinessWork(decision)).flatMap(confirmDecisionMemberKeys));
   const pendingConfirmRaw = requiresConfirmation
-    ? findings.filter((finding) => isExecutionConfirmedFinding(finding) && !finding.confirm_status && !findingCoveredByDecision(finding, decidedFindingKeys)).length
+    ? findings.filter((finding) => isExecutionConfirmedFinding(finding)
+      && ((!finding.confirm_status && !findingCoveredByDecision(finding, decidedFindingKeys)) || findingCoveredByDecision(finding, readinessWorkKeys))).length
     : 0;
   const pendingVerify = findings.filter((finding) => finding.status === "suspected" || finding.status === "confirmed-source").length;
   const locallyVerified = findings.filter(isExecutionConfirmedFinding).length;
@@ -608,8 +708,8 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
           ? "pending"
         : !requiresConfirmation && locallyVerified > 0
           ? "done"
-          : decisions.length
-          ? (repro === decisions.length && pendingConfirm === 0 ? "done" : "partial")
+        : decisions.length
+          ? (repro === decisions.length && pendingConfirm === 0 && decisions.filter(needsSubmissionReadinessWork).length === 0 ? "done" : "partial")
           : pendingConfirm > 0
             ? "pending"
             : "none",
@@ -639,7 +739,7 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
           : reportPackages.total > 0
             ? `${reportPackages.total} waiting for formal report${reportPackages.submissions ? ` · ${reportPackages.submissions} ${reportPackages.submissions === 1 ? "submit candidate" : "submit candidates"}` : ""}`
             : decisions.length > 0
-              ? "No reproduced bug yet"
+              ? "No submission-ready bug yet"
               : "Not started",
       dur: runDur(reportLatest, reportRunning),
     },

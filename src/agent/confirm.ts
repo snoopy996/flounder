@@ -8,6 +8,7 @@ import { writeLastRunPointer } from "../trace/last-run.js";
 import { RunLogger } from "../trace/logger.js";
 import type { Doc } from "../types.js";
 import { publicPath } from "../util/paths.js";
+import { enforceSubmissionReadiness } from "../util/submission-readiness.js";
 import { consolidateByFixEquivalence, type FixEquivEdge, type FixEquivItem } from "./consolidate.js";
 import { RunRecorder, type RunTrackerFactory } from "../db/record.js";
 import { findingContentKey } from "../util/finding-key.js";
@@ -567,13 +568,7 @@ type ConfirmDecisionLike = {
 };
 
 export function enforceBountySubmitReadiness<T extends ConfirmDecisionLike>(rows: T[], options: { impactInventory?: unknown } = {}): T[] {
-  return rows.map((row) => {
-    if (row.recommendation !== "submit-candidate") return row;
-    const blocker = bountySubmitBlocker(row, options.impactInventory);
-    if (!blocker) return row;
-    const humanGates = appendHumanGate(row.humanGates, `Framework blocked submit-candidate: ${blocker}`);
-    return { ...row, recommendation: "needs-human", humanGates } as T;
-  });
+  return enforceSubmissionReadiness(rows, { impactInventory: options.impactInventory, requireImpactInventory: true });
 }
 
 function bountySubmitBlocker(row: ConfirmDecisionLike, impactInventory: unknown): string | undefined {

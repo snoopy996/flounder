@@ -31,8 +31,10 @@ import {
   fmtDur,
   fmtTime,
   isVerifyRun,
+  isSubmissionReadyDecision,
   verifyRunProgress,
   verifyRunRechecksConfirmed,
+  needsSubmissionReadinessWork,
   pct,
   phaseState,
   PHASES,
@@ -802,11 +804,14 @@ function isExecutionConfirmedFinding(finding: FindingRow): boolean {
 
 function pendingConfirmFindings(rows: FindingRow[] | undefined, requiresConfirmation = true, decisions?: ConfirmDecision[]): FindingRow[] {
   if (!requiresConfirmation) return [];
-  const decidedFindingKeys = new Set((decisions ?? []).flatMap(confirmDecisionMemberKeys));
+  const readinessWorkKeys = new Set((decisions ?? []).filter(needsSubmissionReadinessWork).flatMap(confirmDecisionMemberKeys));
+  const decidedFindingKeys = new Set((decisions ?? []).filter((decision) => !needsSubmissionReadinessWork(decision)).flatMap(confirmDecisionMemberKeys));
   return activeFindings(rows).filter((finding) =>
     isExecutionConfirmedFinding(finding)
-    && !finding.confirm_status
-    && !(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase()))
+    && (
+      (!finding.confirm_status && !(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase())))
+      || Boolean(finding.finding_key && readinessWorkKeys.has(finding.finding_key.toLowerCase()))
+    )
   );
 }
 
@@ -832,7 +837,7 @@ function pendingFormalReports(rows: FindingRow[] | undefined, requiresConfirmati
 }
 
 function reportableDecisions(decisions: ConfirmDecision[] | undefined): ConfirmDecision[] {
-  return sortConfirmDecisionsForSubmission(decisions).filter((decision) => decision.reproduced === "yes" && decision.recommendation !== "drop");
+  return sortConfirmDecisionsForSubmission(decisions).filter(isSubmissionReadyDecision);
 }
 
 function pendingDecisionReports(decisions: ConfirmDecision[] | undefined): ConfirmDecision[] {

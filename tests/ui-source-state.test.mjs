@@ -55,7 +55,7 @@ test("ui: phase cards count report packages by reproduced decision, not linked f
       { id: 3, finding_key: "kgamma", status: "confirmed-differential", confirm_status: null, has_report: false },
     ],
     confirmDecisions: [
-      { bug: "same root cause", reproduced: "yes", recommendation: "submit-candidate", members_json: JSON.stringify(["kalpha", "kbeta"]) },
+      { bug: "same root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", members_json: JSON.stringify(["kalpha", "kbeta"]) },
     ],
   };
   const phases = phaseState(detail, { total: 0, audited: 0, deferred: 0, pending: 0 });
@@ -80,7 +80,7 @@ test("ui: phase cards do not double-count findings already covered by decisions"
       { id: 2, finding_key: "ktwo", status: "confirmed-differential", confirm_status: null, has_report: false },
     ],
     confirmDecisions: [
-      { bug: "submit root cause", reproduced: "yes", recommendation: "submit-candidate", members_json: JSON.stringify(["kone"]) },
+      { bug: "submit root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", members_json: JSON.stringify(["kone"]) },
       { bug: "setup blocker", reproduced: "could-not-set-up", recommendation: "needs-human", members_json: JSON.stringify(["ktwo"]) },
     ],
   };

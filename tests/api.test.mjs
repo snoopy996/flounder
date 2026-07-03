@@ -551,9 +551,27 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
           confidence: 0.93,
         },
       ], "differential");
+      store.upsertFindings(created.id, runId, [
+        {
+          findingKey: "kgateblocked",
+          title: "Gate-blocked reproduced proof",
+          location: "src/Vault.sol:92",
+          severity: "critical",
+          status: "confirmed-executable",
+          confidence: 0.9,
+        },
+      ], "differential");
       const confirmRun = store.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "pipeline-confirm-run") });
       store.upsertConfirmDecisions(created.id, confirmRun, [
         { bug: "prior reproduced withdrawal proof", reproduced: "yes", recommendation: "submit-candidate", members: ["kalreadyreproduced"] },
+        {
+          bug: "gate-blocked reproduced proof",
+          reproduced: "yes",
+          recommendation: "needs-human",
+          members: ["kgateblocked"],
+          reproEvidence: "purpose=confirm command cmd-gate reproduced the real target effect",
+          humanGates: "Live funded exposure and payout tier are pending review.",
+        },
       ]);
       store.finishRun(confirmRun, "done");
       store.upsertFindings(created.id, runId, [
@@ -598,6 +616,7 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
     }));
     assert.ok(confirm.confirmKeys.includes("confirmed-bug"));
     assert.ok(confirm.confirmKeys.includes("kalreadyreproduced"), "confirm worklist carries prior decided findings as consolidation context");
+    assert.ok(confirm.confirmKeys.includes("kgateblocked"), "confirm worklist carries reproduced decisions whose submission gates are still open");
     assert.deepEqual(confirm.confirmSettledRows.map((row) => row.bug), ["prior reproduced withdrawal proof"]);
     assert.ok(confirm.confirmKeys.some((key) => /^origin:\d+:confirmed-bug$/.test(key)), "worklist carries origin selector for verify-artifact recovery");
 
@@ -1385,6 +1404,13 @@ test("api: report launch queues only reproduced real-target findings that were n
           severity: "medium",
           status: "confirmed-executable",
         },
+        {
+          findingKey: "kneeds",
+          title: "Gate-blocked bug",
+          location: "src/Target.sol:67",
+          severity: "high",
+          status: "confirmed-executable",
+        },
       ]);
       const confirmRun = store.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "report-launch-confirm") });
       store.upsertConfirmDecisions(created.id, confirmRun, [
@@ -1395,6 +1421,15 @@ test("api: report launch queues only reproduced real-target findings that were n
           members: ["kready"],
           reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
           reproCommandId: "cmd1",
+        },
+        {
+          bug: "Gate-blocked bug",
+          reproduced: "yes",
+          recommendation: "needs-human",
+          members: ["kneeds"],
+          reproEvidence: "purpose=confirm command cmd-needs reproduced the real target effect",
+          reproCommandId: "cmd-needs",
+          humanGates: "Live funded impact and payout tier are still pending review.",
         },
         {
           bug: "Dropped bug",
@@ -1426,11 +1461,13 @@ test("api: report launch queues only reproduced real-target findings that were n
     const ready = detail.allFindings.find((finding) => finding.finding_key === "kready");
     const dropped = detail.allFindings.find((finding) => finding.finding_key === "kdrop");
     const existing = detail.allFindings.find((finding) => finding.finding_key === "kexisting");
+    const needs = detail.allFindings.find((finding) => finding.finding_key === "kneeds");
     const readyDecision = detail.confirmDecisions.find((decision) => decision.bug === "Ready bug");
     const existingDecision = detail.confirmDecisions.find((decision) => decision.bug === "Existing report bug");
     assert.ok(ready);
     assert.ok(dropped);
     assert.ok(existing);
+    assert.ok(needs);
     assert.ok(readyDecision);
     assert.ok(existingDecision);
     assert.equal(existing.has_report, false);
@@ -1481,7 +1518,10 @@ test("api: report launch queues only reproduced real-target findings that were n
 
     const rejected = await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [dropped.id] });
     assert.equal(rejected.status, 400);
-    assert.match((await rejected.json()).error, /not reproduced on the real target|dropped/);
+    assert.match((await rejected.json()).error, /not reproduced on the real target|dropped|submission-ready/);
+    const gateBlocked = await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [needs.id] });
+    assert.equal(gateBlocked.status, 400);
+    assert.match((await gateBlocked.json()).error, /submission-ready/);
   });
 });
 

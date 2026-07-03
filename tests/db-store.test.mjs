@@ -469,7 +469,9 @@ test("store: confirm decisions persist decision reports without overwriting link
   assert.equal(decision.repro_evidence, "purpose=confirm command cmd_1 reproduced the real target effect");
   assert.equal(decision.repro_command_id, "cmd_1");
   assert.equal(decision.novelty, "novel");
-  assert.equal(decision.human_gates, "venue scope still needs human review");
+  assert.match(decision.human_gates, /venue scope still needs human review/);
+  assert.match(decision.human_gates, /Framework blocked submit-candidate/);
+  assert.equal(decision.recommendation, "needs-human");
   assert.equal(JSON.parse(decision.engagement_profile_json).policy_kind, "bug_bounty");
   assert.equal(JSON.parse(decision.adjudication_json).gates[1].status, "unknown");
   assert.equal(decision.severity, "high");
@@ -513,6 +515,8 @@ test("store: structured adjudication gates keep bounty confidence conservative",
   ]);
 
   const [decision] = db.listConfirmDecisions(projectId);
+  assert.equal(decision.recommendation, "needs-human");
+  assert.match(decision.human_gates, /Framework blocked submit-candidate/);
   assert.equal(decision.evidence_level, "local-fork-reproduced");
   assert.equal(decision.submission_confidence, "medium");
   db.close();
