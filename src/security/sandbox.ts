@@ -21,6 +21,7 @@ export type SandboxBackend = typeof SANDBOX_BACKENDS[number];
 export type SandboxNetworkMode = "none" | "enabled";
 export const DEFAULT_SANDBOX_IMAGE = "flounder-sandbox:latest";
 const APPLE_CONTAINER_SEALED_NETWORK = "flounder-sealed";
+const APPLE_CONTAINER_NETWORK_DNS = ["1.1.1.1", "8.8.8.8"] as const;
 
 export interface SandboxExecutionOptions {
   backend?: SandboxBackend;
@@ -419,7 +420,11 @@ async function runAppleContainerSandboxProcess(input: ProcessRunInput): Promise<
     "--tmpfs",
     "/var/tmp",
   ];
-  if (input.options.network === "none") containerArgs.push("--network", APPLE_CONTAINER_SEALED_NETWORK, "--no-dns");
+  if (input.options.network === "none") {
+    containerArgs.push("--network", APPLE_CONTAINER_SEALED_NETWORK, "--no-dns");
+  } else {
+    for (const server of APPLE_CONTAINER_NETWORK_DNS) containerArgs.push("--dns", server);
+  }
   if (input.cacheDir) containerArgs.push("--mount", `type=bind,source=${input.cacheDir},target=/cache`);
   if (typeof process.getuid === "function" && typeof process.getgid === "function") {
     containerArgs.push("--user", `${process.getuid()}:${process.getgid()}`);
@@ -646,7 +651,12 @@ function replaceAll(input: string, needle: string, replacement: string): string 
 }
 
 const ociAvailability = new Map<string, Promise<boolean>>();
-const appleContainerAvailability = new Map<string, Promise<boolean>>();
+const appleContainerAvailability = new Map<string, Promise<AppleContainerAvailability>>();
+
+interface AppleContainerAvailability {
+  available: boolean;
+  message?: string;
+}
 
 function isOciSandboxAvailable(image: string): Promise<boolean> {
   let cached = ociAvailability.get(image);
@@ -669,7 +679,7 @@ async function checkOciSandboxAvailable(image: string): Promise<boolean> {
   return result.exitCode === 0 && !result.timedOut;
 }
 
-function isAppleContainerSandboxAvailable(image: string): Promise<boolean> {
+function isAppleContainerSandboxAvailable(image: string): Promise<AppleContainerAvailability> {
   let cached = appleContainerAvailability.get(image);
   if (!cached) {
     cached = checkAppleContainerSandboxAvailable(image);
@@ -678,7 +688,7 @@ function isAppleContainerSandboxAvailable(image: string): Promise<boolean> {
   return cached;
 }
 
-async function checkAppleContainerSandboxAvailable(image: string): Promise<boolean> {
+async function checkAppleContainerSandboxAvailable(image: string): Promise<AppleContainerAvailability> {
   const result = await runSpawnedProcess({
     program: "container",
     args: ["image", "inspect", image],
@@ -687,15 +697,41 @@ async function checkAppleContainerSandboxAvailable(image: string): Promise<boole
     timeoutMs: 5000,
     maxLogBytes: 2000,
   });
-  return result.exitCode === 0 && !result.timedOut;
+  if (result.exitCode === 0 && !result.timedOut) return { available: true };
+  if (result.timedOut) {
+    return {
+      available: false,
+      message: `Apple container did not respond while inspecting sandbox image "${image}". Check "container system status" and restart apple/container if needed.`,
+    };
+  }
+  const output = `${result.stderr}\n${result.stdout}`.trim();
+  if (/spawn container ENOENT|not found|No such file or directory/i.test(output)) {
+    return {
+      available: false,
+      message: `Apple container CLI was not found on PATH. Install apple/container, run "container system start", and build or pull sandbox image "${image}" for the Apple container runtime.`,
+    };
+  }
+  if (/Operation not permitted/i.test(output)) {
+    return {
+      available: false,
+      message: `Apple container CLI is installed, but this process is not permitted to access the container system API. Run Flounder from an unsandboxed terminal/session, then verify "container image inspect ${image}" succeeds.`,
+    };
+  }
+  if (/connection|connect|service|apiserver|not running|cannot.*container/i.test(output)) {
+    return {
+      available: false,
+      message: `Apple container system is not reachable while inspecting sandbox image "${image}". Run "container system start" and verify "container system status" is running.`,
+    };
+  }
+  return { available: false };
 }
 
 async function checkAppleContainerBackendReady(options: SandboxProcessOptions): Promise<{ ok: true } | { ok: false; message: string }> {
   const available = await isAppleContainerSandboxAvailable(options.image);
-  if (!available) {
+  if (!available.available) {
     return {
       ok: false,
-      message: `Apple container sandbox image "${options.image}" is not available. Install apple/container, run "container system start", and build or pull the image for the Apple container runtime.`,
+      message: available.message ?? `Apple container sandbox image "${options.image}" is not available. Install apple/container, run "container system start", and build or pull the image for the Apple container runtime.`,
     };
   }
   if (options.network === "none") return ensureAppleContainerSealedNetwork();

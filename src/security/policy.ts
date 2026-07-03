@@ -307,7 +307,7 @@ function isAllowedLocalTestCommand(program: string, args: string[]): boolean {
   if (name === "cargo") return cargoSubcommand(args) === "test";
   if (name === "go") return first === "test";
   if (name === "npm") return first === "test" || (first === "run" && second === "test");
-  if (name === "pnpm" || name === "yarn" || name === "bun") return first === "test" || (first === "run" && second === "test") || (first === "hardhat" && second === "test");
+  if (name === "pnpm" || name === "yarn" || name === "bun") return first === "test" || (first === "run" && second === "test") || ((first === "hardhat" || first === "blueprint") && second === "test");
   if (name === "node") return first === "--test";
   if (name === "python" || name === "python3") return first === "-m" && (second === "pytest" || second === "unittest");
   if (name === "pytest") return true;
@@ -317,7 +317,10 @@ function isAllowedLocalTestCommand(program: string, args: string[]): boolean {
   if (name === "mvn") return first === "test" || first === "-q" && second === "test";
   if (name === "gradle" || name === "gradlew") return args.some((arg) => arg.toLowerCase() === "test");
   if (name === "forge") return first === "test";
-  if (name === "npx") return first === "hardhat" && second === "test";
+  if (name === "scarb") return first === "test";
+  if (name === "snforge") return first === "test";
+  if (name === "blueprint") return first === "test";
+  if (name === "npx") return (first === "hardhat" || first === "blueprint") && second === "test";
   return false;
 }
 
@@ -336,9 +339,15 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "cargo") return ["build", "fetch", "check", "generate-lockfile", "vendor", "update"].includes(cargoSubcommand(args) ?? "");
   if (name === "go") return first === "build" || first === "mod"; // go build / go mod download|tidy|vendor
   if (name === "npm") return ["install", "ci", "i"].includes(first ?? "");
-  if (name === "pnpm" || name === "yarn" || name === "bun") return ["install", "i", "ci"].includes(first ?? "") || (name === "yarn" && args.length === 0);
+  if (name === "pnpm" || name === "yarn" || name === "bun") return ["install", "i", "ci"].includes(first ?? "") || (name === "yarn" && args.length === 0) || (first === "blueprint" && second === "build");
   if (name === "pip" || name === "pip3") return first === "install";
-  if (name === "python" || name === "python3") return first === "-m" && second === "pip" && (lower[2] === "install");
+  if (name === "python" || name === "python3") {
+    return first === "-m" && (
+      second === "venv" ||
+      second === "virtualenv" ||
+      (second === "pip" && lower[2] === "install")
+    );
+  }
   if (name === "forge") return ["build", "install", "compile", "update"].includes(first ?? "");
   if (name === "cmake") return isAllowedCmakeBuild(args);
   if (name === "ninja") return true;
@@ -347,7 +356,10 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "deno") return first === "cache";
   if (name === "mvn") return lower.some((arg) => ["compile", "package", "install", "dependency:resolve", "dependency:go-offline"].includes(arg));
   if (name === "gradle" || name === "gradlew") return lower.some((arg) => ["build", "assemble", "classes", "compilejava", "dependencies"].includes(arg));
-  if (name === "npx") return first === "hardhat" && second === "compile";
+  if (name === "scarb") return ["build", "fetch", "check"].includes(first ?? "");
+  if (name === "blueprint") return first === "build";
+  if (name === "func-js" || name === "tolk-js" || name === "tact") return args.length > 0 && !isToolInfoArgs(args);
+  if (name === "npx") return (first === "hardhat" && second === "compile") || (first === "blueprint" && second === "build");
   return false;
 }
 
@@ -368,6 +380,12 @@ function cargoSubcommand(args: string[]): string | undefined {
     return arg;
   }
   return undefined;
+}
+
+function isToolInfoArgs(args: string[]): boolean {
+  if (args.length !== 1) return false;
+  const flag = args[0]?.toLowerCase();
+  return flag === "--version" || flag === "-v" || flag === "-version" || flag === "version" || flag === "--help" || flag === "-h" || flag === "help";
 }
 
 function isAllowedLocalInspectionCommand(program: string, args: string[]): boolean {
@@ -402,6 +420,7 @@ function isAllowedVersionInspection(program: string, args: string[]): boolean {
     "deno",
     "dotnet",
     "forge",
+    "func-js",
     "git",
     "go",
     "gmake",
@@ -422,8 +441,16 @@ function isAllowedVersionInspection(program: string, args: string[]): boolean {
     "python3",
     "rustc",
     "rustup",
+    "scarb",
     "solc",
+    "sncast",
+    "snforge",
+    "tact",
+    "tact-fmt",
+    "tolk-js",
+    "unboc",
     "yarn",
+    "blueprint",
   ]).has(program);
 }
 

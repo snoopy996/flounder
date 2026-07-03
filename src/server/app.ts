@@ -2071,17 +2071,22 @@ async function runLaunch(c: Ctx): Promise<void> {
   const progress = scopeView.hasInventory ? scopeView.progress : emptyProgress();
   const spec = launchSpec(project, body, c.out, profile, progress, phaseProfiles);
   if (spec.verb === "run") {
-    applyProjectPrepareDefaults(spec, project, runs);
-    spec.pipeline = true;
-    const prepared = latestPreparedWorkspace(runs);
-    if (prepared) {
-      spec.dir = undefined;
-      spec.sourcePaths = [prepared.workspaceDir];
-      spec.buildRoot = prepared.workspaceDir;
-      spec.clue = undefined;
-      if (!spec.scopeNote && prepared.scopeNote) spec.scopeNote = prepared.scopeNote;
-    } else if (spec.clue && spec.sourcePaths.length === 0) {
-      resetPipelineCoverageForUnknownInventory(spec);
+    if (spec.sourcePaths.length > 0) {
+      spec.pipeline = false;
+      applyProjectSourceDefaults(spec, project);
+    } else {
+      applyProjectPrepareDefaults(spec, project, runs);
+      spec.pipeline = true;
+      const prepared = latestPreparedWorkspace(runs);
+      if (prepared) {
+        spec.dir = undefined;
+        spec.sourcePaths = [prepared.workspaceDir];
+        spec.buildRoot = prepared.workspaceDir;
+        spec.clue = undefined;
+        if (!spec.scopeNote && prepared.scopeNote) spec.scopeNote = prepared.scopeNote;
+      } else if (spec.clue && spec.sourcePaths.length === 0) {
+        resetPipelineCoverageForUnknownInventory(spec);
+      }
     }
   } else if (spec.verb === "prepare") {
     applyProjectPrepareDefaults(spec, project, runs);
@@ -2172,6 +2177,12 @@ function applyProjectPrepareDefaults(spec: LaunchSpec, project: Record<string, u
     spec.posture = stringValue(previousPrepare?.posture) || "blind";
   }
   if (spec.matchDeployed === undefined) spec.matchDeployed = true;
+}
+
+function applyProjectSourceDefaults(spec: LaunchSpec, project: Record<string, unknown>): void {
+  if (spec.scopeNote) return;
+  const cfg = (safeParse(project.config_json) as Record<string, unknown>) ?? {};
+  spec.scopeNote = stringValue(cfg.scopeNote) || stringValue(cfg.projectIntent) || stringValue(cfg.prepareClue);
 }
 
 function resetPipelineCoverageForUnknownInventory(spec: LaunchSpec): void {

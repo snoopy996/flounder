@@ -385,7 +385,7 @@ Flounder supports white-hat audits of publicly available source, your own code, 
 - [Architecture](docs/ARCHITECTURE.md): thin-agent design, sandbox boundary, confirmation boundary, control/execution split, and tracking model.
 - [Agent skill](skills/flounder/SKILL.md): Codex / Claude Code operating manual.
 - [Domain profiles](configs/README.md): optional answer-free context packs. They are not product modes and are off by default.
-- [Optional Solidity/EVM notes](docs/SOLIDITY.md) and [ZK constraint profile](configs/zk-constraint-audit.default.json): high-signal context examples, not Flounder's core limit.
+- [Optional Solidity/EVM notes](docs/SOLIDITY.md), [Cairo/Starknet notes](docs/STARKNET.md), [TON/FunC notes](docs/TON.md), and [ZK constraint profile](configs/zk-constraint-audit.default.json): high-signal context examples and verification-environment setup, not Flounder's core limit.
 
 ## Contributing
 

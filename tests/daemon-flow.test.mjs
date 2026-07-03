@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { startUiServer } from "../dist/server/app.js";
 import { ensureDaemonDirectories } from "../dist/server/daemon.js";
 import { MetadataStore } from "../dist/db/store.js";
+
+const execFileAsync = promisify(execFile);
+const root = path.resolve(import.meta.dirname, "..");
 
 // Execution is decoupled: the server owns the DB + a job queue and never runs an audit;
 // a daemon claims queued jobs, runs them elsewhere, and reports progress over HTTP. These
@@ -66,6 +71,18 @@ test("daemon: register requires a valid bearer token", async () => {
     assert.equal((await j(ok)).ok, true);
     // claim/run/activity/status all reject an unknown token too
     assert.equal((await fetch(base + "/api/daemon/claim", { method: "POST" })).status, 401);
+  });
+});
+
+test("daemon: CLI daemon-token mint uses the server API when --server is passed", async () => {
+  await withServerAndToken(async ({ base }) => {
+    const { stdout } = await execFileAsync(process.execPath, [path.join(root, "dist/cli.js"), "server", "daemon-token", "mint", "cli-remote", "--server", base], { cwd: root });
+
+    assert.match(stdout, /\[daemon \d+\] cli-remote/);
+    assert.match(stdout, new RegExp(`flounder daemon start --server ${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --token [a-f0-9]+`));
+
+    const daemons = await j(await ui(base, "GET", "/api/daemons"));
+    assert.equal(daemons.daemons.some((daemon) => daemon.name === "cli-remote"), true);
   });
 });
 
@@ -154,6 +171,44 @@ test("daemon: local auto-executor identity survives same-machine UI restart", as
     const claim = await j(await asDaemon(base, localAgain.token, "POST", "/api/daemon/claim"));
     assert.equal(claim.job.id, jobId);
     assert.equal(claim.job.project, "local-pinned");
+  });
+});
+
+test("daemon: project run uses configured source before prepare clues", async () => {
+  await withServerAndToken(async ({ base, token }) => {
+    await asDaemon(base, token, "POST", "/api/daemon/register", { name: "d1" });
+
+    const sourceProject = await j(await ui(base, "POST", "/api/projects", {
+      name: "source-first",
+      sourcePaths: ["./src"],
+      buildRoot: ".",
+      config: {
+        projectIntent: "Audit the configured source",
+        prepareClue: "https://example.invalid/should-not-prepare",
+      },
+    }));
+    const sourceLaunch = await j(await ui(base, "POST", `/api/projects/${sourceProject.uuid}/runs`, { verb: "run", mockLlm: true }));
+    const sourceClaim = await j(await asDaemon(base, token, "POST", "/api/daemon/claim"));
+
+    assert.equal(sourceClaim.job.id, sourceLaunch.jobId);
+    assert.equal(sourceClaim.job.spec.verb, "run");
+    assert.equal(sourceClaim.job.spec.pipeline, false);
+    assert.equal(sourceClaim.job.spec.clue, undefined);
+    assert.deepEqual(sourceClaim.job.spec.sourcePaths, ["./src"]);
+    assert.equal(sourceClaim.job.spec.scopeNote, "Audit the configured source");
+
+    const clueProject = await j(await ui(base, "POST", "/api/projects", {
+      name: "clue-only",
+      config: { prepareClue: "https://github.com/example/project" },
+    }));
+    const clueLaunch = await j(await ui(base, "POST", `/api/projects/${clueProject.uuid}/runs`, { verb: "run", mockLlm: true }));
+    const clueClaim = await j(await asDaemon(base, token, "POST", "/api/daemon/claim"));
+
+    assert.equal(clueClaim.job.id, clueLaunch.jobId);
+    assert.equal(clueClaim.job.spec.verb, "run");
+    assert.equal(clueClaim.job.spec.pipeline, true);
+    assert.equal(clueClaim.job.spec.clue, "https://github.com/example/project");
+    assert.deepEqual(clueClaim.job.spec.sourcePaths, []);
   });
 });
 

@@ -263,8 +263,8 @@ test("api: project run defaults leave map/dig turns unbounded and use standard s
     const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
     const spec = JSON.parse(job.spec_json);
 
-    assert.equal(spec.pipeline, true);
-    assert.equal(spec.clue, "default-run-budget");
+    assert.equal(spec.pipeline, false);
+    assert.equal(spec.clue, undefined);
     assert.equal(spec.coverageMode, "standard");
     assert.equal(spec.coverageTarget, 30);
     assert.equal(spec.maxScopes, 30);
@@ -289,8 +289,8 @@ test("api: explicit standard coverage leaves map/dig turns unbounded while cappi
     const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
     const spec = JSON.parse(job.spec_json);
 
-    assert.equal(spec.pipeline, true);
-    assert.equal(spec.clue, "standard-run-budget");
+    assert.equal(spec.pipeline, false);
+    assert.equal(spec.clue, undefined);
     assert.equal(spec.coverageMode, "standard");
     assert.equal(spec.maxScopes, 30);
     assert.equal(spec.mapSteps, undefined);
@@ -324,7 +324,7 @@ test("api: standard coverage fills the project up to 30 audited scopes instead o
     const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
     const spec = JSON.parse(job.spec_json);
 
-    assert.equal(spec.pipeline, true);
+    assert.equal(spec.pipeline, false);
     assert.equal(spec.coverageMode, "standard");
     assert.equal(spec.coverageTarget, 30);
     assert.equal(spec.maxScopes, 10);
@@ -402,13 +402,10 @@ test("api: standard coverage lets pipeline continue after 30 audited scopes but 
       store.close();
     }
 
-    const continued = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run" }));
-    assert.equal(continued.queued, true);
-    const continuedJob = (await json(await fetch(base + "/api/jobs/" + continued.jobId))).job;
-    const continuedSpec = JSON.parse(continuedJob.spec_json);
-    assert.equal(continuedSpec.pipeline, true);
-    assert.equal(continuedSpec.coverageTarget, 30);
-    assert.equal(continuedSpec.maxScopes, 0);
+    const continued = await post(`/api/projects/${created.uuid}/runs`, { verb: "run" });
+    assert.equal(continued.status, 409);
+    const blocked = await json(continued);
+    assert.match(blocked.error, /Standard coverage is already complete/);
 
     const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "audit", scope: "pending-0" }));
     assert.equal(launched.queued, true);

@@ -3,6 +3,7 @@ dist/
 runs/
 out/
 cache/
+.audit-targets/
 .npm-cache/
 .gstack/
 .codex/

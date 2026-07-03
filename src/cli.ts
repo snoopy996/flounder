@@ -29,7 +29,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (cmd === "server") {
-    runServerCommand(rest);
+    await runServerCommand(rest);
     return;
   }
 
@@ -482,11 +482,30 @@ process environment.
 `);
 }
 
-function runMintTokenCommand(args: string[]): void {
+async function runMintTokenCommand(args: string[]): Promise<void> {
   const out = resolveOut(args);
   const positional = args.find((token) => !token.startsWith("--"));
   const name = readFlag(args, "--name") ?? positional ?? "daemon";
-  const server = readFlag(args, "--server") ?? "http://<this-server-host>:4500";
+  const serverFlag = readFlag(args, "--server");
+  if (serverFlag) {
+    const server = resolveServer(serverFlag);
+    const response = await fetch(`${server}/api/daemons`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) throw new Error(`failed to mint daemon token via ${server}: ${response.status} ${await response.text()}`);
+    const body = (await response.json()) as { id?: unknown; token?: unknown; name?: unknown };
+    if (typeof body.id !== "number" || typeof body.token !== "string") {
+      throw new Error(`failed to mint daemon token via ${server}: malformed response`);
+    }
+    const label = typeof body.name === "string" && body.name ? body.name : name;
+    console.log(`[daemon ${body.id}] ${label}`);
+    console.log(`token: ${body.token}`);
+    console.log(`run on the executor machine:\n  flounder daemon start --server ${server} --token ${body.token}`);
+    return;
+  }
+  const server = "http://<this-server-host>:4500";
   const db = MetadataStore.openForOutput(out);
   try {
     const { id, token } = db.createDaemonToken(name);
@@ -498,10 +517,10 @@ function runMintTokenCommand(args: string[]): void {
   }
 }
 
-function runDaemonTokenCommand(args: string[]): void {
+async function runDaemonTokenCommand(args: string[]): Promise<void> {
   const [subcommand = "mint", ...rest] = args;
   if (subcommand === "mint" || subcommand === "create") {
-    runMintTokenCommand(rest);
+    await runMintTokenCommand(rest);
     return;
   }
   throw new Error("Unknown server daemon-token command. Use: flounder server daemon-token mint [name]");
@@ -766,7 +785,7 @@ async function runHistoryCommand(args: string[]): Promise<void> {
 // Read/write views over the control-plane server state. These are product resources, not
 // database commands: project inventory, global run history, global findings, daemon registry,
 // and daemon connection tokens.
-function runServerCommand(args: string[]): void {
+async function runServerCommand(args: string[]): Promise<void> {
   const [resource, ...rest] = args;
   if (!resource || resource === "help" || resource === "--help" || resource === "-h") {
     printServerHelp();
@@ -791,7 +810,7 @@ function runServerCommand(args: string[]): void {
     return;
   }
   if (resource === "daemon-token") {
-    runDaemonTokenCommand(rest);
+    await runDaemonTokenCommand(rest);
     return;
   }
   throw new Error(`Unknown server resource "${resource}". Use: flounder server project|run|finding|daemon|daemon-token`);

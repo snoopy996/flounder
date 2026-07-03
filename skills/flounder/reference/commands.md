@@ -127,6 +127,21 @@ runtime after it is installed, started, and has the selected sandbox image
 available. Use `--sandbox-backend apple-container` to require that path
 explicitly.
 
+Build curated target-specific images when a bounty target needs native
+confirmation tools that are not in the baseline image:
+
+```bash
+npm run sandbox:cairo:build  # flounder-sandbox:cairo, Scarb + Starknet Foundry
+npm run sandbox:ton:build    # flounder-sandbox:ton, TON Blueprint + FunC/Tolk/Tact
+```
+
+Then pass the selected image explicitly:
+
+```bash
+flounder run --source ./src --build-root . --sandbox-image flounder-sandbox:cairo
+flounder run --source ./contracts --build-root . --sandbox-image flounder-sandbox:ton
+```
+
 Host execution is only for trusted local smoke tests and fixtures:
 
 ```bash

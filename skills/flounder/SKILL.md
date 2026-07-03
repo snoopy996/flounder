@@ -195,6 +195,13 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
    npm run sandbox:build
    ```
 
+   Curated target-specific images are available for common non-EVM audits:
+
+   ```bash
+   npm run sandbox:cairo:build  # flounder-sandbox:cairo, Scarb + Starknet Foundry
+   npm run sandbox:ton:build    # flounder-sandbox:ton, TON Blueprint + FunC/Tolk/Tact
+   ```
+
    On Apple silicon macOS daemon hosts, install/start Apple's `container`
    runtime and build or pull the selected image into that runtime to let `auto`
    select it; `--sandbox-backend apple-container` requires that path explicitly.

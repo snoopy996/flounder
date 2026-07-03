@@ -132,6 +132,23 @@ The bundled image is only the default baseline. It cannot cover every compiler, 
 flounder run --source ./src --build-root . --sandbox-image your-audit-image:latest
 ```
 
+Flounder also ships curated target-specific image recipes for common audit
+ecosystems. These extend `flounder-sandbox:latest`; build the baseline first,
+then the specialized image you need:
+
+```bash
+npm run sandbox:build
+npm run sandbox:cairo:build  # flounder-sandbox:cairo, with Scarb + Starknet Foundry
+npm run sandbox:ton:build    # flounder-sandbox:ton, with TON Blueprint + FunC/Tolk/Tact tooling
+```
+
+Use them explicitly for matching targets:
+
+```bash
+flounder run --source ./src --build-root . --sandbox-image flounder-sandbox:cairo
+flounder run --source ./contracts --build-root . --sandbox-image flounder-sandbox:ton
+```
+
 Treat image construction as a daemon/operator responsibility. The agent can identify missing tools and propose a Dockerfile or image plan, but unrestricted `docker build` or `docker pull` from inside model-directed execution would expand the trusted boundary and can undermine the sandbox. If automated image synthesis is enabled in a deployment, keep it as a separate controlled prepare step with human review or a locked template, pinned base images, and a resulting image digest recorded in the run.
 
 Host mode exists as an explicit trusted-local escape hatch for environments where Docker/OCI is unavailable or for deterministic fixture tests:
@@ -271,7 +288,7 @@ flounder run \
   --provider openai-codex --model gpt-5.5 --thinking xhigh
 ```
 
-Optional stack-specific notes: [SOLIDITY.md](SOLIDITY.md) covers the Solidity/EVM path, and `configs/zk-constraint-audit.default.json` provides optional ZK/proof-system context. They are examples of context, not product modes.
+Optional stack-specific notes: [SOLIDITY.md](SOLIDITY.md) covers the Solidity/EVM path, [STARKNET.md](STARKNET.md) covers Cairo/Starknet setup, [TON.md](TON.md) covers TON/FunC/Tolk/Tact setup, and `configs/zk-constraint-audit.default.json` provides optional ZK/proof-system context. They are examples of context, not product modes.
 
 ## Pi package
 

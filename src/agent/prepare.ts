@@ -24,7 +24,7 @@ const SKIP_DIRS = new Set([".git", ".hg", ".svn", "node_modules", "vendor", "tar
 const MAX_SCAN_DEPTH = 6;
 const MAX_SCAN_ENTRIES = 8000;
 
-type Toolchain = "cargo" | "go" | "npm" | "pnpm" | "yarn" | "forge";
+type Toolchain = "cargo" | "go" | "npm" | "pnpm" | "yarn" | "forge" | "scarb" | "blueprint";
 
 export interface PrepareCommandResult {
   toolchain: Toolchain;
@@ -109,7 +109,8 @@ async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPla
   // Order matters: dependency-install toolchains (npm/pnpm/yarn) run FIRST, because
   // a Solidity/Foundry project often imports its dependencies (e.g. @openzeppelin)
   // from node_modules — so `forge build` only resolves after `npm install`. Then go
-  // mod download, then the compile toolchains (cargo, forge).
+  // mod download, then the compile toolchains (cargo, Scarb/Cairo, Blueprint/TON,
+  // forge).
   //
   // The package manager is chosen by the lockfile CO-LOCATED with the shallowest
   // package.json (the project root), NOT by any lockfile anywhere in the tree: a
@@ -134,6 +135,12 @@ async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPla
   const cargoDir = shallowest((name) => name === "Cargo.toml");
   if (cargoDir !== undefined) plans.push({ toolchain: "cargo", ...cwd(cargoDir), commands: [["cargo", "fetch"], ["cargo", "build"]] });
 
+  const scarbDir = shallowest((name) => name === "Scarb.toml");
+  if (scarbDir !== undefined) plans.push({ toolchain: "scarb", ...cwd(scarbDir), commands: [["scarb", "build"]] });
+
+  const blueprintDir = shallowest((name) => isBlueprintManifest(name));
+  if (blueprintDir !== undefined) plans.push({ toolchain: "blueprint", ...cwd(blueprintDir), commands: [["blueprint", "build", "--all"]] });
+
   const foundryDir = shallowest((name) => name === "foundry.toml");
   if (foundryDir !== undefined) plans.push({ toolchain: "forge", ...cwd(foundryDir), commands: [["forge", "build"]] });
 
@@ -150,7 +157,7 @@ interface ManifestEntry {
 }
 
 async function scanManifests(root: string): Promise<ManifestEntry[]> {
-  const wanted = new Set(["Cargo.toml", "go.mod", "package.json", "foundry.toml", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]);
+  const wanted = new Set(["Cargo.toml", "go.mod", "package.json", "foundry.toml", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "Scarb.toml", "Scarb.lock", "snfoundry.toml", "blueprint.config.ts", "blueprint.config.js", "blueprint.config.cjs", "blueprint.config.mjs", "tact.config.json"]);
   const out: ManifestEntry[] = [];
   let budget = MAX_SCAN_ENTRIES;
   const walk = async (absDir: string, relDir: string, depth: number): Promise<void> => {
@@ -173,4 +180,12 @@ async function scanManifests(root: string): Promise<ManifestEntry[]> {
   };
   await walk(root, "", 0);
   return out;
+}
+
+function isBlueprintManifest(name: string): boolean {
+  return name === "blueprint.config.ts"
+    || name === "blueprint.config.js"
+    || name === "blueprint.config.cjs"
+    || name === "blueprint.config.mjs"
+    || name === "tact.config.json";
 }

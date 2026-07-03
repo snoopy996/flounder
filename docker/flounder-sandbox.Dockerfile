@@ -17,11 +17,13 @@ RUN apt-get update \
     golang-go \
     grep \
     jq \
+    libgmp-dev \
     nodejs \
     npm \
     ninja-build \
     pkg-config \
     python3 \
+    python3-dev \
     python3-pip \
     python3-venv \
     ripgrep \
