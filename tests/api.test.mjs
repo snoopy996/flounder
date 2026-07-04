@@ -402,6 +402,16 @@ test("api: standard coverage lets pipeline continue after 30 audited scopes but 
       store.close();
     }
 
+    const pipeline = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run", pipeline: true }));
+    assert.equal(pipeline.queued, true);
+    const pipelineJob = (await json(await fetch(base + "/api/jobs/" + pipeline.jobId))).job;
+    const pipelineSpec = JSON.parse(pipelineJob.spec_json);
+    assert.equal(pipelineSpec.pipeline, true);
+    assert.equal(pipelineSpec.coverageMode, "standard");
+    assert.equal(pipelineSpec.coverageTarget, 30);
+    assert.equal(pipelineSpec.maxScopes, 0);
+    assert.equal(pipelineSpec.sandboxConfirmNetwork, "enabled");
+
     const continued = await post(`/api/projects/${created.uuid}/runs`, { verb: "run" });
     assert.equal(continued.status, 409);
     const blocked = await json(continued);

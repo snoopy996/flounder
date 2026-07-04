@@ -2105,8 +2105,8 @@ async function runLaunch(c: Ctx): Promise<void> {
   const spec = launchSpec(project, body, c.out, profile, progress, phaseProfiles);
   if (spec.verb === "run") {
     if (spec.sourcePaths.length > 0) {
-      spec.pipeline = false;
       applyProjectSourceDefaults(spec, project);
+      if (!spec.pipeline) spec.pipeline = false;
     } else {
       applyProjectPrepareDefaults(spec, project, runs);
       spec.pipeline = true;
@@ -4177,11 +4177,12 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
   // resolve via the profile fallback. Materials are RELATIVE to the project dir (resolved on
   // the daemon against its workspace); new projects default dir to their UUID.
   const verb = (typeof body.verb === "string" ? body.verb : "run") as RunKind;
+  const pipeline = body.pipeline === true;
   const phases = (merged.phases && typeof merged.phases === "object" ? merged.phases : {}) as Record<string, { model?: unknown; thinking?: unknown }>;
   const primaryPhase = verb === "prepare" ? "prepare" : verb === "map" ? "map" : verb === "confirm" || verb === "report" ? "confirm" : "dig";
   const explicitSandboxConfirmNetwork = configOverrides.sandboxConfirmNetwork !== undefined || bodyOverrides.sandboxConfirmNetwork !== undefined;
   const effectiveSandboxConfirmNetwork =
-    (verb === "prepare" || verb === "confirm") && !explicitSandboxConfirmNetwork
+    (verb === "prepare" || verb === "confirm" || (verb === "run" && pipeline)) && !explicitSandboxConfirmNetwork
       ? "enabled"
       : network(merged.sandboxConfirmNetwork);
   const phaseModel = (ph: string): string | undefined => str(phases[ph]?.model);
@@ -4235,7 +4236,7 @@ function launchSpec(project: Record<string, unknown>, body: Record<string, unkno
     fresh: Boolean(body.fresh),
     quick: Boolean(body.quick),
     mockLlm: Boolean(body.mockLlm),
-    pipeline: Boolean(body.pipeline),
+    pipeline,
     verifyFromStart: Boolean(body.verifyFromStart),
     region: str(body.region),
     scope: str(body.scope),

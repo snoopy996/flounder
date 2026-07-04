@@ -1885,6 +1885,7 @@ export function App() {
       const selected = selectedFindings && selectedFindings.length ? selectedFindings : undefined;
       const result = (await api.launchRun(route.projectUuid, {
         verb,
+        ...(action === "run" ? { pipeline: true } : {}),
         ...(action === "verify" ? { verifyFindings: selected ?? verifyCandidates } : {}),
         ...((action === "confirm" || action === "report") && selected ? { findingIds: selected.map((finding) => finding.id) } : {}),
       })) as LaunchResult;
@@ -2166,7 +2167,7 @@ export function App() {
             if (runAfterCreate) {
               setBusy(true);
               try {
-                const result = (await api.launchRun(uuid, { verb: "run" })) as LaunchResult;
+                const result = (await api.launchRun(uuid, { verb: "run", pipeline: true })) as LaunchResult;
                 const waiting = (result.daemons ?? 0) === 0;
                 setToast({
                   tone: waiting ? "warning" : "success",
