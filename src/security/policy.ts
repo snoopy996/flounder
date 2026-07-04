@@ -355,7 +355,7 @@ function isAllowedLocalTestCommand(program: string, args: string[]): boolean {
   if (name === "mvn") return first === "test" || first === "-q" && second === "test";
   if (name === "gradle" || name === "gradlew") return args.some((arg) => arg.toLowerCase() === "test");
   if (name === "forge") return first === "test";
-  if (name === "scarb") return first === "test";
+  if (name === "scarb") return scarbSubcommand(args) === "test";
   if (name === "snforge") return first === "test";
   if (name === "blueprint") return first === "test";
   if (name === "npx") return (first === "hardhat" || first === "blueprint") && second === "test";
@@ -394,7 +394,7 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "deno") return first === "cache";
   if (name === "mvn") return lower.some((arg) => ["compile", "package", "install", "dependency:resolve", "dependency:go-offline"].includes(arg));
   if (name === "gradle" || name === "gradlew") return lower.some((arg) => ["build", "assemble", "classes", "compilejava", "dependencies"].includes(arg));
-  if (name === "scarb") return ["build", "fetch", "check", "metadata"].includes(first ?? "");
+  if (name === "scarb") return ["build", "fetch", "check", "metadata"].includes(scarbSubcommand(args) ?? "");
   if (name === "blueprint") return first === "build";
   if (name === "func-js" || name === "tolk-js" || name === "tact") return args.length > 0 && !isToolInfoArgs(args);
   if (name === "npx") return (first === "hardhat" && second === "compile") || (first === "blueprint" && second === "build");
@@ -420,6 +420,23 @@ function cargoSubcommand(args: string[]): string | undefined {
   return undefined;
 }
 
+function scarbSubcommand(args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]?.toLowerCase() ?? "";
+    if (!arg) continue;
+    if (arg === "--") return undefined;
+    if (arg === "--offline" || arg === "--json" || arg === "--no-cache") continue;
+    if (arg === "--manifest-path" || arg === "--profile" || arg === "-p") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--manifest-path=") || arg.startsWith("--profile=")) continue;
+    if (arg.startsWith("-")) continue;
+    return arg;
+  }
+  return undefined;
+}
+
 function isToolInfoArgs(args: string[]): boolean {
   if (args.length !== 1) return false;
   const flag = args[0]?.toLowerCase();
@@ -431,7 +448,7 @@ function isAllowedLocalInspectionCommand(program: string, args: string[]): boole
   if (name === "pwd") return args.length === 0;
   if (name === "which") return args.length > 0 && args.every(isPlainToolName);
   if (isAllowedVersionInspection(name, args)) return true;
-  if (name === "scarb" && args[0]?.toLowerCase() === "metadata") return args.every((arg) => isSafeInspectionArg(name, arg));
+  if (name === "scarb" && scarbSubcommand(args) === "metadata") return args.every((arg) => isSafeInspectionArg(name, arg));
   if (isAllowedJsonToolInspection(name, args)) return true;
   if (name === "test" || name === "[") return isAllowedFileTestInspection(name, args);
   if (name === "ls") return args.every((arg) => isSafeInspectionArg(name, arg));
@@ -447,7 +464,7 @@ function isAllowedLocalInspectionCommand(program: string, args: string[]): boole
 function isAllowedVersionInspection(program: string, args: string[]): boolean {
   if (args.length !== 1) return false;
   const flag = args[0]?.toLowerCase();
-  if (!flag || !["--version", "-v", "-version", "version"].includes(flag)) return false;
+  if (!flag || !["--version", "-v", "-version", "version", "--help", "-h", "help"].includes(flag)) return false;
   return new Set([
     "anvil",
     "bb",

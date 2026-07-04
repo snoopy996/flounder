@@ -19,6 +19,8 @@ test("agent bash allows build/dependency commands (the build phase) across ecosy
     cmd("scarb", "fetch"),
     cmd("scarb", "check"),
     cmd("scarb", "metadata", "--format-version", "1"),
+    cmd("scarb", "--offline", "build"),
+    cmd("scarb", "--offline", "metadata", "--format-version", "1"),
     cmd("env", "SCARB_CACHE=./.scarb-cache", "scarb", "fetch"),
     cmd("blueprint", "build", "--all"),
     cmd("npx", "blueprint", "build", "--all"),
@@ -44,6 +46,7 @@ test("a build command is NOT confirmation-eligible (build cannot mint a finding)
   assert.equal(isAgentConfirmCommand(cmd("cmake", "--build", "build/bbapi-poc")), false);
   assert.equal(isAgentConfirmCommand(cmd("ninja", "-C", "build/bbapi-poc")), false);
   assert.equal(isAgentConfirmCommand(cmd("scarb", "build")), false);
+  assert.equal(isAgentConfirmCommand(cmd("scarb", "--offline", "build")), false);
   assert.equal(isAgentConfirmCommand(cmd("env", "SCARB_CACHE=./.scarb-cache", "scarb", "fetch")), false);
   assert.equal(isAgentConfirmCommand(cmd("blueprint", "build", "--all")), false);
   assert.equal(isAgentConfirmCommand(cmd("func-js", "contracts/pool.fc")), false);
@@ -61,6 +64,8 @@ test("a build command is NOT confirmation-eligible (build cannot mint a finding)
   assert.equal(isAgentConfirmCommand(cmd("ctest", "--test-dir", "build/bbapi-poc")), true);
   assert.equal(isAgentBuildCommand(cmd("scarb", "test")), false);
   assert.equal(isAgentConfirmCommand(cmd("scarb", "test")), true);
+  assert.equal(isAgentBuildCommand(cmd("scarb", "--offline", "test")), false);
+  assert.equal(isAgentConfirmCommand(cmd("scarb", "--offline", "test")), true);
   assert.equal(isAgentBuildCommand(cmd("snforge", "test")), false);
   assert.equal(isAgentConfirmCommand(cmd("snforge", "test")), true);
   assert.equal(isAgentBuildCommand(cmd("blueprint", "test")), false);
@@ -109,6 +114,7 @@ test("agent bash allows readonly tool discovery, version, and local JSON inspect
     cmd("which", "tact"),
     cmd("nargo", "--version"),
     cmd("scarb", "--version"),
+    cmd("scarb", "--help"),
     cmd("snforge", "--version"),
     cmd("sncast", "--version"),
     cmd("blueprint", "--version"),

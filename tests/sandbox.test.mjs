@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,19 +13,43 @@ async function tempDir(prefix) {
 async function fakeContainerCli(options = {}) {
   const dir = await tempDir("flounder-fake-container-bin-");
   const bin = path.join(dir, "container");
-await writeFile(bin, `#!/usr/bin/env bash
+  await writeFile(bin, `#!/usr/bin/env bash
+LOG_FILE=${JSON.stringify(options.logFile ?? "")}
+RUN_SLEEP_SECONDS=${JSON.stringify(String(options.runSleepSeconds ?? 0))}
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then printf '%s' ${JSON.stringify(options.imageInspectStderr ?? "")} >&2; exit ${options.imageInspectExit ?? 0}; fi
 if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit ${options.networkInspectExit ?? 0}; fi
 if [ "$1" = "network" ] && [ "$2" = "create" ]; then exit ${options.networkCreateExit ?? 0}; fi
+if [ "$1" = "delete" ]; then
+  if [ -n "$LOG_FILE" ]; then printf 'DELETE:%s\\n' "\${3:-}" >> "$LOG_FILE"; fi
+  exit ${options.deleteExit ?? 0}
+fi
 if [ "$1" = "run" ]; then
+  if [ -n "$LOG_FILE" ]; then printf 'RUN\\n' >> "$LOG_FILE"; fi
   printf 'ARGS:'
   for arg in "$@"; do printf '[%s]' "$arg"; done
+  if [ "$RUN_SLEEP_SECONDS" != "0" ]; then exec sleep "$RUN_SLEEP_SECONDS"; fi
   exit 0
 fi
 exit 1
 `);
   await chmod(bin, 0o755);
   return dir;
+}
+
+async function waitForFileMatch(file, pattern, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    try {
+      last = await readFile(file, "utf8");
+      if (pattern.test(last)) return last;
+    } catch {
+      // File may not exist until the fake CLI handles the cleanup call.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.match(last, pattern);
+  return last;
 }
 
 async function fakeDockerCli() {
@@ -329,6 +353,33 @@ test("sandbox Apple container backend pins DNS only for network-enabled runs", a
   } finally {
     process.env.PATH = oldPath;
     await rm(workspace, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("sandbox Apple container backend force-deletes timed-out containers", async () => {
+  const workspace = await tempDir("flounder-sandbox-apple-timeout-");
+  const logDir = await tempDir("flounder-sandbox-apple-timeout-log-");
+  const logFile = path.join(logDir, "container.log");
+  const fakeBin = await fakeContainerCli({ logFile, runSleepSeconds: 5 });
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fakeBin}${path.delimiter}${oldPath ?? ""}`;
+    const result = await runSandboxCommand(
+      { program: "node", args: ["--test"], timeoutMs: 100 },
+      workspace,
+      8000,
+      [],
+      undefined,
+      { backend: "apple-container", image: "flounder-sandbox:timeout", network: "enabled" },
+    );
+
+    assert.equal(result.timedOut, true);
+    await waitForFileMatch(logFile, /DELETE:flounder-/);
+  } finally {
+    process.env.PATH = oldPath;
+    await rm(workspace, { recursive: true, force: true });
+    await rm(logDir, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
   }
 });

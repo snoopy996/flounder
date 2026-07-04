@@ -385,6 +385,12 @@ async function runOciSandboxProcess(input: ProcessRunInput): Promise<{ stdout: s
     if (value !== undefined) dockerArgs.push("--env", `${key}=${value}`);
   }
   dockerArgs.push(input.options.image, input.command.program, ...input.command.args);
+  let cleanupStarted = false;
+  const cleanupTimedOutContainer = (): void => {
+    if (cleanupStarted) return;
+    cleanupStarted = true;
+    void forceRemoveContainer(containerName);
+  };
   const result = await runSpawnedProcess({
     program: "docker",
     args: dockerArgs,
@@ -392,8 +398,10 @@ async function runOciSandboxProcess(input: ProcessRunInput): Promise<{ stdout: s
     env: dockerClientEnv(),
     timeoutMs: input.command.timeoutMs ?? 120_000,
     maxLogBytes: input.maxLogBytes,
+    onTimeout: cleanupTimedOutContainer,
+    timeoutKillDelayMs: 250,
   });
-  if (result.timedOut) void forceRemoveContainer(containerName);
+  if (result.timedOut) cleanupTimedOutContainer();
   return result;
 }
 
@@ -435,6 +443,12 @@ async function runAppleContainerSandboxProcess(input: ProcessRunInput): Promise<
     if (value !== undefined) containerArgs.push("--env", `${key}=${value}`);
   }
   containerArgs.push(input.options.image, input.command.program, ...input.command.args);
+  let cleanupStarted = false;
+  const cleanupTimedOutContainer = (): void => {
+    if (cleanupStarted) return;
+    cleanupStarted = true;
+    void forceRemoveAppleContainer(containerName);
+  };
   const result = await runSpawnedProcess({
     program: "container",
     args: containerArgs,
@@ -442,28 +456,41 @@ async function runAppleContainerSandboxProcess(input: ProcessRunInput): Promise<
     env: containerClientEnv(),
     timeoutMs: input.command.timeoutMs ?? 120_000,
     maxLogBytes: input.maxLogBytes,
+    onTimeout: cleanupTimedOutContainer,
+    timeoutKillDelayMs: 250,
   });
-  if (result.timedOut) void forceRemoveAppleContainer(containerName);
+  if (result.timedOut) cleanupTimedOutContainer();
   return result;
 }
 
-async function runSpawnedProcess(input: { program: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; maxLogBytes: number }): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
+async function runSpawnedProcess(input: { program: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; maxLogBytes: number; onTimeout?: () => void; timeoutKillDelayMs?: number }): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
   let stdout = "";
   let stderr = "";
   let timedOut = false;
   let exitCode: number | null = null;
+  let terminateTimer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const child = spawn(input.program, input.args, {
     cwd: input.cwd,
     shell: false,
     env: input.env,
   });
-  const timer = setTimeout(() => {
-    timedOut = true;
+  const terminateChild = (): void => {
     child.kill("SIGTERM");
     killTimer = setTimeout(() => {
       if (exitCode === null) child.kill("SIGKILL");
     }, 2_000);
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      input.onTimeout?.();
+    } catch (error) {
+      stderr = appendLimited(stderr, error instanceof Error ? error.message : String(error), input.maxLogBytes);
+    }
+    const delay = Math.max(0, input.timeoutKillDelayMs ?? 0);
+    if (delay > 0) terminateTimer = setTimeout(terminateChild, delay);
+    else terminateChild();
   }, input.timeoutMs);
 
   child.stdout?.on("data", (chunk) => {
@@ -484,6 +511,7 @@ async function runSpawnedProcess(input: { program: string; args: string[]; cwd: 
     });
   });
   clearTimeout(timer);
+  if (terminateTimer) clearTimeout(terminateTimer);
   if (killTimer) clearTimeout(killTimer);
   return { stdout, stderr, exitCode, timedOut };
 }
