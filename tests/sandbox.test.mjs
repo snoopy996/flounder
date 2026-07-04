@@ -124,6 +124,33 @@ test("sandbox readiness reports missing OCI image before agent commands run", as
   assert.match(readiness.message ?? "", /No sandbox backend is available|OCI sandbox image/);
 });
 
+test("sandbox capped logs preserve early diagnostics and late context", async () => {
+  const workspace = await tempDir("flounder-sandbox-log-cap-");
+  try {
+    const script = [
+      "console.log('EARLY_SANDBOX_ERROR: missing package');",
+      "for (let i = 0; i < 400; i += 1) console.log('warning ' + i + ': noisy compiler profile output');",
+      "console.log('LATE_SANDBOX_CONTEXT: build failed after compilation');",
+    ].join("\n");
+    const result = await runSandboxCommand(
+      { program: process.execPath, args: ["-e", script], timeoutMs: 10_000 },
+      workspace,
+      1200,
+      [],
+      undefined,
+      { backend: "host", allowHostFallback: true, network: "none" },
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /EARLY_SANDBOX_ERROR/);
+    assert.match(result.stdout, /LATE_SANDBOX_CONTEXT/);
+    assert.match(result.stdout, /preserving head and tail/);
+    assert.ok(result.stdout.length <= 1250, "log cap should remain bounded");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("sandbox readiness reports missing Apple container image without host fallback", async () => {
   const fakeBin = await fakeContainerCli({ imageInspectExit: 1 });
   const oldPath = process.env.PATH;
@@ -268,6 +295,7 @@ test("sandbox Apple container backend maps Flounder isolation options to contain
     assert.match(result.stdout, /\[--memory\]\[256M\]/);
     assert.match(result.stdout, /\[--cpus\]\[1.25\]/);
     assert.match(result.stdout, /\[--env\]\[HOME=\/workspace\]/);
+    assert.match(result.stdout, /\[--env\]\[SCARB_CACHE=\/cache\/scarb-cache\]/);
     assert.match(result.stdout, /\[flounder-sandbox:latest\]\[node\]\[--test\]/);
   } finally {
     process.env.PATH = oldPath;
@@ -312,7 +340,7 @@ test("sandbox host backend is explicit and still uses isolated HOME and caches",
     const result = await runSandboxCommand(
       {
         program: process.execPath,
-        args: ["-e", "console.log(process.env.HOME); console.log(process.env.TMPDIR); console.log(process.env.CARGO_HOME);"],
+        args: ["-e", "console.log(process.env.HOME); console.log(process.env.TMPDIR); console.log(process.env.CARGO_HOME); console.log(process.env.SCARB_CACHE);"],
         timeoutMs: 10_000,
       },
       workspace,

@@ -55,8 +55,9 @@ For larger repositories, include the highest-signal specs, bridge message format
 
 Reproduction is part of the audit: the agent calls `bash` to run local tests in the copied workspace, and a finding only becomes `confirmed-executable` when a `purpose=confirm` test passes. During `flounder run`, reproduction commands stay inside local test runners, local fixtures, or isolated devnets — no public mainnet/testnet message sending, transaction broadcasting, exploit optimization, or credentialed infrastructure.
 
-With `flounder-sandbox:cairo`, prepare detects `Scarb.toml` and warms the copied workspace with `scarb build`. The command policy allows Cairo/Starknet local build and test commands such as:
+With `flounder-sandbox:cairo`, prepare detects `Scarb.toml` and warms the copied workspace with `scarb fetch` followed by `scarb build`, so registry dependency resolution happens in the prepare/build network window before sealed confirmation runs. The command policy allows Cairo/Starknet local build and test commands such as:
 
+- `scarb fetch`
 - `scarb build`
 - `scarb test`
 - `snforge test`

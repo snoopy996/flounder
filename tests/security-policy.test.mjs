@@ -16,7 +16,10 @@ test("agent bash allows build/dependency commands (the build phase) across ecosy
     cmd("python3", "-m", "venv", ".venv"),
     cmd("python3", "-m", "pip", "install", "-r", "requirements.txt"),
     cmd("scarb", "build"),
+    cmd("scarb", "fetch"),
     cmd("scarb", "check"),
+    cmd("scarb", "metadata", "--format-version", "1"),
+    cmd("env", "SCARB_CACHE=./.scarb-cache", "scarb", "fetch"),
     cmd("blueprint", "build", "--all"),
     cmd("npx", "blueprint", "build", "--all"),
     cmd("yarn", "blueprint", "build", "--all"),
@@ -41,6 +44,7 @@ test("a build command is NOT confirmation-eligible (build cannot mint a finding)
   assert.equal(isAgentConfirmCommand(cmd("cmake", "--build", "build/bbapi-poc")), false);
   assert.equal(isAgentConfirmCommand(cmd("ninja", "-C", "build/bbapi-poc")), false);
   assert.equal(isAgentConfirmCommand(cmd("scarb", "build")), false);
+  assert.equal(isAgentConfirmCommand(cmd("env", "SCARB_CACHE=./.scarb-cache", "scarb", "fetch")), false);
   assert.equal(isAgentConfirmCommand(cmd("blueprint", "build", "--all")), false);
   assert.equal(isAgentConfirmCommand(cmd("func-js", "contracts/pool.fc")), false);
   assert.equal(isAgentBuildCommand(cmd("func-js")), false);
@@ -74,7 +78,11 @@ test("a build command still cannot smuggle a remote/mainnet target in its argv",
 
 test("arbitrary non-build, non-test, non-inspection commands stay blocked", () => {
   assert.equal(analyzeAgentBashCommandSafety(cmd("curl", "https://evil.example")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("env", "FOO=bar", "curl", "https://evil.example")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("env", "SCARB_CACHE=../outside", "scarb", "fetch")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("env", "BAD=https://evil.example", "scarb", "fetch")).blocked, true);
   assert.equal(analyzeAgentBashCommandSafety(cmd("rm", "-rf", "x")).blocked, true);
+  assert.equal(analyzeAgentBashCommandSafety(cmd("env", "FOO=bar", "rm", "-rf", "x")).blocked, true);
   assert.equal(analyzeAgentBashCommandSafety(cmd("python3", "-c", "print('unchecked script')")).blocked, true);
 });
 

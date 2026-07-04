@@ -327,7 +327,7 @@ const editTool: AgentTool = {
 const bashTool: AgentTool = {
   name: "bash",
   description:
-    'Run one local command in the copied sandbox workspace. args: {"cmd": string, "purpose"?: "inspect"|"build"|"confirm" (default inspect), "cwd"?: relative, "expected_exit_code"?: int, "success_patterns"?: [string], "timeout_ms"?: int}. Shell control operators, remote networks, destructive commands, and paths outside the workspace are blocked. purpose=inspect is for exploration (ls/find/rg/cat/sed/jq), tool availability checks (which nargo/scarb/blueprint/tact), and local JSON reads (jq . file or jq length file); it never confirms anything. purpose=build is for dependency resolution and compilation (cargo build/fetch, cmake -S/-B/--build, ninja, make, npm install, go mod download, forge build, scarb build/check, blueprint build --all, func-js/tolk-js/tact, pip install, …) to make the workspace buildable; it has side effects but is NOT confirmation-eligible. For CMake, prefer generator-neutral `cmake -S <src> -B <build>` then `cmake --build <build> --parallel 2` on large targets; pass `-G Ninja` only after `ninja --version` succeeds, and keep parallelism bounded. purpose=confirm must be a real local test runner (cargo test, ctest, forge test, scarb test, snforge test, blueprint test, go test, node --test, pytest, …) with success_patterns; only a confirm command that exits as expected, observes every success_pattern, and executes a test linked to pristine target source becomes confirmation-eligible and citable as command_id for confirmed-executable.',
+    'Run one local command in the copied sandbox workspace. args: {"cmd": string, "purpose"?: "inspect"|"build"|"confirm" (default inspect), "cwd"?: relative, "expected_exit_code"?: int, "success_patterns"?: [string], "timeout_ms"?: int}. Shell control operators, remote networks, destructive commands, and paths outside the workspace are blocked. purpose=inspect is for exploration (ls/find/rg/cat/sed/jq), tool availability checks (which nargo/scarb/blueprint/tact), and local JSON reads (jq . file or jq length file); it never confirms anything. purpose=build is for dependency resolution and compilation (cargo build/fetch, cmake -S/-B/--build, ninja, make, npm install, go mod download, forge build, scarb fetch/build/check/metadata, blueprint build --all, func-js/tolk-js/tact, pip install, …) to make the workspace buildable; it has side effects but is NOT confirmation-eligible. For CMake, prefer generator-neutral `cmake -S <src> -B <build>` then `cmake --build <build> --parallel 2` on large targets; pass `-G Ninja` only after `ninja --version` succeeds, and keep parallelism bounded. purpose=confirm must be a real local test runner (cargo test, ctest, forge test, scarb test, snforge test, blueprint test, go test, node --test, pytest, …) with success_patterns; only a confirm command that exits as expected, observes every success_pattern, and executes a test linked to pristine target source becomes confirmation-eligible and citable as command_id for confirmed-executable.',
   async run(args, ctx) {
     const normalized = normalizeBashCommand(args, ctx.cfg);
     if ("error" in normalized) return { observation: normalized.error };
@@ -412,14 +412,13 @@ const bashTool: AgentTool = {
       // live progress projection is best-effort
     }
 
-    const tail = (text: string): string => (text.length > 1600 ? `...${text.slice(-1600)}` : text);
     const verdict = !isConfirm
       ? `command ${runId} (${normalized.purpose}): exit=${result.exitCode}${result.timedOut ? " timedOut" : ""}.`
       : passed
         ? `command ${runId}: CONFIRMATION-ELIGIBLE PASS; cite command_id="${runId}" in findings.json for confirmed-executable.`
         : `command ${runId}: not confirmation-eligible (${confirmFailureReason(eligibleByType, targetLink, normalized, exitMatched, result, patternCheck)}).`;
     return {
-      observation: `${verdict}\n--- stdout ---\n${tail(result.stdout) || "(empty)"}\n--- stderr ---\n${tail(result.stderr) || "(empty)"}`,
+      observation: `${verdict}\n--- stdout ---\n${diagnosticOutputPreview(result.stdout, 2000) || "(empty)"}\n--- stderr ---\n${diagnosticOutputPreview(result.stderr, 2000) || "(empty)"}`,
       meta: { runId, passed, purpose: normalized.purpose },
     };
   },
@@ -730,12 +729,49 @@ function baselineHasPathLike(baseline: Set<string>, candidate: string): boolean 
 }
 
 function commandOutputPreview(result: ReproductionCommandResult): string {
-  const tail = (text: string): string => (text.length > 1200 ? `...${text.slice(-1200)}` : text);
-  const sections = [
-    result.stderr.trim() ? `stderr:\n${tail(result.stderr.trim())}` : "",
-    result.stdout.trim() ? `stdout:\n${tail(result.stdout.trim())}` : "",
-  ].filter(Boolean);
+  const rawEntries: Array<[string, string]> = [
+    ["stderr", result.stderr.trim()],
+    ["stdout", result.stdout.trim()],
+  ];
+  const entries = rawEntries.filter(([, text]) => text.length > 0);
+  const sectionCap = entries.length > 1 ? 1200 : 2500;
+  const sections = entries.map(([label, text]) => `${label}:\n${diagnosticOutputPreview(text, sectionCap)}`);
   return sections.join("\n---\n").slice(0, 2600);
+}
+
+const DIAGNOSTIC_LINE_RE = /\b(error|failed|failure|panic|exception|traceback|undefined reference|cannot find|not found|caused by|assertion|timed out|timeout|revert)\b/i;
+
+function diagnosticOutputPreview(text: string, cap: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= cap) return trimmed;
+  const markerBudget = 160;
+  const diagnostics = diagnosticExcerpt(trimmed, Math.max(0, Math.floor(cap * 0.3)));
+  const headCap = Math.max(200, Math.floor(cap * (diagnostics ? 0.32 : 0.5)));
+  const tailCap = Math.max(200, cap - headCap - markerBudget - diagnostics.length);
+  const head = trimmed.slice(0, headCap);
+  const tail = trimmed.slice(Math.max(headCap, trimmed.length - tailCap));
+  if (diagnostics) {
+    return `${head}\n[... output elided; diagnostic lines follow ...]\n${diagnostics}\n[... output tail ...]\n${tail}`;
+  }
+  return `${head}\n[... output elided; tail follows ...]\n${tail}`;
+}
+
+function diagnosticExcerpt(text: string, cap: number): string {
+  if (cap <= 0) return "";
+  const lines = text.split(/\r?\n/);
+  const selected = new Set<number>();
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    if (!DIAGNOSTIC_LINE_RE.test(lines[idx] ?? "")) continue;
+    if (idx > 0) selected.add(idx - 1);
+    selected.add(idx);
+    if (idx + 1 < lines.length) selected.add(idx + 1);
+  }
+  if (selected.size === 0) return "";
+  const out = [...selected].sort((a, b) => a - b).map((idx) => lines[idx]).join("\n");
+  if (out.length <= cap) return out;
+  const head = Math.floor(cap * 0.5);
+  const tail = cap - head;
+  return `${out.slice(0, head)}\n[... diagnostics elided ...]\n${out.slice(-tail)}`;
 }
 
 /** Report files the framework reads back from the workspace. */

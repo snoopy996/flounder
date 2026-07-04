@@ -10,7 +10,7 @@ import type { ReproductionCommand } from "../types.js";
 // means the toolchain's dependencies must be present. This module warms the
 // copied workspace ONCE: it detects the toolchain and runs the project's own
 // dependency-fetch/build with network allowed and a generous timeout, populating
-// the workspace-local caches (CARGO_HOME, GOMODCACHE, npm cache, …) that
+// the workspace-local caches (CARGO_HOME, SCARB_CACHE, GOMODCACHE, npm cache, …) that
 // runSandboxCommand already points inside the workspace. Afterwards the model's
 // bash test runs are incremental and can run offline and reproducibly.
 //
@@ -147,7 +147,7 @@ async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPla
   if (cargoDir !== undefined) plans.push({ toolchain: "cargo", ...cwd(cargoDir), commands: [["cargo", "fetch"], ["cargo", "build"]] });
 
   const scarbDir = shallowest((name) => name === "Scarb.toml");
-  if (scarbDir !== undefined) plans.push({ toolchain: "scarb", ...cwd(scarbDir), commands: [["scarb", "build"]] });
+  if (scarbDir !== undefined) plans.push({ toolchain: "scarb", ...cwd(scarbDir), commands: [["scarb", "fetch"], ["scarb", "build"]] });
 
   const blueprintDir = shallowest((name) => isBlueprintManifest(name));
   if (blueprintDir !== undefined) plans.push({ toolchain: "blueprint", ...cwd(blueprintDir), commands: [["blueprint", "build", "--all"]] });

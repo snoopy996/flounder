@@ -73,11 +73,19 @@ export function analyzeReproductionCommandSafety(command: StructuredReproduction
 }
 
 export function analyzeAgentBashCommandSafety(command: StructuredReproductionCommand): CommandSafetyDecision {
-  const baseDecision = analyzeStructuredCommandBaseSafety(command);
+  const normalized = unwrapSafeEnvCommand(command);
+  if (!normalized) {
+    return {
+      blocked: true,
+      reason: "Blocked by flounder guardrail: env wrappers may only set simple local environment variables before an allowed command.",
+    };
+  }
+
+  const baseDecision = analyzeStructuredCommandBaseSafety(normalized);
   if (baseDecision.blocked) return baseDecision;
 
-  const program = command.program.trim();
-  const args = command.args.map((arg) => String(arg));
+  const program = normalized.program.trim();
+  const args = normalized.args.map((arg) => String(arg));
   const workspaceDecision = analyzeWorkspacePathSafety(args);
   if (workspaceDecision.blocked) return workspaceDecision;
 
@@ -99,7 +107,9 @@ export function analyzeAgentBashCommandSafety(command: StructuredReproductionCom
  * by printing a success pattern from a file it wrote itself.
  */
 export function isAgentConfirmCommand(command: StructuredReproductionCommand): boolean {
-  return isAllowedLocalTestCommand(command.program.trim(), command.args.map((arg) => String(arg)));
+  const normalized = unwrapSafeEnvCommand(command);
+  if (!normalized) return false;
+  return isAllowedLocalTestCommand(normalized.program.trim(), normalized.args.map((arg) => String(arg)));
 }
 
 /**
@@ -110,7 +120,9 @@ export function isAgentConfirmCommand(command: StructuredReproductionCommand): b
  * confirmation-eligible — a build can never upgrade a finding (only isAgentConfirmCommand can).
  */
 export function isAgentBuildCommand(command: StructuredReproductionCommand): boolean {
-  return isAllowedBuildCommand(command.program.trim(), command.args.map((arg) => String(arg)));
+  const normalized = unwrapSafeEnvCommand(command);
+  if (!normalized) return false;
+  return isAllowedBuildCommand(normalized.program.trim(), normalized.args.map((arg) => String(arg)));
 }
 
 /**
@@ -208,6 +220,32 @@ function analyzeStructuredCommandBaseSafety(command: StructuredReproductionComma
   if (destructiveDecision.blocked) return destructiveDecision;
 
   return { blocked: false };
+}
+
+function unwrapSafeEnvCommand(command: StructuredReproductionCommand): StructuredReproductionCommand | undefined {
+  const program = command.program.trim();
+  if (program.toLowerCase() !== "env") return command;
+  const args = command.args.map((arg) => String(arg));
+  let index = 0;
+  for (; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!isSafeEnvAssignment(arg)) break;
+  }
+  const wrappedProgram = args[index];
+  if (!wrappedProgram) return undefined;
+  if (wrappedProgram.includes("/") || wrappedProgram.includes("\\") || /[\s;&|`$<>]/.test(wrappedProgram)) return undefined;
+  return { program: wrappedProgram, args: args.slice(index + 1) };
+}
+
+function isSafeEnvAssignment(arg: string): boolean {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(arg);
+  if (!match) return false;
+  const value = match[2] ?? "";
+  if (/[\0\r\n;&|`<>]/.test(value)) return false;
+  if (looksLikeRpcEnvReference(value)) return false;
+  if (looksLikeRemoteUrl(value) && !isLocalUrl(value)) return false;
+  if (looksLikePathEscape(value)) return false;
+  return true;
 }
 
 function analyzeWorkspacePathSafety(args: string[]): CommandSafetyDecision {
@@ -356,7 +394,7 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "deno") return first === "cache";
   if (name === "mvn") return lower.some((arg) => ["compile", "package", "install", "dependency:resolve", "dependency:go-offline"].includes(arg));
   if (name === "gradle" || name === "gradlew") return lower.some((arg) => ["build", "assemble", "classes", "compilejava", "dependencies"].includes(arg));
-  if (name === "scarb") return ["build", "fetch", "check"].includes(first ?? "");
+  if (name === "scarb") return ["build", "fetch", "check", "metadata"].includes(first ?? "");
   if (name === "blueprint") return first === "build";
   if (name === "func-js" || name === "tolk-js" || name === "tact") return args.length > 0 && !isToolInfoArgs(args);
   if (name === "npx") return (first === "hardhat" && second === "compile") || (first === "blueprint" && second === "build");
@@ -393,6 +431,7 @@ function isAllowedLocalInspectionCommand(program: string, args: string[]): boole
   if (name === "pwd") return args.length === 0;
   if (name === "which") return args.length > 0 && args.every(isPlainToolName);
   if (isAllowedVersionInspection(name, args)) return true;
+  if (name === "scarb" && args[0]?.toLowerCase() === "metadata") return args.every((arg) => isSafeInspectionArg(name, arg));
   if (isAllowedJsonToolInspection(name, args)) return true;
   if (name === "test" || name === "[") return isAllowedFileTestInspection(name, args);
   if (name === "ls") return args.every((arg) => isSafeInspectionArg(name, arg));

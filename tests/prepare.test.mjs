@@ -71,9 +71,11 @@ test("prepareWorkspaceToolchain warms Cairo Scarb and TON Blueprint projects", a
       { tool: "starknet-foundry", version: "0.49.0", dir: "." },
     ]);
     assert.deepEqual(report.results.map((result) => [result.toolchain, result.command, result.cwd, result.ok]), [
+      ["scarb", "scarb fetch", ".", true],
       ["scarb", "scarb build", ".", true],
       ["blueprint", "blueprint build --all", "ton", true],
     ]);
+    assert.match(await readFile(logPath, "utf8"), /scarb fetch cwd=.*flounder-prepare-workspace-/);
     assert.match(await readFile(logPath, "utf8"), /scarb build cwd=.*flounder-prepare-workspace-/);
     assert.match(await readFile(logPath, "utf8"), /blueprint build --all cwd=.*flounder-prepare-workspace-.*\/ton/);
     assert.equal(log.events[0]?.kind, "audit_prepare_tool_versions");

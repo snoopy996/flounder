@@ -621,7 +621,12 @@ function shouldSkipCopyName(name: string): boolean {
 function appendLimited(current: string, next: string, maxBytes: number): string {
   const combined = current + next;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
-  return combined.slice(0, Math.max(0, maxBytes)) + "\n[truncated]\n";
+  const marker = "\n[truncated; preserving head and tail]\n";
+  if (maxBytes <= marker.length + 16) return combined.slice(0, Math.max(0, maxBytes));
+  const budget = maxBytes - marker.length;
+  const head = Math.floor(budget / 2);
+  const tail = budget - head;
+  return `${combined.slice(0, head)}${marker}${combined.slice(-tail)}`;
 }
 
 function redactLocalPaths(input: string, paths: string[]): string {
@@ -836,6 +841,7 @@ function sandboxEnv(workspace: string, tmpDir: string, cacheDir?: string): NodeJ
     TMP: tmpDir,
     XDG_CACHE_HOME: path.join(pkgCache, "xdg-cache"),
     CARGO_HOME: path.join(pkgCache, "cargo-home"),
+    SCARB_CACHE: path.join(pkgCache, "scarb-cache"),
     GOCACHE: path.join(pkgCache, "go-build-cache"),
     GOMODCACHE: path.join(pkgCache, "go-mod-cache"),
     NPM_CONFIG_CACHE: path.join(pkgCache, "npm-cache"),
