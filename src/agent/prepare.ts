@@ -59,25 +59,27 @@ export interface ToolVersionCheck {
   reason?: string;
 }
 
-export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorkspace; cfg: AuditorConfig; logger: RunLogger; cacheDir?: string }): Promise<PrepareReport> {
+export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorkspace; cfg: AuditorConfig; logger: RunLogger; cacheDir?: string; focusCommand?: ReproductionCommand }): Promise<PrepareReport> {
+  const allPlans = await detectToolchains(input.workspace.absolute);
+  const plans = focusPlans(allPlans, input.focusCommand);
   const pinnedToolVersions = await detectPinnedToolVersions(input.workspace.absolute);
+  const relevantPins = relevantPinnedToolVersions(pinnedToolVersions, plans);
   if (pinnedToolVersions.length > 0) {
     await input.logger.event("audit_prepare_tool_versions", { pins: pinnedToolVersions });
   }
-  const toolVersionChecks = await checkPinnedToolVersions(input, pinnedToolVersions);
+  const toolVersionChecks = await checkPinnedToolVersions(input, relevantPins);
   if (toolVersionChecks.length > 0) {
     await input.logger.event("audit_prepare_tool_version_checks", { checks: toolVersionChecks });
   }
-  const plans = await detectToolchains(input.workspace.absolute);
   const failedChecks = toolVersionChecks.filter((check) => !check.ok);
   if (failedChecks.length > 0) {
     await input.logger.event("audit_prepare_tool_version_mismatch", { checks: failedChecks });
-    await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results: [] });
-    return { ran: false, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results: [] };
+    await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions: relevantPins, toolVersionChecks, results: [] });
+    return { ran: false, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions: relevantPins, toolVersionChecks, results: [] };
   }
   if (plans.length === 0) {
     await input.logger.event("audit_prepare_skipped", { reason: "no supported toolchain manifest detected" });
-    return { ran: false, detected: [], pinnedToolVersions, toolVersionChecks, results: [] };
+    return { ran: false, detected: [], pinnedToolVersions: relevantPins, toolVersionChecks, results: [] };
   }
 
   await input.logger.event("audit_prepare_start", { toolchains: plans.map((plan) => plan.toolchain), timeoutMs: input.cfg.auditPrepareTimeoutMs });
@@ -117,8 +119,8 @@ export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorks
     }
   }
 
-  await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results });
-  return { ran: true, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results };
+  await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions: relevantPins, toolVersionChecks, results });
+  return { ran: true, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions: relevantPins, toolVersionChecks, results };
 }
 
 export function prepareToolVersionBlockingIssue(report: PrepareReport): string | undefined {
@@ -202,6 +204,72 @@ interface ToolchainPlan {
   toolchain: Toolchain;
   cwd?: string;
   commands: string[][];
+}
+
+function focusPlans(plans: ToolchainPlan[], command?: ReproductionCommand): ToolchainPlan[] {
+  if (!command) return plans;
+  const commandToolchain = commandToolchainName(command.program);
+  const cwd = normalizePlanDir(command.cwd ?? "");
+  let focused = commandToolchain
+    ? plans.filter((plan) => plan.toolchain === commandToolchain && planCoversCommandCwd(plan.cwd, cwd))
+    : plans.filter((plan) => cwd && sameOrNestedPlan(plan.cwd, cwd));
+  if (focused.length === 0 && commandToolchain) {
+    focused = plans.filter((plan) => plan.toolchain === commandToolchain);
+  }
+  if (focused.length === 0) return plans;
+  const focusDirs = focused.map((plan) => normalizePlanDir(plan.cwd ?? ""));
+  const dependencyPlans = plans.filter((plan) =>
+    ["npm", "pnpm", "yarn"].includes(plan.toolchain)
+    && focusDirs.some((dir) => sameOrNestedPlan(plan.cwd, dir) || sameOrNestedPlan(dir, plan.cwd ?? "")),
+  );
+  focused = [...dependencyPlans, ...focused];
+  return uniquePlans(focused);
+}
+
+function commandToolchainName(program: string): Toolchain | undefined {
+  const name = path.basename(program);
+  if (name === "npm" || name === "pnpm" || name === "yarn" || name === "cargo" || name === "go" || name === "forge" || name === "scarb" || name === "blueprint") return name;
+  return undefined;
+}
+
+function planCoversCommandCwd(planCwd: string | undefined, commandCwd: string): boolean {
+  const planDir = normalizePlanDir(planCwd ?? "");
+  const commandDir = normalizePlanDir(commandCwd);
+  return planDir === commandDir || commandDir.startsWith(`${planDir}/`);
+}
+
+function relevantPinnedToolVersions(pins: PinnedToolVersion[], plans: ToolchainPlan[]): PinnedToolVersion[] {
+  return pins.filter((pin) => plans.some((plan) => pinAppliesToPlan(pin, plan)));
+}
+
+function pinAppliesToPlan(pin: PinnedToolVersion, plan: ToolchainPlan): boolean {
+  if (pin.tool === "scarb" || pin.tool === "starknet-foundry" || pin.tool === "universal-sierra-compiler") {
+    return plan.toolchain === "scarb" && sameOrNestedPlan(pin.dir, plan.cwd ?? "");
+  }
+  return sameOrNestedPlan(pin.dir, plan.cwd ?? "");
+}
+
+function sameOrNestedPlan(a: string | undefined, b: string | undefined): boolean {
+  const left = normalizePlanDir(a ?? "");
+  const right = normalizePlanDir(b ?? "");
+  return left === right || left === "." || right === "." || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+function normalizePlanDir(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+  return normalized || ".";
+}
+
+function uniquePlans(plans: ToolchainPlan[]): ToolchainPlan[] {
+  const seen = new Set<string>();
+  const out: ToolchainPlan[] = [];
+  for (const plan of plans) {
+    const key = `${plan.toolchain}:${plan.cwd ?? "."}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(plan);
+  }
+  return out;
 }
 
 async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPlan[]> {

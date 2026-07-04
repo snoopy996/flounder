@@ -792,6 +792,44 @@ test("bash blocks build when pinned toolchain does not match sandbox image", asy
   }
 });
 
+test("bash prepare ignores sibling pinned toolchains outside the focused build command", async () => {
+  const dir = await tempDir();
+  const oldPath = process.env.PATH;
+  try {
+    const target = path.join(dir, "target");
+    const binDir = path.join(dir, "bin");
+    const logPath = path.join(dir, "tool.log");
+    await mkdir(target, { recursive: true });
+    await mkdir(path.join(target, "cairo"), { recursive: true });
+    await mkdir(binDir, { recursive: true });
+    await writeFile(path.join(target, "package.json"), "{\"scripts\":{\"test\":\"echo ok\"}}\n");
+    await writeFile(path.join(target, "yarn.lock"), "");
+    await writeFile(path.join(target, "cairo", "Scarb.toml"), "[package]\nname = \"audit_target\"\nversion = \"0.1.0\"\n");
+    await writeFile(path.join(target, "cairo", ".tool-versions"), "scarb 2.12.0\nstarknet-foundry 0.49.0\n");
+    const fakeYarn = path.join(binDir, "yarn");
+    await writeFile(fakeYarn, `#!/usr/bin/env bash\necho "yarn $PWD $*" >> ${JSON.stringify(logPath)}\nexit 0\n`);
+    await chmod(fakeYarn, 0o755);
+    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+
+    const cfg = defaultConfig();
+    cfg.sourcePaths = [target];
+    cfg.sandboxBackend = "host";
+    cfg.sandboxAllowHostFallback = true;
+    cfg.auditPrepare = true;
+    cfg.auditPrepareTimeoutMs = 10_000;
+    const logger = await tempLogger(dir);
+    const ctx = { cfg, source: [], corpus: [], memory: new ProjectMemory(path.join(dir, "memory.jsonl")), logger, session: newSession() };
+
+    const run = await tool("bash").run({ cmd: "yarn install --frozen-lockfile", purpose: "build" }, ctx);
+    assert.doesNotMatch(run.observation, /sandbox image\/toolchain preflight failed/);
+    assert.match(await readFile(logPath, "utf8"), /yarn .* install --frozen-lockfile/);
+    assert.equal(ctx.session.commandRuns.length, 1);
+  } finally {
+    process.env.PATH = oldPath;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("confirmed executable commands must link model-written tests to pristine target source", async () => {
   const dir = await tempDir();
   try {
