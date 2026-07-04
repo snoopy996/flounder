@@ -614,6 +614,7 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
     assert.ok(confirm.confirmKeys.includes("confirmed-bug"));
     assert.ok(confirm.confirmKeys.includes("kalreadyreproduced"), "confirm worklist carries prior decided findings as consolidation context");
     assert.ok(confirm.confirmKeys.includes("kgateblocked"), "confirm worklist carries reproduced decisions whose submission gates are still open");
+    assert.ok(confirm.confirmFindings.some((finding) => finding.id === "confirmed-bug" && finding.originId), "confirm worklist carries DB-backed finding seeds");
     assert.deepEqual(confirm.confirmSettledRows.map((row) => row.bug), ["prior reproduced withdrawal proof"]);
     assert.ok(confirm.confirmKeys.some((key) => /^origin:\d+:confirmed-bug$/.test(key)), "worklist carries origin selector for verify-artifact recovery");
 
@@ -1905,8 +1906,68 @@ test("api: project detail summarizes the latest prepare manifest and workspace q
     assert.deepEqual(confirmSpec.inputRunDirs, [auditRunDir]);
     assert.ok(confirmSpec.confirmKeys.includes("confirmed-bug"));
     assert.ok(confirmSpec.confirmKeys.includes("kalreadyreproduced"), "project confirm carries prior decided findings as consolidation context");
+    assert.ok(confirmSpec.confirmFindings.some((finding) => finding.id === "confirmed-bug" && finding.originId), "project confirm carries DB-backed finding seeds");
     assert.deepEqual(confirmSpec.confirmSettledRows.map((row) => row.bug), ["prior prepared source bug"]);
     assert.ok(confirmSpec.confirmKeys.some((key) => /^origin:\d+:confirmed-bug$/.test(key)), "confirm spec carries origin selector for verify-artifact recovery");
+  });
+});
+
+test("api: confirm launch carries DB-backed seeds when prior run artifact is missing", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "confirm-db-seed-missing-artifact",
+      sourcePaths: ["src"],
+      config: { sandboxConfirmNetwork: "none" },
+    }));
+    const missingRunDir = path.join(out, "missing-audit-findings-run");
+    let readyId;
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const auditRunId = store.startRun({ projectId: created.id, kind: "audit", runDir: missingRunDir });
+      store.upsertFindings(created.id, auditRunId, [{
+        findingKey: "kdbseed",
+        title: "Confirmed finding persisted without artifact",
+        location: "src/Target.sol:9",
+        severity: "high",
+        status: "confirmed-differential",
+        scopeId: "SCOPE-DB",
+        description: "DB-only confirmed finding.",
+        evidence: "Local executable evidence was persisted.",
+        exploitSketch: "Trigger the invariant violation.",
+        fix: "Bind the invariant.",
+        confidence: 0.91,
+      }]);
+      store.finishRun(auditRunId, "killed");
+      readyId = store.listFindings(created.id)[0].id;
+    } finally {
+      store.close();
+    }
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "confirm", findingIds: [readyId] }));
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.verb, "confirm");
+    assert.equal(spec.sandboxConfirmNetwork, "enabled");
+    assert.deepEqual(spec.inputRunDirs, [missingRunDir]);
+    assert.ok(spec.confirmKeys.includes("kdbseed"));
+    assert.ok(spec.confirmKeys.some((key) => key === `origin:${readyId}:kdbseed`));
+    assert.equal(spec.confirmFindings.length, 1);
+    assert.equal(spec.confirmFindings[0].id, "kdbseed");
+    assert.equal(spec.confirmFindings[0].originId, readyId);
+    assert.equal(spec.confirmFindings[0].confirmationStatus, "confirmed-differential");
+    assert.equal(spec.confirmFindings[0].scopeId, "SCOPE-DB");
+
+    const explicit = await json(await post(`/api/projects/${created.uuid}/runs`, {
+      verb: "confirm",
+      findingIds: [readyId],
+      sandboxConfirmNetwork: "none",
+    }));
+    const explicitJob = (await json(await fetch(base + "/api/jobs/" + explicit.jobId))).job;
+    const explicitSpec = JSON.parse(explicitJob.spec_json);
+    assert.equal(explicitSpec.sandboxConfirmNetwork, "none");
   });
 });
 

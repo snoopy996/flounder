@@ -7,7 +7,10 @@ ARG STARKNET_FOUNDRY_AARCH64_SHA256=7f5def2014b83a4147949cc1870e88f09d617e52e187
 ARG UNIVERSAL_SIERRA_COMPILER_VERSION=2.9.0
 ARG UNIVERSAL_SIERRA_COMPILER_X86_64_SHA256=c51bdb3fd5a544085c0b635de2431687f1decb224ff41a87be52f6afc518ab8a
 ARG UNIVERSAL_SIERRA_COMPILER_AARCH64_SHA256=845d981b7d13d8cea90110b07fec2b5212ffdb25ecee0a1c634e09689b5767b0
+ARG SOLCJS_VERSION=0.8.20
 ARG TARGETARCH
+
+ENV FOUNDRY_SOLC=/usr/local/bin/solc
 
 RUN set -eux; \
   case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
@@ -40,5 +43,63 @@ RUN set -eux; \
   sncast --version; \
   universal-sierra-compiler --version; \
   rm -rf /tmp/scarb /tmp/starknet-foundry /tmp/universal-sierra-compiler "/tmp/${scarb_archive}" "/tmp/${sn_archive}" "/tmp/${usc_archive}" /tmp/scarb-checksums.sha256
+
+RUN set -eux; \
+  npm install -g "solc@${SOLCJS_VERSION}"; \
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'args=()' \
+    'skip_next=0' \
+    'standard_json=0' \
+    'for arg in "$@"; do' \
+    '  if [ "$skip_next" = 1 ]; then skip_next=0; continue; fi' \
+    '  case "$arg" in' \
+    '    --allow-paths) skip_next=1 ;;' \
+    '    --allow-paths=*) ;;' \
+    '    --standard-json) standard_json=1; args+=("$arg") ;;' \
+    '    *) args+=("$arg") ;;' \
+    '  esac' \
+    'done' \
+    'out_file="$(mktemp)"' \
+    'err_file="$(mktemp)"' \
+    'set +e' \
+    'solcjs "${args[@]}" > "$out_file" 2> "$err_file"' \
+    'status=$?' \
+    'set -e' \
+    'cat "$err_file" >&2' \
+    'if [ "$standard_json" = 1 ]; then' \
+    '  started=0' \
+    '  while IFS= read -r line; do' \
+    '    if [ "$started" = 0 ]; then' \
+    '      if [[ "$line" == *"{"* ]]; then' \
+    '        prefix="${line%%\{*}"' \
+    '        printf "%s\n" "${line:${#prefix}}"' \
+    '        started=1' \
+    '      fi' \
+    '    else' \
+    '      printf "%s\n" "$line"' \
+    '    fi' \
+    '  done < "$out_file"' \
+    'else' \
+    '  cat "$out_file"' \
+    'fi' \
+    'rm -f "$out_file" "$err_file"' \
+    'exit "$status"' \
+    > /usr/local/bin/solc; \
+  chmod 0755 /usr/local/bin/solc; \
+  solc --version; \
+  mkdir -p /tmp/forge-smoke/src; \
+  printf '%s\n' \
+    '// SPDX-License-Identifier: MIT' \
+    'pragma solidity ^0.8.20;' \
+    'contract Smoke { function ok() external pure returns (uint256) { return 1; } }' \
+    > /tmp/forge-smoke/src/Smoke.sol; \
+  printf '%s\n' \
+    '[profile.default]' \
+    'src = "src"' \
+    'out = "out"' \
+    > /tmp/forge-smoke/foundry.toml; \
+  (cd /tmp/forge-smoke && forge build); \
+  rm -rf /tmp/forge-smoke
 
 WORKDIR /workspace

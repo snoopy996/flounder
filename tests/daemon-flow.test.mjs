@@ -264,6 +264,40 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
   });
 });
 
+test("daemon: confirm setup blockers surface as run health", async () => {
+  await withServerAndToken(async ({ base, token, out }) => {
+    const registered = await j(await asDaemon(base, token, "POST", "/api/daemon/register", { name: "d1" }));
+    const created = await j(await ui(base, "POST", "/api/projects", { name: "confirm-health", sourcePaths: ["."], buildRoot: "." }));
+    let jobId;
+    const store = MetadataStore.openForOutput(out);
+    try {
+      jobId = store.enqueueJob(created.name, { verb: "confirm" }, registered.daemonId);
+    } finally {
+      store.close();
+    }
+
+    await asDaemon(base, token, "POST", "/api/daemon/claim");
+    const { runId } = await j(await asDaemon(base, token, "POST", "/api/daemon/runs", {
+      jobId,
+      project: created.name,
+      kind: "confirm",
+      runDir: path.join(out, "confirm-health-run"),
+      budgets: {},
+    }));
+    await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, {
+      confirmDecisions: [
+        { bug: "compiler unavailable", reproduced: "could-not-set-up", recommendation: "needs-human", members: ["ksetup"] },
+      ],
+    });
+    await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { finish: { status: "done" } });
+
+    const detail = await j(await ui(base, "GET", `/api/projects/${created.uuid}`));
+    assert.equal(detail.latestRunHealth.status, "needs-resource");
+    assert.equal(detail.latestRunHealth.signals.couldNotSetUp, 1);
+    assert.match(detail.latestRunHealth.reasons[0], /could not be set up/);
+  });
+});
+
 test("daemon: activity POSTs surface on the run's live SSE log", async () => {
   await withServerAndToken(async ({ base, token }) => {
     await asDaemon(base, token, "POST", "/api/daemon/register", { name: "d1" });

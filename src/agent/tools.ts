@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { sandboxExecutionOptions, sandboxNetworkForPurpose, type AuditorConfig } from "../config.js";
 import { analyzeAgentBashCommandSafety, analyzeConfirmBashCommandSafety, isAgentBuildCommand, isAgentConfirmCommand } from "../security/policy.js";
-import { prepareWorkspaceToolchain } from "./prepare.js";
+import { prepareToolVersionBlockingIssue, prepareWorkspaceToolchain } from "./prepare.js";
 import {
   firstBlockedSandboxFile,
   matchSuccessPatterns,
@@ -92,6 +92,8 @@ export interface AgentSession {
   scratchFiles: Map<string, string>;
   /** Whether the toolchain warm-up has run for this session's workspace. */
   prepared?: boolean;
+  /** Blocking sandbox/toolchain preflight issue detected during warm-up. */
+  prepareBlock?: string;
   /** Persistent, host-isolated package cache (CARGO_HOME etc.) reused across runs. */
   buildCacheDir?: string;
   /**
@@ -343,7 +345,10 @@ const bashTool: AgentTool = {
     // Lazy warm-up: only a real test/build command needs dependencies, so prepare
     // the toolchain on first use rather than eagerly for every (possibly
     // read-only or unauthenticated) run.
-    if (isAgentConfirmCommand(normalized.command) || isAgentBuildCommand(normalized.command)) await ensurePrepared(ctx, workspace);
+    if (isAgentConfirmCommand(normalized.command) || isAgentBuildCommand(normalized.command)) {
+      const prepareBlock = await ensurePrepared(ctx, workspace);
+      if (prepareBlock) return { observation: `blocked: ${prepareBlock} Write resource_requests.json with kind "sandbox-image" or rebuild/select the correct target-specific image before retrying.` };
+    }
     ctx.session.counters.command += 1;
     const runId = `cmd${ctx.session.counters.command}`;
     await ctx.logger.event("audit_command_start", {
@@ -832,10 +837,15 @@ function dirname(normalizedPath: string): string {
   return idx === -1 ? "" : normalizedPath.slice(0, idx);
 }
 
-async function ensurePrepared(ctx: ToolContext, workspace: SandboxWorkspace): Promise<void> {
-  if (!ctx.cfg.auditPrepare || ctx.session.prepared) return;
+async function ensurePrepared(ctx: ToolContext, workspace: SandboxWorkspace): Promise<string | undefined> {
+  if (!ctx.cfg.auditPrepare) return undefined;
+  if (ctx.session.prepareBlock) return ctx.session.prepareBlock;
+  if (ctx.session.prepared) return undefined;
   ctx.session.prepared = true; // set before awaiting so a second test command does not re-trigger
-  await prepareWorkspaceToolchain({ workspace, cfg: ctx.cfg, logger: ctx.logger, ...(ctx.session.buildCacheDir ? { cacheDir: ctx.session.buildCacheDir } : {}) });
+  const report = await prepareWorkspaceToolchain({ workspace, cfg: ctx.cfg, logger: ctx.logger, ...(ctx.session.buildCacheDir ? { cacheDir: ctx.session.buildCacheDir } : {}) });
+  const issue = prepareToolVersionBlockingIssue(report);
+  if (issue) ctx.session.prepareBlock = issue;
+  return issue;
 }
 
 async function ensureWorkspace(ctx: ToolContext): Promise<SandboxWorkspace | undefined> {

@@ -40,6 +40,7 @@ export interface PrepareReport {
   ran: boolean;
   detected: Toolchain[];
   pinnedToolVersions: PinnedToolVersion[];
+  toolVersionChecks: ToolVersionCheck[];
   results: PrepareCommandResult[];
 }
 
@@ -49,15 +50,34 @@ export interface PinnedToolVersion {
   dir: string;
 }
 
+export interface ToolVersionCheck {
+  tool: string;
+  command: string;
+  expected: string;
+  actual?: string;
+  ok: boolean;
+  reason?: string;
+}
+
 export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorkspace; cfg: AuditorConfig; logger: RunLogger; cacheDir?: string }): Promise<PrepareReport> {
   const pinnedToolVersions = await detectPinnedToolVersions(input.workspace.absolute);
   if (pinnedToolVersions.length > 0) {
     await input.logger.event("audit_prepare_tool_versions", { pins: pinnedToolVersions });
   }
+  const toolVersionChecks = await checkPinnedToolVersions(input, pinnedToolVersions);
+  if (toolVersionChecks.length > 0) {
+    await input.logger.event("audit_prepare_tool_version_checks", { checks: toolVersionChecks });
+  }
   const plans = await detectToolchains(input.workspace.absolute);
+  const failedChecks = toolVersionChecks.filter((check) => !check.ok);
+  if (failedChecks.length > 0) {
+    await input.logger.event("audit_prepare_tool_version_mismatch", { checks: failedChecks });
+    await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results: [] });
+    return { ran: false, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results: [] };
+  }
   if (plans.length === 0) {
     await input.logger.event("audit_prepare_skipped", { reason: "no supported toolchain manifest detected" });
-    return { ran: false, detected: [], pinnedToolVersions, results: [] };
+    return { ran: false, detected: [], pinnedToolVersions, toolVersionChecks, results: [] };
   }
 
   await input.logger.event("audit_prepare_start", { toolchains: plans.map((plan) => plan.toolchain), timeoutMs: input.cfg.auditPrepareTimeoutMs });
@@ -97,8 +117,85 @@ export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorks
     }
   }
 
-  await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, results });
-  return { ran: true, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, results };
+  await input.logger.artifact("audit_prepare.json", { detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results });
+  return { ran: true, detected: plans.map((plan) => plan.toolchain), pinnedToolVersions, toolVersionChecks, results };
+}
+
+export function prepareToolVersionBlockingIssue(report: PrepareReport): string | undefined {
+  const failed = report.toolVersionChecks.filter((check) => !check.ok);
+  if (failed.length === 0) return undefined;
+  const details = failed.map((check) => {
+    const actual = check.actual ? `actual ${check.actual}` : (check.reason ?? "tool unavailable");
+    return `${check.tool} expected ${check.expected}, ${actual}`;
+  });
+  return `sandbox image/toolchain preflight failed: ${details.join("; ")}. Build or select a target-specific sandbox image that matches the project's pinned toolchain.`;
+}
+
+async function checkPinnedToolVersions(
+  input: { workspace: SandboxWorkspace; cfg: AuditorConfig; logger: RunLogger; cacheDir?: string },
+  pins: PinnedToolVersion[],
+): Promise<ToolVersionCheck[]> {
+  const specs = pins.flatMap((pin) => versionCheckSpecs(pin));
+  const out: ToolVersionCheck[] = [];
+  for (const spec of specs) {
+    const command: ReproductionCommand = {
+      program: spec.argv[0] ?? "",
+      args: spec.argv.slice(1),
+      timeoutMs: Math.min(input.cfg.auditPrepareTimeoutMs, 30_000),
+      expectedExitCode: 0,
+      ...(spec.cwd && spec.cwd !== "." ? { cwd: spec.cwd } : {}),
+    };
+    const run = await runSandboxCommand(
+      command,
+      input.workspace.absolute,
+      input.cfg.reproductionMaxLogBytes,
+      input.cfg.sourcePaths,
+      input.cacheDir,
+      sandboxExecutionOptions(input.cfg, "none"),
+    );
+    const combined = `${run.stdout}\n${run.stderr}`.trim();
+    const actual = firstNonEmptyLine(combined);
+    out.push({
+      tool: spec.tool,
+      command: spec.argv.join(" "),
+      expected: spec.expected,
+      ...(actual ? { actual } : {}),
+      ok: run.exitCode === 0 && !run.timedOut && versionOutputMatches(combined, spec.expected),
+      ...(run.exitCode !== 0 || run.timedOut ? { reason: run.timedOut ? "version command timed out" : `version command exited ${run.exitCode}` } : {}),
+    });
+  }
+  return out;
+}
+
+interface VersionCheckSpec {
+  tool: string;
+  expected: string;
+  argv: string[];
+  cwd?: string;
+}
+
+function versionCheckSpecs(pin: PinnedToolVersion): VersionCheckSpec[] {
+  if (pin.tool === "scarb") return [{ tool: "scarb", expected: pin.version, argv: ["scarb", "--version"], cwd: pin.dir }];
+  if (pin.tool === "starknet-foundry") {
+    return [
+      { tool: "snforge", expected: pin.version, argv: ["snforge", "--version"], cwd: pin.dir },
+      { tool: "sncast", expected: pin.version, argv: ["sncast", "--version"], cwd: pin.dir },
+    ];
+  }
+  if (pin.tool === "universal-sierra-compiler") return [{ tool: "universal-sierra-compiler", expected: pin.version, argv: ["universal-sierra-compiler", "--version"], cwd: pin.dir }];
+  return [];
+}
+
+function versionOutputMatches(output: string, expected: string): boolean {
+  return new RegExp(`(^|[^0-9A-Za-z.])${escapeRegExp(expected)}([^0-9A-Za-z.]|$)`).test(output);
+}
+
+function firstNonEmptyLine(output: string): string | undefined {
+  return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 interface ToolchainPlan {

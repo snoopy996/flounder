@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -753,6 +753,41 @@ test("read, write, edit, and bash operate on loaded material and the copied work
     assert.equal(ctx.session.commandRuns[0].passed, false);
     assert.equal(ctx.session.commandRuns[0].targetLinked, false);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("bash blocks build when pinned toolchain does not match sandbox image", async () => {
+  const dir = await tempDir();
+  const oldPath = process.env.PATH;
+  try {
+    const target = path.join(dir, "target");
+    const binDir = path.join(dir, "bin");
+    await mkdir(target, { recursive: true });
+    await mkdir(binDir, { recursive: true });
+    await writeFile(path.join(target, "Scarb.toml"), "[package]\nname = \"audit_target\"\nversion = \"0.1.0\"\n");
+    await writeFile(path.join(target, ".tool-versions"), "scarb 2.12.0\n");
+    const fakeScarb = path.join(binDir, "scarb");
+    await writeFile(fakeScarb, "#!/usr/bin/env bash\nif [ \"$1\" = \"--version\" ]; then echo 'scarb 2.19.0'; exit 0; fi\necho 'unexpected scarb command' >&2\nexit 0\n");
+    await chmod(fakeScarb, 0o755);
+    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+
+    const cfg = defaultConfig();
+    cfg.sourcePaths = [target];
+    cfg.sandboxBackend = "host";
+    cfg.sandboxAllowHostFallback = true;
+    cfg.auditPrepare = true;
+    cfg.auditPrepareTimeoutMs = 10_000;
+    const logger = await tempLogger(dir);
+    const ctx = { cfg, source: [], corpus: [], memory: new ProjectMemory(path.join(dir, "memory.jsonl")), logger, session: newSession() };
+
+    const run = await tool("bash").run({ cmd: "scarb build", purpose: "build" }, ctx);
+    assert.match(run.observation, /sandbox image\/toolchain preflight failed/);
+    assert.match(run.observation, /scarb expected 2\.12\.0, actual scarb 2\.19\.0/);
+    assert.match(run.observation, /resource_requests\.json/);
+    assert.equal(ctx.session.commandRuns.length, 0);
+  } finally {
+    process.env.PATH = oldPath;
     await rm(dir, { recursive: true, force: true });
   }
 });

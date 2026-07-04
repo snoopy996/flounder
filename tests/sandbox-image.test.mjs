@@ -35,13 +35,22 @@ test("Cairo sandbox image pins Scarb, Starknet Foundry, and Sierra compiler", as
   assert.match(dockerfile, /ARG SCARB_VERSION=2\.19\.0/);
   assert.match(dockerfile, /ARG STARKNET_FOUNDRY_VERSION=0\.62\.0/);
   assert.match(dockerfile, /ARG UNIVERSAL_SIERRA_COMPILER_VERSION=2\.9\.0/);
+  assert.match(dockerfile, /ARG SOLCJS_VERSION=0\.8\.20/);
+  assert.match(dockerfile, /ENV FOUNDRY_SOLC=\/usr\/local\/bin\/solc/);
   assert.match(dockerfile, /scarb-checksums\.sha256/);
   assert.match(dockerfile, /grep "\[ \*\]\$\{scarb_archive\}\$"/);
   assert.match(dockerfile, /universal-sierra-compiler\/releases\/download/);
   assert.match(dockerfile, /install -m 0755 \/tmp\/universal-sierra-compiler\/bin\/universal-sierra-compiler \/usr\/local\/bin\/universal-sierra-compiler/);
+  assert.match(dockerfile, /npm install -g "solc@\$\{SOLCJS_VERSION\}"/);
+  assert.match(dockerfile, /--allow-paths\) skip_next=1/);
+  assert.match(dockerfile, /--standard-json\) standard_json=1/);
+  assert.match(dockerfile, /solcjs "\$\{args\[@\]\}"/);
+  assert.match(dockerfile, /prefix="\$\{line%%\\\{\*\}"/);
   assert.match(dockerfile, /snforge --version/);
   assert.match(dockerfile, /sncast --version/);
   assert.match(dockerfile, /universal-sierra-compiler --version/);
+  assert.match(dockerfile, /solc --version/);
+  assert.match(dockerfile, /forge build/);
 });
 
 test("TON sandbox image pins Blueprint and in-process test dependencies", async () => {

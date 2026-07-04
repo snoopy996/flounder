@@ -65,6 +65,7 @@ export interface LaunchSpec {
   inputRunDir?: string | undefined; // confirm: the finished run dir to reproduce
   inputRunDirs?: string[] | undefined; // confirm (aggregate): several run dirs whose confirmed findings are unioned + reproduced together
   confirmKeys?: string[] | undefined; // confirm: restrict the work list to these finding content keys (project defaults pass the full current confirmed-finding context)
+  confirmFindings?: Array<Record<string, unknown>> | undefined; // confirm: DB-backed seed findings when prior run artifacts are missing/incomplete
   confirmSettledRows?: ConfirmSettledRow[] | undefined; // confirm: prior reproduced/not-reproduced decisions to carry forward across batches
   reportFindings?: ReportFindingSpec[] | undefined; // report: confirmed/reproduced bugs to package as formal Markdown reports
   pipeline?: boolean | undefined; // run: project/CLI clue pipeline (prepare if needed -> map/dig -> verify -> confirm -> report)

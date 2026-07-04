@@ -43,7 +43,7 @@ export const IMPACT_INVENTORY_FILE = "impact_inventory.json";
 
 export async function runConfirm(
   cfg: AuditorConfig,
-  options: { inputRunDir: string; inputRunDirs?: string[]; confirmKeys?: string[]; settledDecisions?: ConfirmDecisionRow[]; maxSteps?: number; fresh?: boolean; streamEvents?: boolean; signal?: AbortSignal; onRun?: (runId: number) => void; onActivity?: (event: { kind: string; delta?: string; tool?: string; step?: number }) => void; makeTracker?: RunTrackerFactory },
+  options: { inputRunDir: string; inputRunDirs?: string[]; confirmKeys?: string[]; inlineFindings?: Array<Record<string, unknown>>; settledDecisions?: ConfirmDecisionRow[]; maxSteps?: number; fresh?: boolean; streamEvents?: boolean; signal?: AbortSignal; onRun?: (runId: number) => void; onActivity?: (event: { kind: string; delta?: string; tool?: string; step?: number }) => void; makeTracker?: RunTrackerFactory },
 ): Promise<ConfirmRunResult> {
   // Confirm needs a real agent that can fork a live network and run real nodes; the
   // mock/CLI fallbacks cannot, so this mode requires a pi-session provider.
@@ -69,14 +69,27 @@ export async function runConfirm(
   const logger = new RunLogger(confirmCfg.outputDir, `${confirmCfg.targetName}-confirm`, startedAt, { streamEvents: options.streamEvents ?? false });
   await logger.init();
   await writeLastRunPointer(path.dirname(logger.runDir), logger.runDir, `${confirmCfg.targetName}-confirm`);
+  const inlineFindings = (options.inlineFindings ?? []).filter((item) => item && typeof item === "object" && !Array.isArray(item));
+  if (inlineFindings.length > 0) await logger.artifact(INLINE_FINDINGS_FILE, inlineFindings);
 
   // 1. Freeze + fingerprint the input run BEFORE any network access. This anchors the
   // claim that the findings were produced blind (no network), independent of anything
   // the open-world pass later reads online.
   const provenances = [];
-  for (const dir of runDirs) provenances.push(await freezeInputRun(dir));
-  const provenance = { ...provenances[0]!, frozenFiles: provenances.flatMap((p) => p.frozenFiles) };
-  await logger.artifact("confirm_provenance.json", { ...provenance, runDirs: runDirs.map((d) => publicPath(d)) });
+  const skippedRunDirs: Array<{ inputRunDir: string; error: string }> = [];
+  for (const dir of runDirs) {
+    try {
+      provenances.push(await freezeInputRun(dir));
+    } catch (error) {
+      if (inlineFindings.length === 0) throw error;
+      skippedRunDirs.push({ inputRunDir: publicPath(dir), error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  if (inlineFindings.length > 0) provenances.push(freezeInlineFindings(inlineFindings));
+  const provenance = provenances.length > 0
+    ? { ...provenances[0]!, frozenFiles: provenances.flatMap((p) => p.frozenFiles) }
+    : { inputRunDir: publicPath(inputRunDir), frozenAt: new Date().toISOString(), frozenFiles: [] };
+  await logger.artifact("confirm_provenance.json", { ...provenance, runDirs: runDirs.map((d) => publicPath(d)), ...(skippedRunDirs.length > 0 ? { skippedRunDirs } : {}) });
   await logger.event("audit_confirm_freeze", { runDirs: runDirs.map((d) => publicPath(d)), files: provenance.frozenFiles.length });
 
   // 2. Load every source run's confirmed findings and union them as the work list, deduped by the
@@ -90,17 +103,23 @@ export async function runConfirm(
   const selectors = parseConfirmSelectors(options.confirmKeys);
   const seenKeys = new Set<string>();
   const priorFindings: Array<Record<string, unknown>> = [];
+  const addPriorFinding = (finding: Record<string, unknown>) => {
+    const key = findingContentKey(finding.scopeId, finding.location, finding.title);
+    const selectedKey = matchConfirmSelector(selectors, key, finding.originId);
+    if (!selectedKey) return;
+    if (seenKeys.has(selectedKey)) return;
+    seenKeys.add(selectedKey);
+    finding.id = selectedKey;
+    priorFindings.push(finding);
+  };
   for (const dir of runDirs) {
-    for (const finding of await loadConfirmedFindings(dir)) {
-      const key = findingContentKey(finding.scopeId, finding.location, finding.title);
-      const selectedKey = matchConfirmSelector(selectors, key, finding.originId);
-      if (!selectedKey) continue;
-      if (seenKeys.has(selectedKey)) continue;
-      seenKeys.add(selectedKey);
-      finding.id = selectedKey;
-      priorFindings.push(finding);
+    try {
+      for (const finding of await loadConfirmedFindings(dir)) addPriorFinding(finding);
+    } catch (error) {
+      if (inlineFindings.length === 0) throw error;
     }
   }
+  for (const finding of inlineFindings) addPriorFinding(finding);
   if (priorFindings.length === 0) {
     throw new Error(`flounder confirm: no matching confirmed findings across ${runDirs.length} run dir(s) (nothing pending to confirm).`);
   }
@@ -306,6 +325,7 @@ export async function runConfirm(
 // --- freeze / provenance -----------------------------------------------------
 
 const FROZEN_FILE = /^(audit_report\.md|audit_findings\.json|report_[a-z0-9_.-]+\.md)$/;
+const INLINE_FINDINGS_FILE = "control_plane_confirm_findings.json";
 
 async function freezeInputRun(runDir: string): Promise<ConfirmProvenance> {
   let names: string[] = [];
@@ -324,6 +344,19 @@ async function freezeInputRun(runDir: string): Promise<ConfirmProvenance> {
     }
   }
   return { inputRunDir: publicPath(runDir), frozenAt: new Date().toISOString(), frozenFiles };
+}
+
+function freezeInlineFindings(findings: Array<Record<string, unknown>>): ConfirmProvenance {
+  const body = JSON.stringify(findings, null, 2);
+  return {
+    inputRunDir: "control-plane-db",
+    frozenAt: new Date().toISOString(),
+    frozenFiles: [{
+      path: INLINE_FINDINGS_FILE,
+      sha256: createHash("sha256").update(body).digest("hex"),
+      bytes: Buffer.byteLength(body),
+    }],
+  };
 }
 
 // --- loading the prior run ---------------------------------------------------
