@@ -2126,6 +2126,7 @@ async function runLaunch(c: Ctx): Promise<void> {
   }
   const prepared = applyPreparedWorkspaceIfNeeded(spec, runs);
   if (!prepared.ok) return sendJson(c.res, 400, { error: prepared.error });
+  resumeInterruptedCoverageBatch(spec, progress, runs);
   promoteSettledPipelineCoverageBatch(spec, c.store, projectId, progress, currentResultRunIds, materialBoundary, runs);
   const materialDrift = verifyMaterialDrift(c.store, projectId, spec.verifyFindings, body.allowMaterialDrift === true);
   if (materialDrift) return sendJson(c.res, 409, materialDrift);
@@ -2235,6 +2236,31 @@ function resetPipelineCoverageForUnknownInventory(spec: LaunchSpec): void {
     spec.coverageTarget = undefined;
     spec.maxScopes = undefined;
   }
+}
+
+function resumeInterruptedCoverageBatch(spec: LaunchSpec, progress: Coverage, runs: Array<Record<string, unknown>>): void {
+  if (spec.verb !== "run" && spec.verb !== "audit") return;
+  if (spec.scope || spec.region || spec.verifyFindings !== undefined) return;
+  if (spec.maxScopes !== 0) return;
+  const pending = Math.max(0, Math.floor(progress.pending));
+  if (pending <= 0) return;
+  const remaining = latestInterruptedCoverageBatchRemainder(runs);
+  if (remaining <= 0) return;
+  spec.maxScopes = Math.min(pending, remaining);
+}
+
+function latestInterruptedCoverageBatchRemainder(runs: Array<Record<string, unknown>>): number {
+  const ordered = [...runs].sort((a, b) => numberValue(b.id) - numberValue(a.id));
+  for (const run of ordered) {
+    const kind = stringValue(run.kind);
+    if (kind !== "run" && kind !== "audit") continue;
+    const status = stringValue(run.status);
+    if (status !== "killed" && status !== "error") continue;
+    const target = Math.max(0, Math.floor(numberValue(run.run_scopes_target)));
+    const done = Math.max(0, Math.floor(numberValue(run.run_scopes_done)));
+    if (target > 0 && done < target) return target - done;
+  }
+  return 0;
 }
 
 function promoteSettledPipelineCoverageBatch(

@@ -331,6 +331,41 @@ test("api: standard coverage fills the project up to 30 audited scopes instead o
   });
 });
 
+test("api: standard coverage resumes an interrupted batch before requiring explicit coverage", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "standard-interrupted-batch",
+      sourcePaths: ["./src"],
+      config: { scopeCoverageMode: "standard" },
+    }));
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.upsertScopes(created.id, [
+        ...Array.from({ length: 58 }, (_, i) => ({ scopeId: `audited-${i}`, title: `Audited ${i}`, status: "audited", score: 100 - i })),
+        ...Array.from({ length: 34 }, (_, i) => ({ scopeId: `pending-${i}`, title: `Pending ${i}`, status: "pending", score: 34 - i })),
+      ]);
+      const runId = store.startRun({ projectId: created.id, kind: "run", runDir: path.join(out, "standard-interrupted-batch-run") });
+      store.updateRunScopes(runId, 28, 30);
+      store.finishRun(runId, "killed");
+    } finally {
+      store.close();
+    }
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run" }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.pipeline, false);
+    assert.equal(spec.coverageMode, "standard");
+    assert.equal(spec.coverageTarget, 30);
+    assert.equal(spec.maxScopes, 2);
+  });
+});
+
 test("api: full coverage continues prepared pending inventory without a scope cap", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
@@ -466,6 +501,51 @@ test("api: standard pipeline continue finishes pending verify work before openin
     assert.equal(pipelineSpec.coverageMode, "standard");
     assert.equal(pipelineSpec.coverageTarget, 30);
     assert.equal(pipelineSpec.maxScopes, 0);
+    assert.equal(pipelineSpec.sandboxConfirmNetwork, "enabled");
+  });
+});
+
+test("api: standard pipeline continue resumes an interrupted batch before pending verify work", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "standard-pipeline-interrupted-batch",
+      sourcePaths: ["./src"],
+      config: { scopeCoverageMode: "standard" },
+    }));
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.upsertScopes(created.id, [
+        ...Array.from({ length: 58 }, (_, i) => ({ scopeId: `audited-${i}`, title: `Audited ${i}`, status: "audited", score: 100 - i })),
+        ...Array.from({ length: 34 }, (_, i) => ({ scopeId: `pending-${i}`, title: `Pending ${i}`, status: "pending", score: 34 - i })),
+      ]);
+      const runId = store.startRun({ projectId: created.id, kind: "run", runDir: path.join(out, "standard-pipeline-interrupted-batch-run") });
+      store.updateRunScopes(runId, 28, 30);
+      store.upsertFindings(created.id, runId, [
+        {
+          findingKey: "ksuspected",
+          title: "Needs execution verification",
+          location: "src/A.sol:1",
+          severity: "high",
+          status: "suspected",
+          evidence: "candidate",
+        },
+      ]);
+      store.finishRun(runId, "killed");
+    } finally {
+      store.close();
+    }
+
+    const pipeline = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run", pipeline: true }));
+    assert.equal(pipeline.queued, true);
+    const pipelineJob = (await json(await fetch(base + "/api/jobs/" + pipeline.jobId))).job;
+    const pipelineSpec = JSON.parse(pipelineJob.spec_json);
+    assert.equal(pipelineSpec.pipeline, true);
+    assert.equal(pipelineSpec.coverageMode, "standard");
+    assert.equal(pipelineSpec.coverageTarget, 30);
+    assert.equal(pipelineSpec.maxScopes, 2);
     assert.equal(pipelineSpec.sandboxConfirmNetwork, "enabled");
   });
 });
