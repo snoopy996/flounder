@@ -804,14 +804,11 @@ function isExecutionConfirmedFinding(finding: FindingRow): boolean {
 
 function pendingConfirmFindings(rows: FindingRow[] | undefined, requiresConfirmation = true, decisions?: ConfirmDecision[]): FindingRow[] {
   if (!requiresConfirmation) return [];
-  const readinessWorkKeys = new Set((decisions ?? []).filter(needsSubmissionReadinessWork).flatMap(confirmDecisionMemberKeys));
-  const decidedFindingKeys = new Set((decisions ?? []).filter((decision) => !needsSubmissionReadinessWork(decision)).flatMap(confirmDecisionMemberKeys));
+  const decidedFindingKeys = new Set((decisions ?? []).flatMap(confirmDecisionMemberKeys));
   return activeFindings(rows).filter((finding) =>
     isExecutionConfirmedFinding(finding)
-    && (
-      (!finding.confirm_status && !(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase())))
-      || Boolean(finding.finding_key && readinessWorkKeys.has(finding.finding_key.toLowerCase()))
-    )
+    && !finding.confirm_status
+    && !(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase()))
   );
 }
 

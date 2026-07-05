@@ -1112,6 +1112,15 @@ function confirmDecisionMemberKeys(row: Record<string, unknown>): string[] {
   return [...keys];
 }
 
+function confirmDecisionKeySet(rows: Array<Record<string, unknown>>): Set<string> {
+  return new Set(rows.flatMap(confirmDecisionMemberKeys));
+}
+
+function findingRowCoveredByDecision(row: Record<string, unknown>, decisionKeys: Set<string>): boolean {
+  const key = stringValue(row.finding_key).toLowerCase();
+  return Boolean(key && decisionKeys.has(key));
+}
+
 function linkedFindingsForDecision(store: MetadataStore, projectId: number, decision: Record<string, unknown>): Array<Record<string, unknown>> {
   const keys = new Set(confirmDecisionMemberKeys(decision));
   if (keys.size === 0) return [];
@@ -2325,11 +2334,12 @@ function pipelinePostAuditWorkPending(
   const requiresRealTargetConfirmation = latestPrepareRequiresRealTargetConfirmation(runs);
   if (requiresRealTargetConfirmation) {
     const currentDecisions = currentConfirmDecisions(store.listConfirmDecisions(projectId).filter((row) => rowBelongsToCurrentMaterial(row, currentResultRunIds, materialBoundary)));
-    const submissionWorkKeys = new Set(currentDecisions.filter((row) => needsSubmissionReadinessWork(row)).flatMap(confirmDecisionMemberKeys));
+    const decisionKeys = confirmDecisionKeySet(currentDecisions);
     const pending = store.pendingConfirmable(projectId)
       .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
-      .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
-    if (pending.length > 0 || submissionWorkKeys.size > 0) return true;
+      .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary))
+      .filter((row) => !findingRowCoveredByDecision(row as unknown as Record<string, unknown>, decisionKeys));
+    if (pending.length > 0) return true;
   }
   const reports = reportWorklist(store, projectId, [], currentResultRunIds, materialBoundary, requiresRealTargetConfirmation);
   return Array.isArray(reports.findings) && reports.findings.length > 0;
@@ -3851,17 +3861,15 @@ async function daemonPipelineWorklist(c: Ctx): Promise<void> {
       return sendJson(c.res, 200, { phase, requiresRealTargetConfirmation, inputRunDirs: [], confirmKeys: [] });
     }
     const currentDecisions = currentConfirmDecisions(c.store.listConfirmDecisions(projectId).filter((row) => rowBelongsToCurrentMaterial(row, currentResultRunIds, materialBoundary)));
-    const submissionWorkKeys = new Set(currentDecisions.filter((row) => needsSubmissionReadinessWork(row)).flatMap(confirmDecisionMemberKeys));
+    const decisionKeys = confirmDecisionKeySet(currentDecisions);
     const pending = c.store.pendingConfirmable(projectId)
       .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
-      .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
-    if (pending.length === 0 && submissionWorkKeys.size === 0) {
+      .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary))
+      .filter((row) => !findingRowCoveredByDecision(row as unknown as Record<string, unknown>, decisionKeys));
+    if (pending.length === 0) {
       return sendJson(c.res, 200, { phase, requiresRealTargetConfirmation, inputRunDirs: [], confirmKeys: [] });
     }
-    const context = c.store.confirmableContext(projectId)
-      .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
-      .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
-    const rows = context.length > 0 ? context : pending;
+    const rows = pending;
     return sendJson(c.res, 200, {
       phase,
       requiresRealTargetConfirmation,

@@ -505,6 +505,61 @@ test("api: standard pipeline continue finishes pending verify work before openin
   });
 });
 
+test("api: standard pipeline continue opens next scope batch when only needs-human decisions remain", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "standard-cumulative-needs-human",
+      sourcePaths: ["./src"],
+      config: { scopeCoverageMode: "standard" },
+    }));
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.upsertScopes(created.id, [
+        ...Array.from({ length: 30 }, (_, i) => ({ scopeId: `audited-${i}`, title: `Audited ${i}`, status: "audited", score: 30 - i })),
+        ...Array.from({ length: 12 }, (_, i) => ({ scopeId: `pending-${i}`, title: `Pending ${i}`, status: "pending", score: 12 - i })),
+      ]);
+      const auditRun = store.startRun({ projectId: created.id, kind: "audit", runDir: path.join(out, "standard-cumulative-needs-human-audit") });
+      store.upsertFindings(created.id, auditRun, [
+        {
+          findingKey: "kgated",
+          title: "Locally reproduced but human-gated",
+          location: "src/A.sol:1",
+          severity: "medium",
+          status: "confirmed-executable",
+          evidence: "local proof",
+        },
+      ]);
+      store.finishRun(auditRun, "done");
+      const confirmRun = store.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "standard-cumulative-needs-human-confirm") });
+      store.upsertConfirmDecisions(created.id, confirmRun, [
+        {
+          bug: "Locally reproduced but human-gated",
+          reproduced: "yes",
+          recommendation: "needs-human",
+          members: ["kgated"],
+          reproEvidence: "Forge harness used published source; live deployment and funds-at-risk were not established.",
+          humanGates: "Live deployment and payout eligibility need human review.",
+        },
+      ]);
+      store.finishRun(confirmRun, "done");
+    } finally {
+      store.close();
+    }
+
+    const pipeline = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run", pipeline: true }));
+    assert.equal(pipeline.queued, true);
+    const pipelineJob = (await json(await fetch(base + "/api/jobs/" + pipeline.jobId))).job;
+    const pipelineSpec = JSON.parse(pipelineJob.spec_json);
+    assert.equal(pipelineSpec.pipeline, true);
+    assert.equal(pipelineSpec.coverageMode, "standard");
+    assert.equal(pipelineSpec.coverageTarget, 30);
+    assert.equal(pipelineSpec.maxScopes, 12);
+  });
+});
+
 test("api: standard pipeline continue resumes an interrupted batch before pending verify work", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();
@@ -746,8 +801,8 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
       body: JSON.stringify({ project: "pipeline-verify-worklist", phase: "confirm" }),
     }));
     assert.ok(confirm.confirmKeys.includes("confirmed-bug"));
-    assert.ok(confirm.confirmKeys.includes("kalreadyreproduced"), "confirm worklist carries prior decided findings as consolidation context");
-    assert.ok(confirm.confirmKeys.includes("kgateblocked"), "confirm worklist carries reproduced decisions whose submission gates are still open");
+    assert.ok(!confirm.confirmKeys.includes("kalreadyreproduced"), "confirm worklist skips prior decided findings");
+    assert.ok(!confirm.confirmKeys.includes("kgateblocked"), "confirm worklist skips needs-human decisions already covered by confirm_decision rows");
     assert.ok(confirm.confirmFindings.some((finding) => finding.id === "confirmed-bug" && finding.originId), "confirm worklist carries DB-backed finding seeds");
     assert.deepEqual(confirm.confirmSettledRows.map((row) => row.bug), ["prior reproduced withdrawal proof"]);
     assert.ok(confirm.confirmKeys.some((key) => /^origin:\d+:confirmed-bug$/.test(key)), "worklist carries origin selector for verify-artifact recovery");

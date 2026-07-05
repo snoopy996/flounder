@@ -600,11 +600,11 @@ export function phaseState(detail: ProjectDetail, progress: Coverage): PhaseStat
   const conf = latest("confirm");
   const synthesis = stages(latestRunWithStage(runs, "synthesis")).synthesis;
   const requiresConfirmation = needsRealTargetConfirmation(detail);
-  const readinessWorkKeys = new Set(decisions.filter(needsSubmissionReadinessWork).flatMap(confirmDecisionMemberKeys));
-  const decidedFindingKeys = new Set(decisions.filter((decision) => !needsSubmissionReadinessWork(decision)).flatMap(confirmDecisionMemberKeys));
+  const decidedFindingKeys = new Set(decisions.flatMap(confirmDecisionMemberKeys));
   const pendingConfirmRaw = requiresConfirmation
     ? findings.filter((finding) => isExecutionConfirmedFinding(finding)
-      && ((!finding.confirm_status && !findingCoveredByDecision(finding, decidedFindingKeys)) || findingCoveredByDecision(finding, readinessWorkKeys))).length
+      && !finding.confirm_status
+      && !findingCoveredByDecision(finding, decidedFindingKeys)).length
     : 0;
   const pendingVerify = findings.filter((finding) => finding.status === "suspected" || finding.status === "confirmed-source").length;
   const locallyVerified = findings.filter(isExecutionConfirmedFinding).length;
