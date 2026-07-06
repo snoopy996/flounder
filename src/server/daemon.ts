@@ -272,36 +272,38 @@ async function runPipelineJob(
     await ctx.flushTracker();
   }
 
-  const confirm = await pipelineWorklist(base, headers, spec.target, "confirm");
-  if (confirm.inputRunDir && confirm.inputRunDirs.length > 0 && confirm.confirmKeys.length > 0) {
-    const confirmSpec: LaunchSpec = {
-      ...spec,
-      verb: "confirm",
-      dir: undefined,
-      sourcePaths: [staged],
-      buildRoot: staged,
-      inputRunDir: confirm.inputRunDir,
-      inputRunDirs: confirm.inputRunDirs,
-      confirmKeys: confirm.confirmKeys,
-      ...(confirm.confirmFindings ? { confirmFindings: confirm.confirmFindings } : {}),
-      ...(confirm.confirmSettledRows ? { confirmSettledRows: confirm.confirmSettledRows } : {}),
-    };
-    const confirmCfg = specToConfig(confirmSpec, ctx.out, ctx.workspace);
-    await requireSandboxReady(confirmCfg, "confirm", ctx);
-    await runConfirm(confirmCfg, {
-      inputRunDir: confirmSpec.inputRunDir!,
-      signal: ctx.signal,
-      makeTracker: ctx.makeTracker,
-      onActivity: ctx.onActivity,
-      ...(confirmSpec.inputRunDirs ? { inputRunDirs: confirmSpec.inputRunDirs } : {}),
-      ...(confirmSpec.confirmKeys ? { confirmKeys: confirmSpec.confirmKeys } : {}),
-      ...(confirmSpec.confirmFindings ? { inlineFindings: confirmSpec.confirmFindings } : {}),
-      ...(confirmSpec.confirmSettledRows ? { settledDecisions: confirmSpec.confirmSettledRows } : {}),
-      ...(spec.maxSteps !== undefined ? { maxSteps: spec.maxSteps } : {}),
-      ...(spec.fresh ? { fresh: true } : {}),
-    });
-    await ctx.flushTracker();
-  }
+  await drainPipelineConfirmWork(
+    () => pipelineWorklist(base, headers, spec.target, "confirm"),
+    async (confirm) => {
+      const confirmSpec: LaunchSpec = {
+        ...spec,
+        verb: "confirm",
+        dir: undefined,
+        sourcePaths: [staged],
+        buildRoot: staged,
+        inputRunDir: confirm.inputRunDir!,
+        inputRunDirs: confirm.inputRunDirs,
+        confirmKeys: confirm.confirmKeys,
+        ...(confirm.confirmFindings ? { confirmFindings: confirm.confirmFindings } : {}),
+        ...(confirm.confirmSettledRows ? { confirmSettledRows: confirm.confirmSettledRows } : {}),
+      };
+      const confirmCfg = specToConfig(confirmSpec, ctx.out, ctx.workspace);
+      await requireSandboxReady(confirmCfg, "confirm", ctx);
+      await runConfirm(confirmCfg, {
+        inputRunDir: confirmSpec.inputRunDir!,
+        signal: ctx.signal,
+        makeTracker: ctx.makeTracker,
+        onActivity: ctx.onActivity,
+        ...(confirmSpec.inputRunDirs ? { inputRunDirs: confirmSpec.inputRunDirs } : {}),
+        ...(confirmSpec.confirmKeys ? { confirmKeys: confirmSpec.confirmKeys } : {}),
+        ...(confirmSpec.confirmFindings ? { inlineFindings: confirmSpec.confirmFindings } : {}),
+        ...(confirmSpec.confirmSettledRows ? { settledDecisions: confirmSpec.confirmSettledRows } : {}),
+        ...(spec.maxSteps !== undefined ? { maxSteps: spec.maxSteps } : {}),
+        ...(spec.fresh ? { fresh: true } : {}),
+      });
+      await ctx.flushTracker();
+    },
+  );
 
   const report = await pipelineWorklist(base, headers, spec.target, "report");
   if (report.reportFindings.length > 0) {
@@ -324,7 +326,7 @@ async function runPipelineJob(
   }
 }
 
-async function pipelineWorklist(base: string, headers: Record<string, string>, project: string, phase: "verify" | "confirm" | "report", verifyFromStart = false): Promise<{
+type PipelineWorklist = {
   verifyFindings: unknown[];
   inputRunDir?: string;
   inputRunDirs: string[];
@@ -332,7 +334,34 @@ async function pipelineWorklist(base: string, headers: Record<string, string>, p
   confirmFindings?: Array<Record<string, unknown>>;
   confirmSettledRows?: LaunchSpec["confirmSettledRows"];
   reportFindings: ReportFindingSpec[];
-}> {
+};
+
+export async function drainPipelineConfirmWork(
+  loadWork: () => Promise<PipelineWorklist>,
+  runWork: (work: PipelineWorklist) => Promise<void>,
+): Promise<number> {
+  const seen = new Set<string>();
+  let runs = 0;
+  for (;;) {
+    const work = await loadWork();
+    if (!hasPipelineConfirmWork(work)) return runs;
+    const fingerprint = pipelineConfirmWorkFingerprint(work);
+    if (seen.has(fingerprint)) return runs;
+    seen.add(fingerprint);
+    await runWork(work);
+    runs += 1;
+  }
+}
+
+function hasPipelineConfirmWork(work: PipelineWorklist): boolean {
+  return Boolean(work.inputRunDir && work.inputRunDirs.length > 0 && work.confirmKeys.length > 0);
+}
+
+function pipelineConfirmWorkFingerprint(work: PipelineWorklist): string {
+  return [...new Set(work.confirmKeys.map((key) => key.trim()).filter(Boolean))].sort().join("\n");
+}
+
+async function pipelineWorklist(base: string, headers: Record<string, string>, project: string, phase: "verify" | "confirm" | "report", verifyFromStart = false): Promise<PipelineWorklist> {
   const res = await fetch(base + "/api/daemon/pipeline-worklist", {
     method: "POST",
     headers,
