@@ -293,6 +293,7 @@ test("run health distinguishes blocked, shallow, and coverage-incomplete runs", 
     coverageGaps: [{ id: "G1", status: "open", obligation: "Parser length must bind payload bytes", reason: "Budget ended before parser sink was audited" }],
   }).status, "needs-coverage");
   assert.equal(buildRunHealth({ ...base, stoppedReason: "error" }).status, "infra-failed");
+  assert.equal(buildRunHealth({ ...base, infraErrors: 1 }).status, "infra-failed");
 });
 
 test("prepare checkpoint guard blocks optional work after source is staged but manifest components are empty", () => {
@@ -1269,11 +1270,34 @@ test("independent refutation: a skeptic verdict is attached to each confirmed fi
         return JSON.stringify({ refuted: false, reason: "could not refute" });
       },
     };
-    const verdicts = await runRefutation({ findings, source, cfg, llm, logger, max: 8 });
+    const result = await runRefutation({ findings, source, cfg, llm, logger, max: 8 });
+    const verdicts = result.verdicts;
     assert.equal(verdicts.length, 2);
+    assert.equal(result.errors.length, 0);
     assert.equal(findings[0].refutation.refuted, false);
     assert.equal(findings[1].refutation.refuted, true);
     assert.match(findings[1].refutation.reason, /enforced/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refutation reports model-call errors without manufacturing a verdict", async () => {
+  const dir = await tempDir();
+  try {
+    const cfg = defaultConfig();
+    const logger = await tempLogger(dir);
+    const source = [{ path: "x.rs", kind: "source", content: "fn check() {}\n" }];
+    const findings = [
+      { id: "f1", title: "candidate", severity: "high", location: "x.rs:1", description: "", evidence: "", exploitSketch: "", fix: "", confidence: 0.9, confirmationStatus: "confirmed-executable" },
+    ];
+    const llm = { async complete() { throw new Error("session completion returned no text"); } };
+    const result = await runRefutation({ findings, source, cfg, llm, logger, max: 8 });
+    assert.equal(result.attempted, 1);
+    assert.equal(result.verdicts.length, 0);
+    assert.equal(result.errors.length, 1);
+    assert.equal(findings[0].refutation, undefined);
+    assert.match(result.errors[0].error, /no text/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

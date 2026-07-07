@@ -199,6 +199,7 @@ export async function runAudit(
   // Set when concurrent digs already ran differential confirmation in their own
   // isolated workspaces, so the shared post-loop differential stage skips them.
   let digDifferentialDone = false;
+  const refutationErrors: Array<{ phase: "refutation" | "appeal-refutation"; findingId: string; error: string }> = [];
 
   if (cfg.auditVerify) {
     auditMode = "verify";
@@ -630,7 +631,8 @@ export async function runAudit(
       const pocFiles = [...session.scratchFiles.entries()]
         .filter(([scratchPath]) => /\.t\.(sol|rs|ts|js)$/i.test(scratchPath) || /(^|\/)tests?\//i.test(scratchPath) || /(poc|exploit)/i.test(scratchPath))
         .map(([scratchPath, content]) => ({ path: scratchPath, content }));
-      const verdicts = await runRefutation({ findings: candidates, source, cfg: refuteCfg, llm: refuteLlm, logger, max: 8, onProgress: (id) => options.onActivity?.({ kind: "step", tool: `refute ${id}` }), ...(pocFiles.length > 0 ? { pocFiles } : {}) });
+      const refutation = await runRefutation({ findings: candidates, source, cfg: refuteCfg, llm: refuteLlm, logger, max: 8, onProgress: (id) => options.onActivity?.({ kind: "step", tool: `refute ${id}` }), ...(pocFiles.length > 0 ? { pocFiles } : {}) });
+      refutationErrors.push(...refutation.errors.map((error) => ({ phase: "refutation" as const, ...error })));
       for (const finding of candidates) {
         if (!finding.refutation?.refuted) continue;
         if (finding.refutation.unrealistic) {
@@ -646,7 +648,7 @@ export async function runAudit(
           finding.disputed = true;
         }
       }
-      if (verdicts.length > 0) await logger.artifact("audit_refutation.json", verdicts);
+      if (refutation.verdicts.length > 0) await logger.artifact("audit_refutation.json", refutation.verdicts);
 
       // Appeal: a finding the skeptic rejected as UNREALISTIC gets ONE chance to
       // answer the objection with a faithful PoC. A real bug whose first PoC was
@@ -676,8 +678,9 @@ export async function runAudit(
             const appealPocFiles = [...session.scratchFiles.entries()]
               .filter(([scratchPath]) => /\.t\.(sol|rs|ts|js)$/i.test(scratchPath) || /(^|\/)tests?\//i.test(scratchPath) || /(poc|exploit)/i.test(scratchPath))
               .map(([scratchPath, content]) => ({ path: scratchPath, content }));
-            await runRefutation({ findings: [reConfirmed], source, cfg: refuteCfg, llm: refuteLlm, logger, max: 1, ...(appealPocFiles.length > 0 ? { pocFiles: appealPocFiles } : {}) });
-            upheld = !(reConfirmed.refutation?.refuted && reConfirmed.refutation.unrealistic);
+            const appealRefutation = await runRefutation({ findings: [reConfirmed], source, cfg: refuteCfg, llm: refuteLlm, logger, max: 1, ...(appealPocFiles.length > 0 ? { pocFiles: appealPocFiles } : {}) });
+            refutationErrors.push(...appealRefutation.errors.map((error) => ({ phase: "appeal-refutation" as const, ...error })));
+            upheld = appealRefutation.errors.length === 0 && !(reConfirmed.refutation?.refuted && reConfirmed.refutation.unrealistic);
             if (upheld) {
               finding.confirmationStatus = reConfirmed.confirmationStatus;
               if (reConfirmed.commandRunId) finding.commandRunId = reConfirmed.commandRunId;
@@ -690,7 +693,9 @@ export async function runAudit(
             upheld,
             reason: upheld
               ? "rebuilt a faithful PoC that survived re-refutation"
-              : reConfirmed?.refutation?.reason ?? "no faithful PoC produced on appeal",
+              : refutationErrors.some((error) => error.phase === "appeal-refutation" && error.findingId === reConfirmed?.id)
+                ? "appeal re-refutation did not produce a verdict"
+                : reConfirmed?.refutation?.reason ?? "no faithful PoC produced on appeal",
           };
           await logger.event("audit_appeal", { findingId: finding.id, upheld });
           recorder.findings(session.findings, logger.runDir, "appeal"); // reflect this finding's appeal outcome live
@@ -699,9 +704,13 @@ export async function runAudit(
       }
       recorder.stage("refutation", {
         candidates: candidates.length,
+        attempted: refutation.attempted,
+        verdicts: refutation.verdicts.length,
+        errors: refutation.errors.length,
         refuted: candidates.filter((f) => f.refutation?.refuted).length, // funnel: confirmations the skeptic broke
         disputed: candidates.filter((f) => f.disputed).length, // execution-proven but flagged for humans
       });
+      if (refutationErrors.length > 0) await logger.artifact("audit_refutation_errors.json", refutationErrors);
     }
     recorder.findings(session.findings, logger.runDir, "refutation"); // push refutation downgrades (suspected/refuted) to the UI
   }
@@ -755,6 +764,7 @@ export async function runAudit(
     resourceRequests,
     followupScopes,
     findingParseErrors: findingParse.errors.length,
+    infraErrors: refutationErrors.length,
     mode: auditMode,
   });
   await logger.artifact(RUN_HEALTH_FILE, runHealth);

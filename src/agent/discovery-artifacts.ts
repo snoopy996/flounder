@@ -59,6 +59,7 @@ export interface RunHealth {
     resourceRequests: number;
     followupScopes: number;
     findingParseErrors: number;
+    infraErrors: number;
   };
 }
 
@@ -114,6 +115,7 @@ export function buildRunHealth(input: {
   resourceRequests: ResourceRequest[];
   followupScopes: AuditScope[];
   findingParseErrors?: number;
+  infraErrors?: number;
   mode?: "breadth" | "map" | "map-dig" | "verify" | "dig" | "confirm";
 }): RunHealth {
   const modelErrorSteps = input.steps.filter((step) => step.tool === "(model-error)" || step.tool === "(session-error)").length;
@@ -127,6 +129,7 @@ export function buildRunHealth(input: {
   const openResources = input.resourceRequests.filter((request) => request.status !== "resolved").length;
   const followupScopes = input.followupScopes.length;
   const findingParseErrors = input.findingParseErrors ?? 0;
+  const infraErrors = input.infraErrors ?? 0;
 
   const reasons: string[] = [];
   let status: RunHealthStatus = "healthy";
@@ -137,6 +140,10 @@ export function buildRunHealth(input: {
 
   if (input.stoppedReason === "error" || input.stoppedReason === "stalled" || modelErrorSteps > 0) {
     setStatus("infra-failed", `run stopped as ${input.stoppedReason} or recorded model/session errors`);
+  }
+  if (infraErrors > 0) {
+    if (status === "healthy") status = "infra-failed";
+    reasons.push(`${infraErrors} post-dig infrastructure error(s) prevented a required verdict`);
   }
   if (findingParseErrors > 0 || parseErrorSteps > 0) {
     if (status === "healthy") status = "infra-failed";
@@ -176,6 +183,7 @@ export function buildRunHealth(input: {
       resourceRequests: openResources,
       followupScopes,
       findingParseErrors,
+      infraErrors,
     },
   };
 }

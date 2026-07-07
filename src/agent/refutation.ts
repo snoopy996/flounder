@@ -29,6 +29,17 @@ export interface RefutationVerdict {
   reason: string;
 }
 
+export interface RefutationError {
+  findingId: string;
+  error: string;
+}
+
+export interface RefutationResult {
+  attempted: number;
+  verdicts: RefutationVerdict[];
+  errors: RefutationError[];
+}
+
 export async function runRefutation(input: {
   findings: AgentFinding[];
   source: Doc[];
@@ -43,9 +54,11 @@ export async function runRefutation(input: {
   // Reports which finding is being refuted, so the caller can surface progress in the live UI
   // (the refutation runs after the dig's scope batch, where the activity stream otherwise goes quiet).
   onProgress?: (findingId: string) => void;
-}): Promise<RefutationVerdict[]> {
-  const out: RefutationVerdict[] = [];
-  for (const finding of input.findings.slice(0, Math.max(0, input.max))) {
+}): Promise<RefutationResult> {
+  const attemptedFindings = input.findings.slice(0, Math.max(0, input.max));
+  const verdicts: RefutationVerdict[] = [];
+  const errors: RefutationError[] = [];
+  for (const finding of attemptedFindings) {
     input.onProgress?.(finding.id);
     const user = buildRefutationPrompt(finding, sourceForLocation(input.source, finding.location), input.pocFiles ?? []);
     try {
@@ -63,14 +76,16 @@ export async function runRefutation(input: {
         const unrealistic = parsed.unrealistic === true && parsed.refuted === true;
         const verdict: RefutationVerdict = { findingId: finding.id, refuted: parsed.refuted, unrealistic, reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 800) : "" };
         finding.refutation = { refuted: verdict.refuted, reason: verdict.reason, unrealistic };
-        out.push(verdict);
+        verdicts.push(verdict);
         await input.logger.event("audit_refutation", { findingId: finding.id, refuted: verdict.refuted, unrealistic });
       }
     } catch (error) {
-      await input.logger.event("audit_refutation_error", { findingId: finding.id, error: error instanceof Error ? error.message.slice(0, 300) : String(error) });
+      const message = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
+      errors.push({ findingId: finding.id, error: message });
+      await input.logger.event("audit_refutation_error", { findingId: finding.id, error: message });
     }
   }
-  return out;
+  return { attempted: attemptedFindings.length, verdicts, errors };
 }
 
 // Discharge challenge — the FALSE-NEGATIVE counterpart of runRefutation. The dig marks many
