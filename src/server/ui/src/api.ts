@@ -371,7 +371,7 @@ export interface PhaseRole {
 
 export type PhaseConfig = Partial<Record<"prepare" | "map" | "dig" | "confirm", PhaseRole>>;
 export type PhaseProviderConfig = Partial<Record<"prepare" | "map" | "dig" | "confirm", number>>;
-export type EngagementKind = "bug-bounty-contest" | "standard" | string;
+export type EngagementKind = "bug-bounty" | "bug-bounty-contest" | "standard" | string;
 
 export interface ContestStrategy {
   batchScopes?: number;

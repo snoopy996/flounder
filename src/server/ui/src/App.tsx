@@ -21,6 +21,7 @@ import {
 } from "./api";
 import { Button, Card, Counter, IconButton, Modal, StateBadge, StatusBadge } from "./components";
 import {
+  bugBountyEngagementLabel,
   confirmedDecisions,
   contestReviewState,
   contestStrategy,
@@ -33,7 +34,7 @@ import {
   fmtDur,
   fmtTime,
   isVerifyRun,
-  isBugBountyContestConfig,
+  isBugBountyConfig,
   isSubmissionReadyDecision,
   verifyRunProgress,
   verifyRunRechecksConfirmed,
@@ -675,11 +676,16 @@ function coverageLabel(cfg: ProjectConfig): string {
   const contest = contestStrategy(cfg);
   if (contest.enabled) return `Contest - ${contest.batchScopes}-scope rounds`;
   const mode = coverageModeFromConfig(cfg);
-  if (mode === "focused") return "Focused - until 10 scopes";
-  if (mode === "standard") return "Standard - until 30 scopes";
-  if (mode === "half") return "Half of pending";
-  if (mode === "full") return "Full pending coverage";
-  return `Custom - ${cfg.maxScopes ?? 30} scopes per run`;
+  const label = mode === "focused"
+    ? "Focused - until 10 scopes"
+    : mode === "standard"
+      ? "Standard - until 30 scopes"
+      : mode === "half"
+        ? "Half of pending"
+        : mode === "full"
+          ? "Full pending coverage"
+          : `Custom - ${cfg.maxScopes ?? 30} scopes per run`;
+  return isBugBountyConfig(cfg) ? `Bug bounty - ${label}` : label;
 }
 
 function coverageModeName(cfg: ProjectConfig): string {
@@ -2574,7 +2580,7 @@ function ProjectSidebar({
             >
               <span className="project-row-top">
                 <span className="project-name">{shortName(project.name, 31)}</span>
-                {isBugBountyContestConfig(project.config) ? <span className="project-type-badge">Contest</span> : null}
+                {bugBountyEngagementLabel(project.config) ? <span className="project-type-badge">{bugBountyEngagementLabel(project.config)}</span> : null}
                 {project.pinned_at ? <span className="project-pin-indicator" title="Pinned"><Icon name="pin" size={13} /></span> : null}
                 <ProjectStatusIcon project={project} />
               </span>
@@ -2708,6 +2714,7 @@ function ProjectDetailView(props: {
   const selectedDaemon = daemons.find((daemon) => daemon.id === detail.project.daemon_id);
   const config = projectConfig(detail);
   const contestProfile = contestStrategy(config.cfg);
+  const engagementLabel = bugBountyEngagementLabel(config.cfg);
   const selectedDaemonOnline = selectedDaemon ? daemonHealth(selectedDaemon) === "online" : false;
   const online = selectedDaemonOnline ? [selectedDaemon] : [];
   const progress = currentMaterialProgress(detail);
@@ -2937,15 +2944,17 @@ function ProjectDetailView(props: {
           <div className="hero-main">
             <div className="title-line">
               <h1>{detail.project.name}</h1>
-              {contestProfile.enabled ? <span className="project-type-badge hero-badge">Contest</span> : null}
+              {engagementLabel ? <span className="project-type-badge hero-badge">{engagementLabel}</span> : null}
               <StateBadge status={projectBadgeStatus(currentProject)} />
             </div>
             <div className="subtle-line">
               {provider ? providerProfileLabel(provider) : "no provider set"} · {selectedDaemon ? selectedDaemon.name ?? `daemon-${selectedDaemon.id}` : "no daemon selected"} · {detail.project.dir || detail.project.name}
             </div>
-            {contestProfile.enabled ? (
+            {engagementLabel ? (
               <div className="subtle-line contest-summary">
-                {contestProfile.batchScopes} scopes/round · {contestProfile.digConcurrency} parallel digs · {contestProfile.skipRealTargetConfirm ? "source-only reports" : "real-target confirm required"}{contestProfile.stopAfterHours ? ` · review after ${contestProfile.stopAfterHours}h` : ""}
+                {contestProfile.enabled
+                  ? `${contestProfile.batchScopes} scopes/round · ${contestProfile.digConcurrency} parallel digs · ${contestProfile.skipRealTargetConfirm ? "source-only reports" : "real-target confirm required"}${contestProfile.stopAfterHours ? ` · review after ${contestProfile.stopAfterHours}h` : ""}`
+                  : "standard coverage · real-target confirm required · report after reproduction"}
               </div>
             ) : null}
             {localVerifySummary ? <div className="subtle-line verify-summary">{localVerifySummary}</div> : null}
@@ -5330,8 +5339,9 @@ function Field({ label, help, children, span }: { label: string; help?: string; 
 }
 
 type BudgetForm = { digSamples: string; mapSteps: string; digSteps: string; digConcurrency: string };
-type ContestForm = {
-  contest: boolean;
+type EngagementKindForm = "" | "bug-bounty" | "bug-bounty-contest";
+type EngagementForm = {
+  engagementKind: EngagementKindForm;
   contestBatchScopes: string;
   contestDigConcurrency: string;
   contestStopAfterHours: string;
@@ -5355,10 +5365,19 @@ function setOptionalNumber(config: ProjectConfig, key: keyof Pick<ProjectConfig,
   else config[key] = parsed;
 }
 
-function applyContestFields(config: ProjectConfig, form: ContestForm): ProjectConfig {
+function engagementKindFromConfig(cfg: ProjectConfig): EngagementKindForm {
+  if (contestStrategy(cfg).enabled) return "bug-bounty-contest";
+  return isBugBountyConfig(cfg) ? "bug-bounty" : "";
+}
+
+function applyEngagementFields(config: ProjectConfig, form: EngagementForm): ProjectConfig {
   const next = { ...config };
-  if (!form.contest) {
+  if (!form.engagementKind) {
     delete next.engagement;
+    return next;
+  }
+  if (form.engagementKind === "bug-bounty") {
+    next.engagement = { kind: "bug-bounty" };
     return next;
   }
   const batchScopes = numberOrUndefined(form.contestBatchScopes) ?? 10;
@@ -5482,7 +5501,7 @@ function NewProjectModal({ providers, daemons, onClose, onCreated, onError }: { 
   const [advanced, setAdvanced] = useState(false);
   const [phaseOpen, setPhaseOpen] = useState(false);
   const firstDaemon = daemons.find((daemon) => daemonHealth(daemon) === "online") ?? daemons[0];
-  const [form, setForm] = useState({ intent: "", name: "", runAfterCreate: true, daemonId: firstDaemon?.id ? String(firstDaemon.id) : "", providerId: defaultProjectProviderId(providers), dir: "", sourcePaths: ".", buildRoot: ".", corpusPaths: "docs/specs", coverageMode: "standard" as CoverageMode, maxScopes: "30", digSamples: "1", mapSteps: "", digSteps: "", digConcurrency: "1", contest: false, contestBatchScopes: "10", contestDigConcurrency: "5", contestStopAfterHours: "48", contestSkipConfirm: true, contestAppendMap: true });
+  const [form, setForm] = useState({ intent: "", name: "", runAfterCreate: true, daemonId: firstDaemon?.id ? String(firstDaemon.id) : "", providerId: defaultProjectProviderId(providers), dir: "", sourcePaths: ".", buildRoot: ".", corpusPaths: "docs/specs", coverageMode: "standard" as CoverageMode, maxScopes: "30", digSamples: "1", mapSteps: "", digSteps: "", digConcurrency: "1", engagementKind: "" as EngagementKindForm, contestBatchScopes: "10", contestDigConcurrency: "5", contestStopAfterHours: "48", contestSkipConfirm: true, contestAppendMap: true });
   const [phaseProviders, setPhaseProviders] = useState<PhaseProviderForm>({ prepare: "", map: "", dig: "", confirm: "" });
   const providerMissing = providers.length === 0;
   const daemonMissing = daemons.length === 0;
@@ -5514,7 +5533,7 @@ function NewProjectModal({ providers, daemons, onClose, onCreated, onError }: { 
       onError("Describe what this project should audit, or enter a project name.");
       return;
     }
-    const cfg = applyContestFields(applyBudgetFields(coverageConfig(form.coverageMode, form.maxScopes), form), form);
+    const cfg = applyEngagementFields(applyBudgetFields(coverageConfig(form.coverageMode, form.maxScopes), form), form);
     const intent = form.intent.trim();
     if (intent) {
       cfg.projectIntent = intent;
@@ -5575,11 +5594,21 @@ function NewProjectModal({ providers, daemons, onClose, onCreated, onError }: { 
           </div>
         </FormSection>
         <FormSection title="Engagement">
-          <label className="check-row">
-            <input type="checkbox" checked={form.contest} onChange={(event) => setForm({ ...form, contest: event.target.checked, coverageMode: event.target.checked ? "custom" : form.coverageMode, maxScopes: event.target.checked ? form.contestBatchScopes : form.maxScopes, digConcurrency: event.target.checked ? form.contestDigConcurrency : form.digConcurrency })} />
-            <span>Bug bounty contest</span>
-          </label>
-          {form.contest ? (
+          <div className="contest-profile-grid">
+            <Field label="Engagement type" help="Normal bounties keep real-target confirmation; contests optimize for short source-confirmed report rounds.">
+              <select value={form.engagementKind} onChange={(event) => {
+                const engagementKind = event.target.value as EngagementKindForm;
+                const contest = engagementKind === "bug-bounty-contest";
+                setForm({ ...form, engagementKind, contestSkipConfirm: contest ? true : false, coverageMode: contest ? "custom" : form.coverageMode, maxScopes: contest ? form.contestBatchScopes : form.maxScopes, digConcurrency: contest ? form.contestDigConcurrency : form.digConcurrency });
+              }}>
+                <option value="">Standard audit</option>
+                <option value="bug-bounty">Bug bounty</option>
+                <option value="bug-bounty-contest">Bug bounty contest</option>
+              </select>
+            </Field>
+          </div>
+          {form.engagementKind === "bug-bounty" ? <p className="section-help">Normal bug bounty projects preserve the real-target confirmation stage before submission reports.</p> : null}
+          {form.engagementKind === "bug-bounty-contest" ? (
             <div className="contest-profile-grid">
               <Field label="Round scopes" help="Each settled Run opens this many scopes before report packaging."><input type="number" min="1" value={form.contestBatchScopes} onChange={(event) => setForm({ ...form, contestBatchScopes: event.target.value, maxScopes: event.target.value })} /></Field>
               <Field label="Dig concurrency" help="Parallel scopes for contest throughput."><input type="number" min="1" value={form.contestDigConcurrency} onChange={(event) => setForm({ ...form, contestDigConcurrency: event.target.value, digConcurrency: event.target.value })} /></Field>
@@ -5634,6 +5663,7 @@ function EditProjectModal({ detail, providers, daemons, onClose, onSaved, onErro
   const cfg = projectConfig(detail);
   const initialCoverageMode = coverageModeFromConfig(cfg.cfg);
   const initialContest = contestStrategy(cfg.cfg);
+  const initialEngagementKind = engagementKindFromConfig(cfg.cfg);
   const [form, setForm] = useState({
     intent: cfg.cfg.prepareClue ?? cfg.cfg.projectIntent ?? "",
     daemonId: detail.project.daemon_id ? String(detail.project.daemon_id) : "",
@@ -5648,7 +5678,7 @@ function EditProjectModal({ detail, providers, daemons, onClose, onSaved, onErro
     mapSteps: cfg.cfg.mapSteps != null ? String(cfg.cfg.mapSteps) : "",
     digSteps: cfg.cfg.digSteps != null ? String(cfg.cfg.digSteps) : "",
     digConcurrency: String(cfg.cfg.digConcurrency ?? 1),
-    contest: initialContest.enabled,
+    engagementKind: initialEngagementKind,
     contestBatchScopes: String(initialContest.batchScopes),
     contestDigConcurrency: String(initialContest.digConcurrency),
     contestStopAfterHours: initialContest.stopAfterHours != null ? String(initialContest.stopAfterHours) : "48",
@@ -5675,7 +5705,7 @@ function EditProjectModal({ detail, providers, daemons, onClose, onSaved, onErro
       return;
     }
     try {
-      const nextConfig = applyContestFields(applyBudgetFields({ ...cfg.cfg, ...coverageConfig(form.coverageMode, form.maxScopes) }, form), form);
+      const nextConfig = applyEngagementFields(applyBudgetFields({ ...cfg.cfg, ...coverageConfig(form.coverageMode, form.maxScopes) }, form), form);
       const intent = form.intent.trim();
       if (intent) {
         nextConfig.projectIntent = intent;
@@ -5717,11 +5747,21 @@ function EditProjectModal({ detail, providers, daemons, onClose, onSaved, onErro
           </div>
         </FormSection>
         <FormSection title="Engagement">
-          <label className="check-row">
-            <input type="checkbox" checked={form.contest} onChange={(event) => setForm({ ...form, contest: event.target.checked, contestSkipConfirm: event.target.checked ? true : form.contestSkipConfirm, coverageMode: event.target.checked ? "custom" : form.coverageMode, maxScopes: event.target.checked ? form.contestBatchScopes : form.maxScopes, digConcurrency: event.target.checked ? form.contestDigConcurrency : form.digConcurrency })} />
-            <span>Bug bounty contest</span>
-          </label>
-          {form.contest ? (
+          <div className="contest-profile-grid">
+            <Field label="Engagement type" help="Normal bounties keep real-target confirmation; contests optimize for short source-confirmed report rounds.">
+              <select value={form.engagementKind} onChange={(event) => {
+                const engagementKind = event.target.value as EngagementKindForm;
+                const contest = engagementKind === "bug-bounty-contest";
+                setForm({ ...form, engagementKind, contestSkipConfirm: contest ? true : false, coverageMode: contest ? "custom" : form.coverageMode, maxScopes: contest ? form.contestBatchScopes : form.maxScopes, digConcurrency: contest ? form.contestDigConcurrency : form.digConcurrency });
+              }}>
+                <option value="">Standard audit</option>
+                <option value="bug-bounty">Bug bounty</option>
+                <option value="bug-bounty-contest">Bug bounty contest</option>
+              </select>
+            </Field>
+          </div>
+          {form.engagementKind === "bug-bounty" ? <p className="section-help">Normal bug bounty projects preserve the real-target confirmation stage before submission reports.</p> : null}
+          {form.engagementKind === "bug-bounty-contest" ? (
             <div className="contest-profile-grid">
               <Field label="Round scopes" help="Each settled Run opens this many scopes before report packaging."><input type="number" min="1" value={form.contestBatchScopes} onChange={(event) => setForm({ ...form, contestBatchScopes: event.target.value, maxScopes: event.target.value })} /></Field>
               <Field label="Dig concurrency" help="Parallel scopes for contest throughput."><input type="number" min="1" value={form.contestDigConcurrency} onChange={(event) => setForm({ ...form, contestDigConcurrency: event.target.value, digConcurrency: event.target.value })} /></Field>

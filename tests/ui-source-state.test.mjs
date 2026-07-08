@@ -18,7 +18,7 @@ async function loadDomainModule() {
   return import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 }
 
-const { contestReviewState, phaseState, projectSourceState, runProgress, sortConfirmDecisionsForSubmission } = await loadDomainModule();
+const { bugBountyEngagementLabel, contestReviewState, phaseState, projectSourceState, runProgress, sortConfirmDecisionsForSubmission } = await loadDomainModule();
 
 test("ui: source setup is ready when configured source paths exist", () => {
   assert.deepEqual(projectSourceState(null, ["src"]), { kind: "configured", ok: true });
@@ -54,6 +54,17 @@ test("ui: contest review state flags elapsed review windows", () => {
   });
   assert.equal(state.kind, "review-due");
   assert.equal(state.tone, "warning");
+});
+
+test("ui: normal bug bounty engagement keeps contest review disabled", () => {
+  const cfg = { engagement: { kind: "bug-bounty" } };
+  assert.equal(bugBountyEngagementLabel(cfg), "Bounty");
+  assert.equal(contestReviewState({
+    project: { created_at: "2000-01-01T00:00:00.000Z" },
+    runs: [],
+    allFindings: [],
+    progress: { total: 20, audited: 20, pending: 0 },
+  }, cfg), null);
 });
 
 test("ui: contest review state detects low marginal yield over recent batches", () => {

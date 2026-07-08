@@ -66,6 +66,88 @@ not a plugin point.
 - Prompt-regression fixtures already provide part of the replayable fixture
   foundation.
 
+## Map Effectiveness Post-Mortem
+
+Recent contest campaigns exposed that simply increasing the number of mapped
+scopes is not enough. A better map does not mean a larger inventory with the
+same shape; it means the next inventory explains what is newly covered, why it
+is not a duplicate of prior coverage, and which uncovered trust boundaries it
+expects dig to test.
+
+The product should improve map through affordances and feedback loops, not by
+injecting a framework-owned vulnerability strategy.
+
+### What Worked
+
+- Short map -> dig -> verify -> report loops keep confirmed bugs moving toward
+  submission instead of waiting for all scopes to finish.
+- Append-map is better than remap for live campaigns because it preserves
+  audited scope state and prior findings.
+- Prior scopes are useful as a covered-reference set. They help the agent avoid
+  re-enumerating the same functions under slightly different names.
+- Scope-level status and duplicate finding tracking are necessary for judging
+  whether more mapping is producing new surface or just repeating old work.
+
+### What Failed
+
+- Large one-shot maps plateaued around similar inventory sizes and often
+  rediscovered the same regions.
+- Remapping could hide older submitted or reviewed findings from the operator's
+  current view, which made duplicate filtering harder.
+- The UI showed counts but not enough yield information: recent audited scopes,
+  newly confirmed findings, duplicate rate, report backlog, and pending coverage
+  deltas were not visible together.
+- Expanding after exhaustion lacked an explicit objective. The agent could see
+  prior scopes, but the product did not make the coverage gap a first-class
+  input.
+
+### Better Map Product Contract
+
+Append-map should give the model these neutral inputs:
+
+- the current scope inventory as a covered-reference set;
+- audited, pending, deferred, and duplicate-linked scope summaries;
+- recent findings grouped by root-cause key, not raw repeated titles;
+- source regions with no scope coverage yet;
+- high-change or high-authority source regions from optional history context;
+- resource requests and follow-up scopes that previous digs emitted;
+- a strict instruction to append only novel scopes or explain why no useful
+  expansion remains.
+
+The model still owns strategy selection. The framework only supplies evidence
+about what is already covered and records whether expansion produced novel
+coverage.
+
+### Map Quality Signals
+
+The project view and run summary should show:
+
+- newly appended scopes per map expansion;
+- percent of appended scopes later audited;
+- locally confirmed findings per recent audited scope window;
+- duplicates or ignored findings produced from the new map window;
+- scopes that produced resource requests instead of findings;
+- whether append-map returned no novel scopes.
+
+These signals support a stop decision without hardcoding a universal stop rule.
+For contest mode, the first implementation can surface warnings such as:
+"review window elapsed", "inventory exhausted", or "recent batches produced no
+locally confirmed findings". A later implementation can turn those warnings
+into configurable automation gates.
+
+### Implementation Steps
+
+1. Store append-map runs as expansion windows with `fromScopeCount`,
+   `toScopeCount`, and `novelScopeCount`.
+2. Pass prior inventory to map as covered-reference material, separated from
+   source/corpus material so it cannot become a finding by itself.
+3. Add a coverage-gap artifact that lists source regions with no current scope.
+4. Add UI yield cards for recent scope windows: audited scopes, confirmed
+   findings, duplicate-linked findings, ignored findings, and report backlog.
+5. Add a map expansion result state: `expanded`, `no-novel-coverage`, or
+   `blocked`.
+6. Use those states in contest mode to recommend continue, review, or pause.
+
 ## Target Architecture
 
 The expansion adds one generic orchestration layer above the existing audit

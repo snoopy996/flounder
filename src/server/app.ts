@@ -229,7 +229,7 @@ const ROUTES: Route[] = [
       sourcePaths: "string[] — code paths relative to dir",
       buildRoot: "string? — buildable root relative to dir",
       corpusPaths: "string[]? — specs/docs relative to dir",
-      config: "object? — { prepareClue, projectIntent, phaseProviders, scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency, engagement, sandbox... }. Default coverage is Standard. engagement.kind='bug-bounty-contest' enables short settled rounds, source-only reportability by default, and optional append-map expansion.",
+      config: "object? — { prepareClue, projectIntent, phaseProviders, scopeCoverageMode, maxScopes, mapSteps, digSteps, digSamples, digConcurrency, engagement, sandbox... }. Default coverage is Standard. engagement.kind='bug-bounty' records normal bounty submission context and keeps real-target confirmation by default; engagement.kind='bug-bounty-contest' enables short settled rounds, source-only reportability by default, and optional append-map expansion.",
     },
     handler: projectCreate,
   }),

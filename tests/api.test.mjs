@@ -536,6 +536,50 @@ test("api: bug bounty contest projects skip real-target confirm and settle repor
   });
 });
 
+test("api: normal bug bounty projects keep real-target confirm before reports", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "normal-bounty-confirm-required",
+      sourcePaths: ["./src"],
+      config: {
+        engagement: { kind: "bug-bounty" },
+      },
+    }));
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      store.upsertScopes(created.id, [
+        { scopeId: "audited-0", title: "Audited 0", status: "audited", score: 10 },
+      ]);
+      const runId = store.startRun({ projectId: created.id, kind: "run", runDir: path.join(out, "normal-bounty-run") });
+      store.upsertFindings(created.id, runId, [
+        {
+          findingKey: "kbounty",
+          title: "Normal bounty bug",
+          location: "src/A.sol:1",
+          severity: "high",
+          status: "confirmed-executable",
+          evidence: "local proof",
+        },
+      ]);
+      store.finishRun(runId, "done");
+    } finally {
+      store.close();
+    }
+
+    const list = await json(await fetch(base + "/api/projects"));
+    const row = list.projects.find((project) => project.uuid === created.uuid);
+    assert.equal(row.confirmPendingFindings, 1, "normal bounty findings wait for real-target confirm");
+    assert.equal(row.confirmedBugs, 0, "normal bounty local confirmations are not counted as final bugs");
+
+    const report = await post(`/api/projects/${created.uuid}/runs`, { verb: "report" });
+    assert.equal(report.status, 400);
+    assert.match((await report.json()).error, /no submission-ready decisions/i);
+  });
+});
+
 test("api: bug bounty contest pipeline opens short batches and expands the map when pending scopes are exhausted", async () => {
   await withServer(async (base, out) => {
     const json = (r) => r.json();

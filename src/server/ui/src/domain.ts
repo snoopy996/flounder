@@ -18,6 +18,7 @@ export const PHASE_DESC: Record<(typeof PHASES)[number], string> = {
 };
 
 export const BUG_BOUNTY_CONTEST_KIND = "bug-bounty-contest";
+export const BUG_BOUNTY_KIND = "bug-bounty";
 export const DEFAULT_CONTEST_BATCH_SCOPES = 10;
 export const DEFAULT_CONTEST_DIG_CONCURRENCY = 5;
 
@@ -400,6 +401,16 @@ export interface ContestReviewState {
 export function isBugBountyContestConfig(cfg: Pick<ProjectConfigShape, "engagement"> | undefined): boolean {
   const kind = cfg?.engagement?.kind;
   return kind === BUG_BOUNTY_CONTEST_KIND || kind === "contest";
+}
+
+export function isBugBountyConfig(cfg: Pick<ProjectConfigShape, "engagement"> | undefined): boolean {
+  const kind = cfg?.engagement?.kind;
+  return kind === BUG_BOUNTY_KIND || kind === BUG_BOUNTY_CONTEST_KIND || kind === "contest";
+}
+
+export function bugBountyEngagementLabel(cfg: Pick<ProjectConfigShape, "engagement"> | undefined): string {
+  if (isBugBountyContestConfig(cfg)) return "Contest";
+  return isBugBountyConfig(cfg) ? "Bounty" : "";
 }
 
 export function contestStrategy(cfg: Pick<ProjectConfigShape, "engagement"> | undefined): NormalizedContestStrategy {
