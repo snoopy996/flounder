@@ -168,6 +168,14 @@ flounder run --source ./contracts --build-root . --sandbox-image flounder-sandbo
 
 Treat image construction as a daemon/operator responsibility. The agent can identify missing tools and propose a Dockerfile or image plan, but unrestricted `docker build` or `docker pull` from inside model-directed execution would expand the trusted boundary and can undermine the sandbox. If automated image synthesis is enabled in a deployment, keep it as a separate controlled prepare step with human review or a locked template, pinned base images, and a resulting image digest recorded in the run.
 
+Prepare warm-up failures are product-visible resource blockers. When a pinned
+tool check or dependency/build warm-up fails, Flounder records a normalized
+`resource-request` backlog row with the failed command, a short diagnostic, and
+a retry command. This happens even if the model never writes
+`resource_requests.json`, so `latestRunHealth.status=needs-resource` means the
+operator should fix the toolchain, sandbox image, dependency state, fork setup,
+or credential boundary before rerunning the same blocked verification work.
+
 Host mode exists as an explicit trusted-local escape hatch for environments where Docker/OCI is unavailable or for deterministic fixture tests:
 
 ```bash
@@ -238,6 +246,38 @@ flounder run \
 - Give generous budgets and **do not interrupt a dig**; a decisive obligation can surface late in its step budget.
 - `--dig-samples K` unions K independent passes (variance reduction); `--dig-concurrency N` digs N scopes in parallel; `--remap` re-enumerates. Reliability comes from coverage and repetition, not prompt tuning.
 - The codex provider (`openai-codex`) is the recommended autonomous path; each daemon needs a one-time `flounder daemon provider login openai-codex` unless Flounder imports an existing pi auth entry for that provider.
+
+## Engagement modes
+
+Project config can include `engagement.kind` to tell the control plane how the
+work will be judged:
+
+- `standard`: general authorized review. This is the default.
+- `bug-bounty`: normal public or private bug-bounty work. Prepare may collect
+  program scope, deployments, provenance, and known-issue signals. Real-target
+  Confirm remains expected when a live target exists, and reports should wait
+  for reproduced or locally confirmed findings that pass scope, novelty,
+  duplicate, known-issue, impact, and payout-readiness gates.
+- `bug-bounty-contest`: time-limited contest work. The project can run short
+  settled batches so candidates move through verify/refute/report quickly before
+  opening the next scope batch. Contest strategy supports `batchScopes`,
+  `digConcurrency`, `skipRealTargetConfirm`, and
+  `appendMapWhenExhausted`. Source-only local confirmation can be reportable
+  when the venue rules do not require live-target reproduction, but suspected
+  findings still must be verified/refuted before submission.
+
+A contest Continue run first settles missing verify/report work. After the
+current mapped inventory is exhausted, append-map expansion preserves audited
+scope status, submitted or duplicate finding state, and prior coverage while
+asking MAP for novel scopes. Use `--append-map` or `--expand-map` from the CLI
+when driving this manually; use `--remap` only when intentionally replacing the
+inventory.
+
+Contest mode surfaces stop-review signals instead of enforcing a universal stop
+rule: elapsed review window, inventory exhausted, and recent scope batches with
+low locally confirmed yield. Operators should use those signals with duplicate
+rate, report backlog, resource requests, and remaining contest time to decide
+whether to continue, append-map, change direction, or pause.
 
 ## Confirmation ladder
 

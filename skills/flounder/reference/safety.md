@@ -13,6 +13,12 @@ For public-source audits without a bounty, treat findings as private white-hat
 research: verify locally, avoid live-system writes, and disclose through a
 maintainer or security contact before sharing details.
 
+For normal bounty work, submit only through the program's authorized private
+channel and only after the finding passes scope, duplicate, known-issue, impact,
+and payout-readiness gates. For contest work, use the venue's report format and
+rules; source-only local confirmation may be enough when the rules say so, but
+suspected-only findings are still not submissions.
+
 Do not broadcast transactions, move funds, submit writes, persist access, or
 target systems outside the declared local audit boundary or explicit authorized
 scope. In confirm mode, replay exploits only against local tests, local forks,

@@ -61,8 +61,28 @@ The installed skill should trigger from requests about Flounder audits, public-s
 | Blind capability audit | A public-source or authorized project, repo, package, source tree, or project link, with no bug hint | Let Flounder prepare the target when possible, or provide source/build paths when you already have them. Do not include incident reports, known bug names, exploit theories, or answer-bearing corpus. Judge the result by coverage and execution-backed findings, not by a claim that the target is safe. |
 | Incident investigation | A suspicious transaction, address, exploit link, or factual incident clue | Use Prepare to collect chain facts, deployed source, official project material, and reproduction requirements. The clue is evidence, not proof; the output should explain the root cause and whether it reproduced on attacker-real local ground truth. |
 | Open-world public-source audit | A public-source target, repository, package, deployment, project, or bounty scope | Let Prepare actively collect official docs, deployments, provenance, package metadata, and bounty scope when available. The audit remains model-directed, but the allowed context is broader than a blind capability test. |
+| Normal bug bounty | A public bounty scope, source or deployment, and a private disclosure path | Keep real-target confirmation in the loop when a live target exists. Reports should come from reproduced or locally confirmed findings that still pass scope, duplicate, known-issue, impact, and payout-readiness gates. |
+| Bug bounty contest | A time-limited contest with source, rules, and a venue-specific report format | Use short settled batches so findings reach verify/refute and report quickly. Source-only local confirmation can be reportable when the contest rules do not require live-target reproduction, but suspected-only findings are still not submissions. Preserve prior coverage and submitted findings with append-map expansion instead of remapping from scratch. |
 | Targeted follow-up | A suspected finding, scope id, file/region, or prior run | Use `audit --verify`, `audit --scope`, `confirm`, or selected project actions to settle a narrower question by execution. |
 | Disclosure preparation | Confirmed or reproduced findings | Consolidate duplicates, run real-target confirmation when required, regenerate selected reports, and package only non-ignored, evidence-backed bugs. |
+
+## Engagement Modes
+
+Projects can record how the audit will be judged without changing the thin audit
+kernel. The default `standard` posture is for general authorized review.
+`bug-bounty` records normal bounty context: Prepare may collect public program
+scope and deployments, Confirm remains expected for live-target reproduction,
+and reporting should wait for scope, novelty, known-issue, impact, and payout
+gates. `bug-bounty-contest` records a time-limited contest posture: the project
+can run short batches, skip real-target confirmation when the rules are
+source-only, settle reports before opening the next batch, and append novel
+scopes when the inventory is exhausted.
+
+These modes are workflow and evidence gates, not audit strategy. The model still
+chooses what to inspect and test; Flounder preserves coverage, duplicate state,
+resource blockers, and report readiness so the operator can move quickly without
+flattening suspected, confirmed, reproduced, duplicate, and submitted items into
+one bucket.
 
 ## Preparation Paths
 
@@ -85,7 +105,7 @@ Flounder is built for the parts of security work that usually require a human to
 | Exploit construction | Writes local PoCs, tests, fixtures, or harnesses inside an isolated workspace. |
 | Sandboxed execution | Runs model-generated tests and PoCs away from the host source tree, credentials, and user environment. |
 | Execution proof | Runs the proof locally and only upgrades findings when command evidence exists. |
-| Discovery health | Writes run-health and backlog artifacts so a zero-finding run can be distinguished from a shallow run, a missing-resource blocker, or coverage that still needs a later dig. |
+| Discovery health | Writes run-health and backlog artifacts so a zero-finding run can be distinguished from a shallow run, a missing-resource blocker, or coverage that still needs a later dig. Toolchain warm-up failures are captured as resource requests even when the model did not write one itself. |
 | Real-target confirmation | Reproduces confirmed findings against real-world ground truth, such as a local fork of a deployed target. |
 | Reporting | Tracks status, artifacts, confirm decisions, formal reports, and submission state across projects. |
 

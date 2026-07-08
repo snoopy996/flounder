@@ -9,6 +9,7 @@ provider, API, budget, output, and pi extension details.
 - [Setup Commands](#setup-commands)
 - [Audit Verbs](#audit-verbs)
 - [Materials](#materials)
+- [Engagement Config](#engagement-config)
 - [Coverage And Budget Controls](#coverage-and-budget-controls)
 - [Sandbox And Network](#sandbox-and-network)
 - [Provider Profiles](#provider-profiles)
@@ -88,6 +89,35 @@ CLI naming convention:
 | `--config <file>` | Optional JSON profile. CLI flags override it. |
 | `--scope-note <text>` | One-line authorized-scope hint. |
 
+## Engagement Config
+
+Set `config.engagement.kind` on dashboard/API projects when the reportability
+rules matter:
+
+- `standard`: default authorized review.
+- `bug-bounty`: normal bounty work; keep real-target Confirm when a live target
+  exists and gate reports on scope, duplicate, known-issue, impact, payout, and
+  disclosure readiness.
+- `bug-bounty-contest`: time-limited contest work; run short settled batches,
+  optionally skip real-target Confirm when source-only rules allow it, and
+  append-map novel scopes when the inventory is exhausted.
+
+Contest strategy fields:
+
+```json
+{
+  "engagement": {
+    "kind": "bug-bounty-contest",
+    "strategy": {
+      "batchScopes": 10,
+      "digConcurrency": 5,
+      "skipRealTargetConfirm": true,
+      "appendMapWhenExhausted": true
+    }
+  }
+}
+```
+
 ## Coverage And Budget Controls
 
 Defaults are designed for real audits: `--max-scopes` defaults to 30, dig samples
@@ -103,6 +133,8 @@ is done unless capped by launch config.
 | `--dig-concurrency <n>` | Deep-audit multiple scopes in isolated workspaces |
 | `--max-scopes <n>` | Scopes audited in the next dig batch; default 30 |
 | `--remap` | Re-enumerate scope inventory instead of resuming |
+| `--append-map`, `--expand-map` | Ask MAP to append novel scopes while preserving existing scope status |
+| `--append-map-seed <path>` | Add prior scope inventories as covered-reference material for append-map |
 
 ## Sandbox And Network
 
@@ -150,6 +182,12 @@ flounder run --source ./src --build-root . --sandbox-backend host --allow-host-e
 
 Host mode keeps the copied workspace and isolated `HOME` / package caches, but
 it does not provide kernel-level network or filesystem isolation.
+
+Prepare and toolchain warm-up failures are surfaced as `resource-request`
+backlog rows with a diagnostic and retry command. A `needs-resource` run should
+be treated as blocked on operator-owned setup until the sandbox image,
+toolchain, dependency state, fork setup, or credential boundary is fixed and the
+row is resolved.
 
 Sealed `run --source`, `map`, and `audit` inspection/confirmation commands
 should not use public network access. `prepare` and `confirm` may fetch, fork,
@@ -212,7 +250,7 @@ relative to that directory.
 ```bash
 curl -X POST http://127.0.0.1:4500/api/projects \
   -H 'content-type: application/json' \
-  -d '{"name":"p","providerId":1,"daemonId":1,"dir":"p","sourcePaths":["."],"buildRoot":".","corpusPaths":["docs/specs"],"config":{"prepareClue":"audit this project","maxScopes":30}}'
+  -d '{"name":"p","providerId":1,"daemonId":1,"dir":"p","sourcePaths":["."],"buildRoot":".","corpusPaths":["docs/specs"],"config":{"prepareClue":"audit this project","maxScopes":30,"engagement":{"kind":"bug-bounty"}}}'
 ```
 
 If `dir` is omitted, the project directory under the selected daemon workspace

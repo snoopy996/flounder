@@ -64,6 +64,8 @@ Choose the mode from the user's intent before launching anything:
 | "Do a blind audit / test Flounder's capability / no hints" | Blind capability audit | Recommended: `flounder run <project-or-repo-or-package-link>` or a dashboard project with a factual target clue. If source is already staged or external preparation is explicitly unwanted, use `flounder run --source <paths...> --build-root <root>`. | Do not add incident docs, known bug names, exploit theories, or answer-bearing corpus. Official target docs are allowed only as target material, not as a hidden answer. |
 | "Here is a suspicious tx/address; find the hack/root cause" | Incident investigation | `flounder run <tx-or-address-or-incident-link>` | Treat the clue as evidence, not as proof. Prepare may fetch chain/source data; confirm by local fork/read-only reproduction only. |
 | "Audit this project/repo openly like a white-hat researcher" | Open-world public-source audit | Create a project with source paths when available plus a task/clue naming the project, bounty, repo, package, or deployment, then Run. | Let Prepare collect official docs, scope, deployments, and provenance. Do not use private or answer-bearing material. |
+| "Audit this normal bounty / should we submit to this bounty?" | Normal bug bounty | Project with `engagement.kind="bug-bounty"`, source/build/corpus paths when available, and a task/clue naming the public or private program scope. | Keep real-target Confirm when a live target exists. Submit only reproduced or locally confirmed source findings that pass scope, duplicate, known-issue, impact, and payout-readiness gates. |
+| "Start this contest / maximize contest bounty speed" | Bug bounty contest | Project with `engagement.kind="bug-bounty-contest"` and contest strategy such as `batchScopes`, `digConcurrency`, `skipRealTargetConfirm`, and `appendMapWhenExhausted`. | Run short settled batches: verify/refute and report before opening the next batch. Source-only local confirmation may be enough when venue rules allow it, but suspected-only findings are not submissions. Use append-map, not remap, when expanding coverage. |
 
 When in doubt: if the user asks to measure Flounder's unaided recall, use blind
 capability audit and keep the clue target-only. If the user gives live exploit
@@ -121,7 +123,8 @@ When a user asks to audit, confirm, verify, report, or inspect Flounder state:
 1. Confirm the target source is public, operator-owned, client-authorized, or in
    public bounty scope. If the source boundary is unclear, ask before running.
 2. Classify the request into one core audit mode: blind capability audit,
-   incident investigation, or open-world public-source audit.
+   incident investigation, open-world public-source audit, normal bug bounty,
+   or bug bounty contest.
 3. Decide the surface:
    - Existing dashboard/API project: use `GET /api`, then project UUID routes.
    - New project or local operator workflow: start/reuse `flounder ui`.
@@ -335,6 +338,43 @@ prerequisite for local sealed audit.
 6. Use official/public materials only; do not add private notes or answer-bearing
    docs that name a suspected bug.
 
+### Normal Bug Bounty
+
+Use this when the target is a normal public or private bounty program and a live
+target may need real-world reproduction.
+
+1. Create a project with `config.engagement.kind="bug-bounty"`.
+2. Provide local source/build/corpus paths when available, plus a task/clue
+   naming the official program, scope, deployment, or package.
+3. Let Prepare collect public scope, deployments, provenance, and known-issue
+   leads.
+4. Run sealed map/dig/synthesize/verify for local proof.
+5. Run Confirm for locally confirmed findings when live-target reproduction is
+   required or useful.
+6. Submit only findings that pass scope, duplicate, known-issue, impact,
+   payout-readiness, and white-hat disclosure gates.
+
+### Bug Bounty Contest
+
+Use this when the venue is a time-limited audit contest with source, rules, and
+a report format.
+
+1. Create a project with `config.engagement.kind="bug-bounty-contest"`.
+2. Configure contest strategy to favor fast settled loops, for example
+   `batchScopes:10`, `digConcurrency:5`, `skipRealTargetConfirm:true`, and
+   `appendMapWhenExhausted:true` when the rules are source-only.
+3. Before opening more scopes, settle existing candidates through verify/refute
+   and report. Contest mode is speed-oriented, but suspected-only findings
+   still do not meet the submission bar.
+4. Use duplicate tracking against already submitted issues and local findings
+   before submitting a new report.
+5. When mapped scopes are exhausted, append-map to add novel scopes while
+   preserving audited status, submitted findings, duplicate links, and reports.
+   Do not remap unless the operator intentionally wants a fresh inventory.
+6. Watch contest stop-review signals: elapsed review window, exhausted
+   inventory, recent low-yield batches, duplicate rate, report backlog, and open
+   resource requests.
+
 ### Continue An Existing Project
 
 1. Resolve the project UUID from `GET /api/projects`.
@@ -468,7 +508,9 @@ Open only the references needed for the current task:
   prioritize scopes.
 - Latest run health is `needs-resource`: inspect open `resource-request` rows,
   fix the missing tool/artifact/environment, mark the row `resolved`, then
-  rerun the blocked phase.
+  rerun the blocked phase. Prepare and toolchain warm-up can create these rows
+  even when the model did not write `resource_requests.json`; treat them as
+  product-owned setup work, not as audit findings.
 - Latest run health is `needs-coverage`: continue pending scopes or prioritize
   follow-up scopes from the backlog. Do not ask the model to "report more bugs"
   as a substitute for coverage.
@@ -480,6 +522,11 @@ Open only the references needed for the current task:
 - Findings are only `suspected`: make the target buildable and run verify or
   dig again.
 - Findings are confirmed locally but not reproduced: run confirm.
+- Contest project with `skipRealTargetConfirm=true`: real-target Confirm may be
+  intentionally skipped, but verify/refute and report eligibility are still
+  required before submission.
+- Contest inventory exhausted: use append-map/Continue to expand novel scopes
+  without losing prior scope status or submitted/duplicate finding history.
 - Machine-reported finding is manually dismissed: set tracking to `ignored`;
   recover it later from the Ignored filter by changing tracking back to `open`.
 - Confirm decision is `not-reproduced`: treat it as not submission-ready unless

@@ -7,6 +7,7 @@ REST automation, or artifact layout.
 
 - [Product Surfaces](#product-surfaces)
 - [Project Lifecycle](#project-lifecycle)
+- [Engagement Profiles](#engagement-profiles)
 - [Run Phases](#run-phases)
 - [Discovery Health And Backlog](#discovery-health-and-backlog)
 - [Findings And Tracking](#findings-and-tracking)
@@ -32,6 +33,7 @@ New dashboard projects should capture:
 - default provider profile and optional phase overrides;
 - project directory under the daemon workspace, defaulting to project UUID;
 - source paths, build root, corpus paths, and coverage/budget settings.
+- engagement config when the project is a normal bounty or contest.
 
 Use **Run** before the first pipeline run and **Continue** after one exists.
 The CLI equivalent of the Continue button is
@@ -52,6 +54,26 @@ Project list behavior:
   findings, reports, and decisions;
 - recover archived projects from Settings -> Archived Projects.
 
+## Engagement Profiles
+
+Engagement profiles tell the control plane how the audit will be judged. They
+do not change the model-owned audit strategy.
+
+- `standard`: default authorized review.
+- `bug-bounty`: normal bounty work. Keep real-target Confirm in the path when a
+  live target exists, and gate reports on scope, duplicate, known-issue, impact,
+  payout, and disclosure readiness.
+- `bug-bounty-contest`: time-limited contest work. Favor short
+  verify/refute/report batches, allow source-only local confirmation when venue
+  rules permit skipping real-target confirmation, and append-map novel scopes
+  when the current inventory is exhausted.
+
+Contest strategy can include `batchScopes`, `digConcurrency`,
+`skipRealTargetConfirm`, and `appendMapWhenExhausted`. The project view should
+surface stop-review signals such as elapsed review window, exhausted inventory,
+recent low-yield scope batches, duplicate rate, report backlog, and open
+resource requests.
+
 ## Run Phases
 
 The normal project run is prepare-if-needed -> map/dig -> synthesize -> verify
@@ -70,6 +92,11 @@ The normal project run is prepare-if-needed -> map/dig -> synthesize -> verify
 `flounder run <clue>` uses the full pipeline. `flounder run --source ...`,
 `map`, and `audit` enter the sealed discovery path directly.
 
+For contest projects, Continue first settles missing verify/report work before
+opening the next scope batch. If the inventory is exhausted and append-map is
+enabled, the next run asks MAP for novel scopes while preserving prior scope
+status, duplicate links, submitted findings, and reports.
+
 ## Discovery Health And Backlog
 
 Audit runs may write discovery-health artifacts in addition to findings:
@@ -87,6 +114,11 @@ These rows are not findings. They explain what to do next when a run has few or
 zero bugs: fix resource blockers, continue coverage, or prioritize follow-up
 scopes. Mark non-actionable backlog rows `ignored`; mark handled blockers
 `resolved`; keep unresolved coverage rows `open`.
+
+Resource requests can be model-authored or product-owned. Prepare and toolchain
+warm-up failures create product-owned `resource-request` rows with a failed
+command, short diagnostic, and retry command even when the model never wrote a
+`resource_requests.json` file.
 
 ## Findings And Tracking
 
