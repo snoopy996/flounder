@@ -2778,9 +2778,6 @@ function ProjectDetailView(props: {
     && tab !== "setup"
     && setupReadWatermarks[project.uuid] !== setupAttentionSignature
   );
-  const backlogItems = currentDetail.discoveryBacklog ?? [];
-  const openBacklogCount = backlogOpenCount(backlogItems, currentDetail.backlogCounts ?? {});
-  const agentRunnableBacklogCount = backlogGroupItems(backlogItems, "agent-runnable").length;
   const launchLocked = props.busy || Boolean(runningRun);
   const contestCanContinue = contestProfile.enabled && ((progress.pending ?? 0) > 0 || (progress.total ?? 0) === 0 || contestProfile.appendMapWhenExhausted);
   const runLaunchLocked = launchLocked || (currentRoundComplete && !contestCanContinue);
@@ -3066,8 +3063,6 @@ function ProjectDetailView(props: {
             onClick={() => setTab(t.id)}
           >
             <span>{t.label}</span>
-            {t.id === "next-actions" && openBacklogCount > 0 ? <Counter>{openBacklogCount}</Counter> : null}
-            {t.id === "next-actions" && agentRunnableBacklogCount > 0 && tab !== "next-actions" ? <span className="tab-alert-dot pending" aria-label="Agent-runnable backlog" /> : null}
             {t.id === "decisions" && confirmDecisions.length ? <Counter>{confirmDecisions.length}</Counter> : null}
             {t.id === "activity" && activityUnread ? <span className="tab-alert-dot pending" aria-label="New activity" /> : null}
             {t.id === "setup" && setupAttentionDisplay && setupUnread ? <span className={`tab-alert-dot ${setupAttentionDisplay.tone}`} aria-label="Setup attention" /> : null}
