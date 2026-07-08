@@ -1042,6 +1042,36 @@ test("confirm target-link parsing follows command-line remappings from scratch t
   assert.equal(targetLink.linked, true);
 });
 
+test("confirm target-link parsing ignores Foundry config-path when matching scratch tests", () => {
+  const session = {
+    scratchFiles: new Map([[
+      "poc/test/OracleValueStopLossMidBasisPoC.t.sol",
+      "import 'metric-periphery/contracts/extensions/OracleValueStopLossExtension.sol';\ncontract Repro {}\n",
+    ]]),
+    baselineFiles: new Set([
+      "metric-periphery/contracts/extensions/OracleValueStopLossExtension.sol",
+      "poc/foundry.toml",
+    ]),
+  };
+  const command = {
+    program: "forge",
+    args: [
+      "test",
+      "--config-path",
+      "poc/foundry.toml",
+      "--match-path",
+      "poc/test/OracleValueStopLossMidBasisPoC.t.sol",
+      "--match-contract",
+      "OracleValueStopLossMidBasisPoCTest",
+      "-vv",
+    ],
+  };
+
+  assert.deepEqual(commandFileArgsForTest(command, session), ["poc/test/OracleValueStopLossMidBasisPoC.t.sol"]);
+  const targetLink = confirmCommandTargetLinkForTest(command, session);
+  assert.equal(targetLink.linked, true);
+});
+
 test("failed bash command events include an output preview for the UI", async () => {
   const dir = await tempDir();
   try {

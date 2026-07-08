@@ -518,6 +518,7 @@ function commandFileArgs(command: ReproductionCommand, session: AgentSession): s
     "--test-dir",
     "-C",
     "--config",
+    "--config-path",
     "--manifest-path",
     "--package",
     "-p",
@@ -651,6 +652,7 @@ function scratchLinksToBaseline(filePath: string, content: string, baseline: Set
   const specifiers = sourceSpecifiers(content);
   const remappings = command ? commandRemappings(command) : [];
   for (const specifier of specifiers) {
+    if (baselineHasPathLike(baseline, specifier)) return true;
     if (specifier.startsWith("source/") && baselineHasPathLike(baseline, specifier)) return true;
     if (specifier.startsWith("./") || specifier.startsWith("../")) {
       const resolved = normalizeRelativePath(path.posix.join(dir, specifier));
