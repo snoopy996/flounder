@@ -5,7 +5,7 @@
 // the daemon (src/server/daemon.ts); this module holds no run state.
 
 import path from "node:path";
-import { defaultConfig, defaultOutputDir, THINKING_LEVELS, type AuditorConfig } from "../config.js";
+import { defaultConfig, defaultOutputDir, THINKING_LEVELS, type AuditorConfig, type AuditNextAction } from "../config.js";
 import type { RunKind, ProviderRoles } from "../db/store.js";
 import type { SandboxBackend, SandboxNetworkMode } from "../security/sandbox.js";
 
@@ -85,6 +85,7 @@ export interface LaunchSpec {
   dir?: string | undefined; // project subdir under the daemon workspace; materials resolve under it
   models?: ProviderRoles | undefined; // per-phase provider/model/thinking overrides (from the selected profile)
   scopeNote?: string | undefined; // map/audit: the "authorized scope note" prior — focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest; --scope-note also sets it)
+  nextActions?: AuditNextAction[] | undefined; // project discovery backlog rows the agent should resolve before opening fresh coverage
   sandboxBackend?: SandboxBackend | undefined;
   sandboxImage?: string | undefined;
   sandboxAllowHostFallback?: boolean | undefined;
@@ -169,6 +170,7 @@ export function specToConfig(spec: LaunchSpec, out: string, workspace?: string):
   if (spec.verifyFromStart) cfg.auditVerifyFromStart = true;
   if (spec.remap) cfg.auditRemap = true; // re-enumerate scopes from scratch (restart)
   if (spec.appendMap) cfg.auditAppendMap = true; // expand persisted inventory, preserving existing scope statuses
+  if (spec.nextActions) cfg.auditNextActions = spec.nextActions.map((action) => ({ ...action }));
   // prepare + confirm derive their own posture from their options (clue / prior run), not from
   // the sealed audit's map/dig flags — return the base cfg (provider/model/out/target) as-is.
   if (spec.verb === "prepare" || spec.verb === "confirm" || spec.verb === "report") return cfg;

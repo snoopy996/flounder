@@ -185,9 +185,10 @@ it does not provide kernel-level network or filesystem isolation.
 
 Prepare and toolchain warm-up failures are surfaced as `resource-request`
 backlog rows with a diagnostic and retry command. A `needs-resource` run should
-be treated as blocked on operator-owned setup until the sandbox image,
-toolchain, dependency state, fork setup, or credential boundary is fixed and the
-row is resolved.
+make the agent inspect the blocker and retry safe sandbox, toolchain, dependency,
+source, or fork setup where possible. Ask the operator only for explicit
+credentials, authorization, or unavailable external resources, then mark the row
+resolved.
 
 Sealed `run --source`, `map`, and `audit` inspection/confirmation commands
 should not use public network access. `prepare` and `confirm` may fetch, fork,
@@ -234,7 +235,12 @@ curl http://127.0.0.1:4500/api/runs/<id>/log
 
 Discovery backlog rows can be filtered with
 `kind=coverage-gap|resource-request|followup-scope` and
-`status=open|resolved|stale|ignored|all`. Update operator state without deleting
+`status=open|resolved|stale|ignored|all`. Rows include `actionability`,
+`action_owner`, `recommended_action`, and `primary_action_label`: agents should
+advance `agent-runnable` coverage rows, resolve `agent-resource` setup rows when
+safe local work can do so, and route `agent-review` rows to the next safe
+workflow action. Ask the operator only for explicit credentials, authorization,
+or unavailable external resources. Update operator state without deleting
 provenance:
 
 ```bash

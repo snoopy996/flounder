@@ -69,6 +69,9 @@ export interface AuditorConfig {
   // reference material. These are seed-only and are not persisted into the current
   // inventory unless MAP independently emits novel scopes.
   auditAppendMapSeedPaths: string[];
+  // Project-level Next Actions from the discovery backlog. These are durable
+  // control-plane work items from prior runs, not an audit strategy or taxonomy.
+  auditNextActions: AuditNextAction[];
   // After the per-scope dig, run one cross-scope SYNTHESIS pass (sink-driven composition) to find
   // bugs that only exist in the COMPOSITION of components. Default on for map→dig; set false to skip.
   auditSynthesize?: boolean;
@@ -107,6 +110,17 @@ export interface AuditorConfig {
   // is auto-downgraded: an unspecified role inherits the main model.
   models?: Partial<Record<AuditRole, Partial<RoleModel>>>;
   dryRun: boolean;
+}
+
+export interface AuditNextAction {
+  id?: number;
+  kind: string;
+  actionability?: string;
+  recommendedAction?: string;
+  title?: string;
+  summary?: string;
+  scopeId?: string;
+  reason?: string;
 }
 
 // The phases that may run on different models. `map` = scope enumeration,
@@ -204,6 +218,7 @@ export function defaultConfig(): AuditorConfig {
     auditRemap: false,
     auditAppendMap: false,
     auditAppendMapSeedPaths: [],
+    auditNextActions: [],
     auditMapOnly: false,
     auditRequireInventory: false,
     auditVerifyFromStart: false,

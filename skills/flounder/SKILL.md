@@ -261,9 +261,11 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
    - run health: `latestRunHealth.status` is `healthy`,
      `needs-coverage`, `needs-resource`, `shallow`, or `infra-failed`
    - discovery backlog: `GET /api/projects/:uuid/backlog?status=open`
-     lists coverage gaps, resource requests, and follow-up scopes; use
-     `PATCH /api/backlog/:id` to mark rows `resolved`, `ignored`, `stale`, or
-     back to `open`
+     lists coverage gaps, resource requests, and follow-up scopes with
+     `actionability`, `action_owner`, and `recommended_action`; treat open rows
+     as an agent-owned queue (`agent-runnable`, `agent-resource`, `agent-review`)
+     and use `PATCH /api/backlog/:id` to mark rows `resolved`, `ignored`,
+     `stale`, or back to `open`
 
    Project names are display labels. Resolve a project UUID from `POST /api/projects`
    or `GET /api/projects`; do not build a project URL from the name.
@@ -395,8 +397,10 @@ a report format.
    ```
 
 4. Inspect `latestRunHealth`, `backlogCounts`, and open backlog rows before
-   drawing conclusions. Resolve `resource-request` rows before rerunning the
-   same blocked work; continue coverage or prioritize follow-up scopes for
+   drawing conclusions. Treat open Next Actions as work for the agent to
+   resolve or route before opening unrelated fresh coverage; ask the operator
+   only for explicit credentials, authorization, or unavailable external
+   resources. Continue coverage or prioritize follow-up scopes for
    `needs-coverage`; do not treat `shallow` as a meaningful negative result.
 5. If many mapped scopes are pending, prefer continuing coverage before drawing
    a negative conclusion.
@@ -412,8 +416,10 @@ project rail, or how to recover archived work.
 - Treat the Project setup disclosure as the home for the stored project clue
   and prepare caveats. Do not expect the clue to appear as a separate dashboard
   card; inspect setup before assuming Prepare did not receive context.
-- If open `resource-request` backlog rows explain a setup limitation, resolve
-  or ignore those rows after the operator fixes or dismisses the blocker.
+- If open `resource-request` backlog rows explain a setup limitation, first let
+  the agent inspect the blocker and retry safe setup work. Ask the operator only
+  for explicit credentials, authorization, or unavailable external resources,
+  then mark handled rows `resolved` or non-actionable rows `ignored`.
 - Pin active projects that need daily attention; archive dormant projects from
   the project card menu. Archiving hides the project from the rail, clears pin,
   and keeps runs, scopes, findings, and reports.
@@ -507,18 +513,23 @@ Open only the references needed for the current task:
 - Map is done but many high-score scopes are pending: continue the audit or
   prioritize scopes.
 - Latest run health is `needs-resource`: inspect open `resource-request` rows,
-  fix the missing tool/artifact/environment, mark the row `resolved`, then
-  rerun the blocked phase. Prepare and toolchain warm-up can create these rows
-  even when the model did not write `resource_requests.json`; treat them as
-  product-owned setup work, not as audit findings.
+  have the agent retry safe toolchain, sandbox, dependency, source, or auth setup
+  where possible, and ask the operator only for explicit credentials,
+  authorization, or unavailable external resources. Mark handled rows
+  `resolved`, then rerun the blocked phase. Prepare and toolchain warm-up can
+  create these rows even when the model did not write `resource_requests.json`;
+  treat them as product-owned setup work, not as audit findings.
 - Latest run health is `needs-coverage`: continue pending scopes or prioritize
   follow-up scopes from the backlog. Do not ask the model to "report more bugs"
   as a substitute for coverage.
 - Latest run health is `shallow`: treat the run as inconclusive; inspect logs
   and rerun or fix setup before summarizing.
-- Discovery backlog has open `coverage-gap` or `followup-scope` rows: carry
-  them as coverage work. They are not findings and should not appear in a bug
-  list unless a later execution-backed audit confirms one.
+- Discovery backlog has open Next Actions: let the agent resolve or route them
+  first. Coverage rows continue coverage, append map coverage, or prioritize the
+  referenced scopes; setup rows retry safe local setup; routing rows are
+  inspected and turned into the right safe workflow action. They are not findings
+  and should not appear in a bug list unless a later execution-backed audit
+  confirms one.
 - Findings are only `suspected`: make the target buildable and run verify or
   dig again.
 - Findings are confirmed locally but not reproduced: run confirm.

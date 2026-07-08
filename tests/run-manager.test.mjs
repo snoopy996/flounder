@@ -86,6 +86,28 @@ test("buildArgs: verify-from-start is an explicit run pipeline flag", () => {
   assert.equal(specToConfig({ verb: "run", target: "p", sourcePaths: ["./s"], verifyFromStart: true }, "runs").auditVerifyFromStart, true);
 });
 
+test("specToConfig: launch next actions are preserved for the audit prompt", () => {
+  const cfg = specToConfig({
+    verb: "run",
+    target: "p",
+    sourcePaths: ["./s"],
+    nextActions: [
+      {
+        id: 7,
+        kind: "resource-request",
+        actionability: "agent-resource",
+        recommendedAction: "resolve-resource",
+        title: "Install Foundry dependencies",
+        summary: "forge build needs package install",
+        reason: "The agent should retry safe setup before asking for help.",
+      },
+    ],
+  }, "runs");
+  assert.equal(cfg.auditNextActions.length, 1);
+  assert.equal(cfg.auditNextActions[0].recommendedAction, "resolve-resource");
+  assert.equal(cfg.auditNextActions[0].actionability, "agent-resource");
+});
+
 test("buildArgs/specToConfig: append-map can carry extra seed inventories", () => {
   const args = buildArgs({ verb: "map", target: "p", sourcePaths: ["./s"], appendMap: true, appendMapSeedPaths: ["/old/audit_scopes.json", "local/scopes.json"] });
   assert.ok(args.includes("--append-map"));

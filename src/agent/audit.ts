@@ -127,7 +127,7 @@ export async function runAudit(
   // falling back to the most recent ones so memory is always visible.
   let memoryNotes = await memory.recall([cfg.targetName, scopeNote].filter(Boolean).join(" "), 8);
   if (memoryNotes.length === 0) memoryNotes = (await memory.all()).slice(-8).reverse();
-  const memoryHint = renderMemoryHint(memoryNotes);
+  const memoryHint = [renderNextActionsHint(cfg.auditNextActions), renderMemoryHint(memoryNotes)].filter(Boolean).join("\n\n");
 
   // Driver choice: real pi providers (e.g. openai-codex) run a continuous
   // AgentSession that owns the loop; the deterministic mock and CLI fallbacks use
@@ -1207,6 +1207,27 @@ function deriveScopeNoteFromSource(sourcePaths: string[]): string | undefined {
 function renderMemoryHint(notes: { kind: string; note: string; sourceRef?: string }[]): string {
   if (notes.length === 0) return "";
   return notes.map((note) => `- [${note.kind}] ${note.note}${note.sourceRef ? ` (ref: ${note.sourceRef})` : ""}`).join("\n");
+}
+
+function renderNextActionsHint(actions: AuditorConfig["auditNextActions"]): string {
+  const open = actions.filter((action) => action.kind);
+  if (open.length === 0) return "";
+  const rows = open.slice(0, 20).map((action, idx) => {
+    const id = action.id !== undefined ? `#${action.id}` : `#${idx + 1}`;
+    const parts = [
+      `${id} ${action.kind}`,
+      action.actionability ? `actionability=${action.actionability}` : "",
+      action.recommendedAction ? `recommended=${action.recommendedAction}` : "",
+      action.scopeId ? `scope=${action.scopeId}` : "",
+      action.title ? `title=${action.title}` : "",
+      action.summary ? `summary=${action.summary}` : "",
+      action.reason ? `reason=${action.reason}` : "",
+    ].filter(Boolean);
+    return `- ${parts.join("; ")}`;
+  }).join("\n");
+  return `Project Next Actions (control-plane worklist):
+These are open discovery-backlog rows from prior runs. Before opening unrelated fresh coverage, resolve or route them with the available local workflow: continue/dig/append-map for coverage work, retry safe setup for setup work, and ask the operator only for explicit credentials, authorization, or unavailable external resources.
+${rows}`;
 }
 
 async function loadAppendMapSeedScopes(cfg: AuditorConfig): Promise<AuditScope[]> {

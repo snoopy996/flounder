@@ -293,7 +293,7 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "GET", path: "/api/projects/:uuid/backlog",
-    summary: "List discovery backlog rows for a project: coverage gaps, resource requests, and follow-up scopes from audit runs. Filter with ?kind=coverage-gap|resource-request|followup-scope and ?status=open|resolved|stale|ignored|all.",
+    summary: "List discovery backlog rows for a project: coverage gaps, resource requests, and follow-up scopes from audit runs. Rows include agent-owned actionability metadata so agents can continue coverage, resolve setup/resource blockers, or route ambiguous work before asking the operator for explicit credentials, authorization, or unavailable external resources. Filter with ?kind=coverage-gap|resource-request|followup-scope and ?status=open|resolved|stale|ignored|all.",
     params: { uuid: "project UUID" },
     query: { kind: "coverage-gap|resource-request|followup-scope?", status: "open|resolved|stale|ignored|all? (default open)", limit: "number? (default 100)", offset: "number? (default 0)" },
     handler: projectBacklogGet,
@@ -1303,9 +1303,55 @@ function scopeApiRows(scopes: Array<Record<string, unknown>>): Array<Record<stri
 }
 
 function discoveryBacklogDisplayRow(row: Record<string, unknown>): Record<string, unknown> {
+  const payload = safeParse(row.payload_json);
   return {
     ...row,
-    payload: safeParse(row.payload_json),
+    payload,
+    ...discoveryBacklogActionMeta(row, payload),
+  };
+}
+
+function discoveryBacklogActionMeta(row: Record<string, unknown>, payload: unknown): Record<string, unknown> {
+  const kind = stringValue(row.kind);
+  const payloadRecord = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+  const scopeId = stringValue(row.scope_id) || stringValue(payloadRecord.scope_id ?? payloadRecord.scopeId ?? payloadRecord.id);
+  if (kind === "resource-request") {
+    return {
+      actionability: "agent-resource",
+      action_owner: "agent",
+      recommended_action: "resolve-resource",
+      primary_action_label: "Fix setup",
+      autonomous: true,
+      action_reason: "The agent should inspect the missing resource, retry safe setup work, and ask only for explicit credentials or authorization when required.",
+    };
+  }
+  if (kind === "coverage-gap") {
+    return {
+      actionability: "agent-runnable",
+      action_owner: "agent",
+      recommended_action: scopeId ? "prioritize-scope" : "expand-map",
+      primary_action_label: scopeId ? "Prioritize scope" : "Expand map",
+      autonomous: true,
+      action_reason: scopeId ? "The agent can prioritize this mapped gap for the next dig batch." : "The agent can append map coverage to turn this gap into concrete scopes.",
+    };
+  }
+  if (kind === "followup-scope") {
+    return {
+      actionability: "agent-runnable",
+      action_owner: "agent",
+      recommended_action: scopeId ? "prioritize-scope" : "continue",
+      primary_action_label: scopeId ? "Prioritize scope" : "Continue",
+      autonomous: true,
+      action_reason: scopeId ? "The agent can move this follow-up scope to the front of the dig queue." : "The agent can continue coverage and audit follow-up work.",
+    };
+  }
+  return {
+    actionability: "agent-review",
+    action_owner: "agent",
+    recommended_action: "review-and-route",
+    primary_action_label: "Run agent",
+    autonomous: true,
+    action_reason: "The agent should inspect this backlog row and decide the next safe workflow action.",
   };
 }
 
@@ -2179,6 +2225,11 @@ async function runLaunch(c: Ctx): Promise<void> {
   applyContestRunDefaults(spec, project, body, progress, c.store, projectId, currentResultRunIds, materialBoundary, requiresRealTargetConfirmation, runs);
   resumeInterruptedCoverageBatch(spec, progress, runs);
   promoteSettledPipelineCoverageBatch(spec, c.store, projectId, progress, currentResultRunIds, materialBoundary, requiresRealTargetConfirmation);
+  const nextActions = projectNextActions(c.store, projectId);
+  if (nextActions.length > 0) {
+    spec.nextActions = nextActions;
+    applyNextActionRunDefaults(spec, nextActions, progress);
+  }
   const materialDrift = verifyMaterialDrift(c.store, projectId, spec.verifyFindings, body.allowMaterialDrift === true);
   if (materialDrift) return sendJson(c.res, 409, materialDrift);
   if (spec.verb === "run" && spec.pipeline && pipelineRoundComplete(spec, progress, c.store, projectId, currentResultRunIds, materialBoundary, requiresRealTargetConfirmation)) {
@@ -2405,11 +2456,54 @@ function pipelineRoundComplete(
   materialBoundary: Record<string, unknown> | undefined,
   requiresRealTargetConfirmation: boolean,
 ): boolean {
+  if ((spec.nextActions?.length ?? 0) > 0) return false;
   if (spec.continueCoverage) return false;
   if (spec.maxScopes !== 0) return false;
   if (!coverageTargetReached(spec)) return false;
   if (pipelinePostAuditWorkPending(store, projectId, currentResultRunIds, materialBoundary, requiresRealTargetConfirmation)) return false;
   return true;
+}
+
+function projectNextActions(store: MetadataStore, projectId: number): NonNullable<LaunchSpec["nextActions"]> {
+  return store.listDiscoveryBacklog(projectId, { status: "open", limit: 50 })
+    .map(discoveryBacklogDisplayRow)
+    .map((row) => {
+      const out: NonNullable<LaunchSpec["nextActions"]>[number] = {
+        kind: stringValue(row.kind) || "unknown",
+      };
+      const id = numberValue(row.id);
+      if (Number.isFinite(id) && id > 0) out.id = id;
+      const scopeId = stringValue(row.scope_id) || stringValue((row.payload as Record<string, unknown> | undefined)?.scope_id ?? (row.payload as Record<string, unknown> | undefined)?.scopeId);
+      const actionability = stringValue(row.actionability);
+      const recommendedAction = stringValue(row.recommended_action);
+      const title = stringValue(row.title);
+      const summary = stringValue(row.summary);
+      const reason = stringValue(row.action_reason);
+      if (actionability) out.actionability = actionability;
+      if (recommendedAction) out.recommendedAction = recommendedAction;
+      if (title) out.title = title;
+      if (summary) out.summary = summary;
+      if (scopeId) out.scopeId = scopeId;
+      if (reason) out.reason = reason;
+      return out;
+    });
+}
+
+function applyNextActionRunDefaults(spec: LaunchSpec, nextActions: NonNullable<LaunchSpec["nextActions"]>, progress: Coverage): void {
+  if (spec.verb !== "run" || !spec.pipeline || nextActions.length === 0) return;
+  const pending = Math.max(0, Math.floor(progress.pending));
+  const wantsMapExpansion = nextActions.some((action) => action.recommendedAction === "expand-map");
+  if (wantsMapExpansion && !spec.remap && !spec.appendMap) {
+    spec.appendMap = true;
+    if (spec.maxScopes === 0) spec.maxScopes = undefined;
+    spec.continueCoverage = true;
+  }
+  const wantsSetupOrRouting = nextActions.some((action) => action.actionability === "agent-resource" || action.actionability === "agent-review");
+  if (wantsSetupOrRouting && pending === 0 && !spec.appendMap && spec.maxScopes === 0) {
+    spec.quick = true;
+    spec.maxScopes = undefined;
+    spec.continueCoverage = true;
+  }
 }
 
 function pipelinePostAuditWorkPending(
