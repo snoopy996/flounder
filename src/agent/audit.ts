@@ -237,6 +237,15 @@ export async function runAudit(
       aggregatedSteps.push(...phase.steps);
       ingestFindingsFromScratch(verifySession);
       const claimLabel = String(finding.title ?? "").slice(0, 90);
+      const originId = typeof finding.originId === "number" ? finding.originId : typeof finding.origin_id === "number" ? finding.origin_id : undefined;
+      const inheritedScopeId = typeof finding.scopeId === "string" ? finding.scopeId : typeof finding.scope_id === "string" ? finding.scope_id : undefined;
+      if (verifySession.resourceRequests?.length) {
+        session.resourceRequests = mergeResourceRequests(session.resourceRequests ?? [], verifySession.resourceRequests.map((request) => ({
+          ...request,
+          ...(request.findingId ? {} : { findingId: String(originId ?? (claimLabel || idx + 1)) }),
+          ...(request.scopeId || !inheritedScopeId ? {} : { scopeId: inheritedScopeId }),
+        })));
+      }
       const missingVerdict = verifySession.findings.length === 0;
       if (missingVerdict) {
         if (!phaseFailureReason) phaseFailureReason = "error";
@@ -253,8 +262,6 @@ export async function runAudit(
       // row (status + PoC) rather than inserting a duplicate. The link is positional — claim N is
       // seeded from input finding N — so it survives the verify session renaming the title. Only the
       // primary verdict inherits it; any extra finding the session split out stays its own new row.
-      const originId = typeof finding.originId === "number" ? finding.originId : typeof finding.origin_id === "number" ? finding.origin_id : undefined;
-      const inheritedScopeId = typeof finding.scopeId === "string" ? finding.scopeId : typeof finding.scope_id === "string" ? finding.scope_id : undefined;
       const primaryVerdict = verifySession.findings[0];
       if (originId !== undefined && primaryVerdict) primaryVerdict.originId = originId;
       if (inheritedScopeId) {
@@ -456,7 +463,7 @@ export async function runAudit(
       // differential confirmation, so parallel digs cannot corrupt each other's
       // test files, build output, or findings. A bounded pool caps simultaneous digs.
       const workspaceRoots = cfg.buildRoot ? [cfg.buildRoot] : cfg.sourcePaths;
-      const digScope = async (scope: AuditScope): Promise<{ findings: AgentFinding[]; steps: TranscriptStep[]; commandRuns: typeof session.commandRuns; scratchFiles: Array<[string, string]> }> => {
+      const digScope = async (scope: AuditScope): Promise<{ findings: AgentFinding[]; steps: TranscriptStep[]; commandRuns: typeof session.commandRuns; scratchFiles: Array<[string, string]>; resourceRequests: ResourceRequest[] }> => {
         scope.status = "auditing"; // mark in-progress so the live UI shows which scope is being dug
         recorder.scopes(scopeInventory);
         const digT0 = Date.now();
@@ -495,7 +502,7 @@ export async function runAudit(
           recorder.scopes(scopeInventory);
           recorder.findings(unioned, logger.runDir, "dig checkpoint"); // persist this scope's findings live (content-keyed upsert)
           recorder.runScopes(++digDone, toDig.length);
-          return { findings: unioned, steps: digSteps, commandRuns: scopedRuns, scratchFiles: scopedScratchFiles };
+          return { findings: unioned, steps: digSteps, commandRuns: scopedRuns, scratchFiles: scopedScratchFiles, resourceRequests: digSession.resourceRequests ?? [] };
         } catch (error) {
           await resetInFlightScope(scope);
           throw error;
@@ -511,6 +518,7 @@ export async function runAudit(
         aggregatedSteps.push(...result.steps);
         session.commandRuns.push(...result.commandRuns);
         for (const [scratchPath, content] of result.scratchFiles) session.scratchFiles.set(scratchPath, content);
+        if (result.resourceRequests.length > 0) session.resourceRequests = mergeResourceRequests(session.resourceRequests ?? [], result.resourceRequests);
       }
       digDifferentialDone = true; // each dig confirmed differentially in its own workspace
     } else {
@@ -605,7 +613,7 @@ export async function runAudit(
 
   const discoveryArtifacts = readDiscoveryArtifacts(session);
   let coverageGaps: CoverageGap[] = discoveryArtifacts.coverageGaps;
-  let resourceRequests: ResourceRequest[] = discoveryArtifacts.resourceRequests;
+  let resourceRequests: ResourceRequest[] = mergeResourceRequests(discoveryArtifacts.resourceRequests, session.resourceRequests ?? []);
   let followupScopes: AuditScope[] = discoveryArtifacts.followupScopes;
   if (followupScopes.length > 0) {
     const merged = mergeFollowupScopes(scopeInventory, followupScopes);
@@ -1269,6 +1277,22 @@ async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item
 /** Sanitize a scope id into a safe per-dig workspace directory name. */
 function safeScopeDir(id: string): string {
   return id.replace(/[^a-zA-Z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "scope";
+}
+
+function mergeResourceRequests(existing: ResourceRequest[], next: ResourceRequest[]): ResourceRequest[] {
+  const out = [...existing];
+  const seen = new Set(out.map(resourceRequestKey));
+  for (const request of next) {
+    const key = resourceRequestKey(request);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(request);
+  }
+  return out;
+}
+
+function resourceRequestKey(request: ResourceRequest): string {
+  return `${request.kind}::${request.findingId ?? ""}::${request.scopeId ?? ""}::${request.needed}::${request.reason}`.toLowerCase();
 }
 
 function renderFileManifest(source: Doc[], corpusEntries: string[] = []): string {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultConfig } from "../dist/config.js";
-import { prepareWorkspaceToolchain } from "../dist/agent/prepare.js";
+import { prepareResourceRequests, prepareWorkspaceToolchain } from "../dist/agent/prepare.js";
 
 async function tempDir(prefix) {
   return mkdtemp(path.join(os.tmpdir(), prefix));
@@ -18,6 +18,17 @@ fs.appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(name)} + " " + pr
 if (process.argv.includes("--version") && ${JSON.stringify(Boolean(versionOutput))}) {
   console.log(${JSON.stringify(versionOutput ?? "")});
 }
+`);
+  await chmod(bin, 0o755);
+}
+
+async function writeFailingFakeTool(dir, name, logPath, stderrText) {
+  const bin = path.join(dir, name);
+  await writeFile(bin, `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(name)} + " " + process.argv.slice(2).join(" ") + " cwd=" + process.cwd() + "\\n");
+console.error(${JSON.stringify(stderrText)});
+process.exit(1);
 `);
   await chmod(bin, 0o755);
 }
@@ -138,6 +149,55 @@ test("prepareWorkspaceToolchain reports pinned tool version mismatch before warm
     assert.equal(log.events.at(-1)?.kind, "audit_prepare_tool_version_mismatch");
     assert.equal(log.artifacts[0]?.name, "audit_prepare.json");
     assert.deepEqual(log.artifacts[0]?.payload.toolVersionChecks, report.toolVersionChecks);
+  } finally {
+    process.env.PATH = oldPath;
+    await rm(workspace, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test("prepareResourceRequests captures failed Foundry warm-up as product-owned resource blocker", async () => {
+  const workspace = await tempDir("flounder-prepare-workspace-");
+  const binDir = await tempDir("flounder-prepare-bin-");
+  const cacheDir = await tempDir("flounder-prepare-cache-");
+  const logPath = path.join(workspace, "tools.log");
+  const oldPath = process.env.PATH;
+  try {
+    await writeFile(path.join(workspace, "foundry.toml"), "[profile.default]\nsrc = \"src\"\n");
+    await writeFailingFakeTool(binDir, "forge", logPath, "Error: Broken pipe (os error 32)");
+    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+
+    const cfg = defaultConfig();
+    cfg.sandboxBackend = "host";
+    cfg.sandboxAllowHostFallback = true;
+    cfg.auditPrepareTimeoutMs = 10_000;
+    cfg.reproductionMaxLogBytes = 4000;
+    cfg.sourcePaths = [workspace];
+    const log = logger();
+
+    const report = await prepareWorkspaceToolchain({
+      workspace: { absolute: workspace, relative: "workspace" },
+      cfg,
+      logger: log,
+      cacheDir,
+    });
+    const requests = prepareResourceRequests(report, {
+      program: "forge",
+      args: ["test", "test/PoC.t.sol"],
+      expectedExitCode: 0,
+    });
+
+    assert.equal(report.ran, true);
+    assert.deepEqual(report.results.map((result) => [result.toolchain, result.command, result.ok]), [
+      ["forge", "forge build", false],
+    ]);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].kind, "sandbox-image");
+    assert.match(requests[0].reason, /forge build/);
+    assert.match(requests[0].reason, /Broken pipe/);
+    assert.equal(requests[0].retryCommand, "forge test test/PoC.t.sol");
+    assert.doesNotMatch(JSON.stringify(requests), new RegExp(workspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   } finally {
     process.env.PATH = oldPath;
     await rm(workspace, { recursive: true, force: true });

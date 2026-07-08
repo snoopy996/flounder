@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { sandboxExecutionOptions, sandboxNetworkForPurpose, type AuditorConfig } from "../config.js";
 import { analyzeAgentBashCommandSafety, analyzeConfirmBashCommandSafety, isAgentBuildCommand, isAgentConfirmCommand } from "../security/policy.js";
-import { prepareToolVersionBlockingIssue, prepareWorkspaceToolchain } from "./prepare.js";
+import { prepareResourceRequests, prepareToolVersionBlockingIssue, prepareWorkspaceToolchain } from "./prepare.js";
 import {
   firstBlockedSandboxFile,
   matchSuccessPatterns,
@@ -16,6 +16,7 @@ import {
 } from "../security/sandbox.js";
 import type { RunLogger } from "../trace/logger.js";
 import type { ConfirmationStatus, Doc, ReproductionCommand, ReproductionCommandResult, ReproductionFile, Severity } from "../types.js";
+import type { ResourceRequest } from "./discovery-artifacts.js";
 import type { ProjectMemory } from "./memory.js";
 import { stagePackageSource } from "./package-source.js";
 
@@ -94,6 +95,8 @@ export interface AgentSession {
   prepared?: boolean;
   /** Blocking sandbox/toolchain preflight issue detected during warm-up. */
   prepareBlock?: string;
+  /** Product-owned resource requests detected by framework preflight, independent of model-authored resource_requests.json. */
+  resourceRequests?: ResourceRequest[];
   /** Persistent, host-isolated package cache (CARGO_HOME etc.) reused across runs. */
   buildCacheDir?: string;
   /**
@@ -843,9 +846,27 @@ async function ensurePrepared(ctx: ToolContext, workspace: SandboxWorkspace, foc
   if (ctx.session.prepared) return undefined;
   ctx.session.prepared = true; // set before awaiting so a second test command does not re-trigger
   const report = await prepareWorkspaceToolchain({ workspace, cfg: ctx.cfg, logger: ctx.logger, ...(ctx.session.buildCacheDir ? { cacheDir: ctx.session.buildCacheDir } : {}), ...(focusCommand ? { focusCommand } : {}) });
+  const resourceRequests = prepareResourceRequests(report, focusCommand);
+  if (resourceRequests.length > 0) ctx.session.resourceRequests = mergeResourceRequests(ctx.session.resourceRequests ?? [], resourceRequests);
   const issue = prepareToolVersionBlockingIssue(report);
   if (issue) ctx.session.prepareBlock = issue;
   return issue;
+}
+
+function mergeResourceRequests(existing: ResourceRequest[], next: ResourceRequest[]): ResourceRequest[] {
+  const out = [...existing];
+  const seen = new Set(out.map((request) => resourceRequestKey(request)));
+  for (const request of next) {
+    const key = resourceRequestKey(request);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(request);
+  }
+  return out;
+}
+
+function resourceRequestKey(request: ResourceRequest): string {
+  return `${request.kind}::${request.findingId ?? ""}::${request.scopeId ?? ""}::${request.needed}::${request.reason}`.toLowerCase();
 }
 
 async function ensureWorkspace(ctx: ToolContext): Promise<SandboxWorkspace | undefined> {

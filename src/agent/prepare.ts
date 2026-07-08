@@ -4,6 +4,7 @@ import { sandboxExecutionOptions, type AuditorConfig } from "../config.js";
 import { runSandboxCommand, type SandboxWorkspace } from "../security/sandbox.js";
 import type { RunLogger } from "../trace/logger.js";
 import type { ReproductionCommand } from "../types.js";
+import type { ResourceRequest } from "./discovery-artifacts.js";
 
 // Verification-environment guarantee (not strategy). Confirmation only matters if
 // the model's local test can actually compile and run. On a real target that
@@ -34,6 +35,7 @@ export interface PrepareCommandResult {
   timedOut: boolean;
   durationMs: number;
   ok: boolean;
+  diagnostic?: string;
 }
 
 export interface PrepareReport {
@@ -110,6 +112,7 @@ export async function prepareWorkspaceToolchain(input: { workspace: SandboxWorks
         timedOut: run.timedOut,
         durationMs: run.durationMs,
         ok,
+        ...(ok ? {} : { diagnostic: prepareDiagnostic(run.stderr, run.stdout) }),
       };
       results.push(record);
       await input.logger.event("audit_prepare_command", { toolchain: plan.toolchain, command: record.command, cwd: record.cwd, exitCode: run.exitCode, timedOut: run.timedOut, ok });
@@ -131,6 +134,41 @@ export function prepareToolVersionBlockingIssue(report: PrepareReport): string |
     return `${check.tool} expected ${check.expected}, ${actual}`;
   });
   return `sandbox image/toolchain preflight failed: ${details.join("; ")}. Build or select a target-specific sandbox image that matches the project's pinned toolchain.`;
+}
+
+export function prepareResourceRequests(report: PrepareReport, focusCommand?: ReproductionCommand): ResourceRequest[] {
+  const requests: ResourceRequest[] = [];
+  for (const check of report.toolVersionChecks.filter((item) => !item.ok)) {
+    const actual = check.actual ? `actual ${check.actual}` : (check.reason ?? "tool unavailable");
+    requests.push({
+      id: `prepare-${slug(check.tool)}-version`,
+      status: "open",
+      kind: "sandbox-image",
+      needed: `Sandbox image with ${check.tool} ${check.expected}`,
+      reason: `${check.command} did not match the pinned tool version (${actual}).`,
+      unblock: "Build or select a target-specific sandbox image that matches the target's pinned toolchain, then rerun verify/refute.",
+      ...(focusCommand ? { retryCommand: renderCommand(focusCommand) } : {}),
+      priority: "high",
+    });
+  }
+  for (const result of report.results.filter((item) => !item.ok)) {
+    const status = result.timedOut ? "timed out" : `exited ${result.exitCode ?? "without an exit code"}`;
+    const diagnostic = result.diagnostic ? ` Diagnostic: ${result.diagnostic}` : "";
+    const kind: ResourceRequest["kind"] = /broken pipe|segmentation fault|illegal instruction|panic/i.test(result.diagnostic ?? "")
+      ? "sandbox-image"
+      : "toolchain";
+    requests.push({
+      id: `prepare-${slug(result.toolchain)}-${slug(result.cwd)}-${slug(result.command)}`,
+      status: "open",
+      kind,
+      needed: `Working ${result.toolchain} prepare environment for ${result.cwd}`,
+      reason: `Prepare command "${result.command}" in ${result.cwd} ${status}.${diagnostic}`,
+      unblock: "Repair the sandbox image/toolchain or dependency setup, mark this request resolved, then rerun verify/refute for affected findings.",
+      retryCommand: focusCommand ? renderCommand(focusCommand) : result.command,
+      priority: "high",
+    });
+  }
+  return dedupeRequests(requests);
 }
 
 async function checkPinnedToolVersions(
@@ -194,6 +232,36 @@ function versionOutputMatches(output: string, expected: string): boolean {
 
 function firstNonEmptyLine(output: string): string | undefined {
   return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+}
+
+function prepareDiagnostic(stderr: string, stdout: string): string {
+  const combined = `${stderr}\n${stdout}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^\[[0-9]+\/[0-9]+\]/.test(line))
+    .join(" ");
+  return combined.slice(0, 500);
+}
+
+function renderCommand(command: ReproductionCommand): string {
+  return [command.program, ...command.args].join(" ");
+}
+
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "item";
+}
+
+function dedupeRequests(requests: ResourceRequest[]): ResourceRequest[] {
+  const seen = new Set<string>();
+  const out: ResourceRequest[] = [];
+  for (const request of requests) {
+    const key = `${request.kind}::${request.needed}::${request.reason}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(request);
+  }
+  return out;
 }
 
 function escapeRegExp(value: string): string {
