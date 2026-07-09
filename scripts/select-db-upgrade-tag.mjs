@@ -11,7 +11,9 @@ const execFileAsync = promisify(execFile);
 export async function selectDbUpgradeTag({ cwd, requestedTag, exec = execFileAsync }) {
   if (requestedTag) return requestedTag;
   const [{ stdout: tagsOutput }, { stdout: headOutput }] = await Promise.all([
-    exec("git", ["tag", "--list", "v*", "--sort=-v:refname"], { cwd }),
+    // --merged HEAD excludes releases from unrelated/future branches. The
+    // migration baseline must be a real predecessor of the candidate commit.
+    exec("git", ["tag", "--merged", "HEAD", "--list", "v*", "--sort=-v:refname"], { cwd }),
     exec("git", ["rev-parse", "HEAD"], { cwd }),
   ]);
   const head = headOutput.trim();

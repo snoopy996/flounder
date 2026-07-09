@@ -55,7 +55,6 @@ import {
   parseJson,
   PHASE_DESC,
   PROVIDER_PHASES,
-  rankCandidates,
   rawPendingVerifyCount,
   reportableDecisions,
   reportableFindings,

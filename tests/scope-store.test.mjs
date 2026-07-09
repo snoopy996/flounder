@@ -103,7 +103,7 @@ test("sandbox rejects a top-level source symlink before copying", async () => {
     await writeFile(path.join(outside, "proof.txt"), "outside");
     await symlink(outside, sourceLink, "dir");
     await assert.rejects(
-      prepareSandboxWorkspace([sourceLink], path.join(dir, "run"), "audit/workspace"),
+      prepareSandboxWorkspace([`${sourceLink}${path.sep}`], path.join(dir, "run"), "audit/workspace"),
       /source root must not be a symbolic link/,
     );
   } finally {

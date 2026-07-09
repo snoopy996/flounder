@@ -77,11 +77,14 @@ export async function prepareSandboxWorkspace(sourcePaths: string[], runDir: str
   await mkdir(absolute, { recursive: true });
   const onlySource = sourcePaths[0] ?? "";
   if (sourcePaths.length === 1 && (await isDirectory(onlySource))) {
-    const sourceInfo = await lstat(onlySource);
+    // lstat("link/") follows the final symlink on Node/macOS. Resolve only the
+    // spelling (not the symlink) so a trailing separator cannot bypass the guard.
+    const normalizedSource = path.resolve(onlySource);
+    const sourceInfo = await lstat(normalizedSource);
     if (sourceInfo.isSymbolicLink()) {
       throw new Error("Sandbox source root must not be a symbolic link.");
     }
-    await copyDirectoryContents(onlySource, absolute);
+    await copyDirectoryContents(normalizedSource, absolute);
   } else {
     for (const sourcePath of sourcePaths) {
       await copySourcePath(sourcePath, path.join(absolute, path.basename(sourcePath)));
@@ -645,16 +648,17 @@ async function mergeDirectoryContents(sourceDir: string, targetDir: string): Pro
 
 async function copySourcePath(sourcePath: string, targetPath: string): Promise<void> {
   if (shouldSkipCopyName(path.basename(sourcePath))) return;
-  const info = await lstat(sourcePath);
+  const normalizedSource = path.resolve(sourcePath);
+  const info = await lstat(normalizedSource);
   if (info.isSymbolicLink()) return;
   if (info.isDirectory()) {
     await mkdir(targetPath, { recursive: true });
-    await copyDirectoryContents(sourcePath, targetPath);
+    await copyDirectoryContents(normalizedSource, targetPath);
     return;
   }
   if (!info.isFile()) return;
   await mkdir(path.dirname(targetPath), { recursive: true });
-  await copyFile(sourcePath, targetPath);
+  await copyFile(normalizedSource, targetPath);
 }
 
 async function isDirectory(input: string): Promise<boolean> {
