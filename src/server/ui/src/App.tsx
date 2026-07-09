@@ -19,12 +19,14 @@ import {
   type RunRow,
   type ScopeRow,
 } from "./api";
-import { Button, Card, Counter, IconButton, Modal, StateBadge, StatusBadge } from "./components";
+import { Button, Card, Counter, IconButton, Modal, StateBadge, StatusBadge, useDialogFocus } from "./components";
 import {
+  activeFindings,
   bugBountyEngagementLabel,
   confirmedDecisions,
   contestReviewState,
   contestStrategy,
+  confirmDecisionMemberKeys,
   currentMaterialDetail,
   currentMaterialConfirmDecisions,
   currentMaterialFindings,
@@ -36,9 +38,16 @@ import {
   isVerifyRun,
   isBugBountyConfig,
   isSubmissionReadyDecision,
+  isExecutionConfirmedFinding,
   verifyRunProgress,
   verifyRunRechecksConfirmed,
   needsSubmissionReadinessWork,
+  needsRealTargetConfirmation,
+  localVerifiedFindings,
+  pendingConfirmFindings,
+  pendingDecisionReports,
+  pendingFormalReports,
+  pendingVerifyFindings,
   pct,
   phaseState,
   PHASES,
@@ -47,12 +56,16 @@ import {
   PHASE_DESC,
   PROVIDER_PHASES,
   rankCandidates,
+  rawPendingVerifyCount,
+  reportableDecisions,
+  reportableFindings,
   runProgress,
   runScopeBatchComplete,
   sortConfirmDecisionsForSubmission,
   STATUSES,
   THINKING_LEVELS,
   TRACKING,
+  topCandidateFindings,
   projectSourceState,
   type ProjectPhase,
   type ProviderPhase,
@@ -707,21 +720,6 @@ function coverageCapText(mode: CoverageMode, maxScopes: string): string {
   return maxScopes;
 }
 
-function severityScore(finding: FindingRow): number {
-  const sev = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }[finding.severity ?? ""] ?? 0;
-  const status = finding.status.startsWith("confirmed") ? 2 : finding.status === "suspected" ? 1 : 0;
-  return status * 100 + sev * 10 + (finding.confidence ?? 0);
-}
-
-function topCandidateFindings(rows: FindingRow[] | undefined): FindingRow[] {
-  const ranked = rankCandidates(rows);
-  if (ranked.length) return ranked.slice(0, 8);
-  return [...(rows ?? [])]
-    .filter((finding) => finding.status.startsWith("confirmed") || finding.status === "suspected")
-    .sort((a, b) => severityScore(b) - severityScore(a))
-    .slice(0, 8);
-}
-
 function projectBadgeStatus(project: ProjectSnapshot): string | null | undefined {
   const latest = project.latestRun?.status;
   if ((project.activeRuns ?? 0) > 0 || latest === "running") return "running";
@@ -812,68 +810,6 @@ function runKindLabel(kind: string, run?: RunRow): string {
     confirm: "Confirm findings",
     report: "Generate reports",
   }[kind] ?? kind;
-}
-
-function needsRealTargetConfirmation(detail: (Pick<ProjectDetail, "prepareSummary" | "project"> | ProjectSnapshot) | null | undefined): boolean {
-  const cfg = detail && "project" in detail
-    ? parseJson<ProjectConfig>(detail.project.config_json, {})
-    : detail && "config" in detail
-      ? detail.config ?? {}
-      : {};
-  if (contestStrategy(cfg).skipRealTargetConfirm) return false;
-  const prepareSummary = detail && "prepareSummary" in detail ? detail.prepareSummary : undefined;
-  return prepareSummary?.realTarget?.requiresConfirmation !== false;
-}
-
-function isIgnoredFinding(finding: FindingRow): boolean {
-  return (finding.tracking_status ?? "open") === "ignored";
-}
-
-function activeFindings(rows: FindingRow[] | undefined): FindingRow[] {
-  return (rows ?? []).filter((finding) => !isIgnoredFinding(finding));
-}
-
-function isExecutionConfirmedFinding(finding: FindingRow): boolean {
-  return finding.status === "confirmed-executable" || finding.status === "confirmed-differential";
-}
-
-function pendingConfirmFindings(rows: FindingRow[] | undefined, requiresConfirmation = true, decisions?: ConfirmDecision[]): FindingRow[] {
-  if (!requiresConfirmation) return [];
-  const decidedFindingKeys = new Set((decisions ?? []).flatMap(confirmDecisionMemberKeys));
-  return activeFindings(rows).filter((finding) =>
-    isExecutionConfirmedFinding(finding)
-    && !finding.confirm_status
-    && !(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase()))
-  );
-}
-
-function localVerifiedFindings(rows: FindingRow[] | undefined): FindingRow[] {
-  return activeFindings(rows).filter(isExecutionConfirmedFinding);
-}
-
-function pendingVerifyFindings(rows: FindingRow[] | undefined): FindingRow[] {
-  const unresolved = activeFindings(rows).filter((finding) => finding.status === "suspected" || finding.status === "confirmed-source");
-  return topCandidateFindings(unresolved);
-}
-
-function rawPendingVerifyCount(rows: FindingRow[] | undefined): number {
-  return activeFindings(rows).filter((finding) => finding.status === "suspected" || finding.status === "confirmed-source").length;
-}
-
-function reportableFindings(rows: FindingRow[] | undefined, requiresConfirmation = true): FindingRow[] {
-  return activeFindings(rows).filter((finding) => requiresConfirmation ? finding.confirm_status === "reproduced" : isExecutionConfirmedFinding(finding));
-}
-
-function pendingFormalReports(rows: FindingRow[] | undefined, requiresConfirmation = true): FindingRow[] {
-  return reportableFindings(rows, requiresConfirmation).filter((finding) => !finding.has_report);
-}
-
-function reportableDecisions(decisions: ConfirmDecision[] | undefined): ConfirmDecision[] {
-  return sortConfirmDecisionsForSubmission(decisions).filter(isSubmissionReadyDecision);
-}
-
-function pendingDecisionReports(decisions: ConfirmDecision[] | undefined): ConfirmDecision[] {
-  return reportableDecisions(decisions).filter((decision) => !decision.has_report);
 }
 
 function configuredCoverageTarget(detail: ProjectDetail): number | undefined {
@@ -2368,13 +2304,14 @@ function ShellHeader({ route, running, theme, onTheme, onCommands, onMenu }: { r
 }
 
 function MobileMenu({ route, running, theme, onClose, onTheme }: { route: RouteState; running: number; theme: string; onClose: () => void; onTheme: () => void }) {
+  const { dialogRef, onDialogKeyDown } = useDialogFocus(onClose);
   const navigate = (pathname: string) => {
     go(pathname);
     onClose();
   };
   return (
     <div className="mobile-menu-back" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="mobile-menu" role="dialog" aria-modal="true" aria-label="Navigation menu">
+      <section ref={dialogRef} tabIndex={-1} onKeyDown={onDialogKeyDown} className="mobile-menu" role="dialog" aria-modal="true" aria-label="Navigation menu">
         <div className="mobile-menu-head">
           <strong>Menu</strong>
           <IconButton icon="x" title="Close" aria-label="Close menu" onClick={onClose} />
@@ -4065,26 +4002,6 @@ function decisionCalloutMeta(decisions: ConfirmDecision[]): string {
 
 function submitCandidateCount(decisions: ConfirmDecision[]): number {
   return decisions.filter(isSubmitCandidateDecision).length;
-}
-
-function confirmDecisionMemberKeys(decision: ConfirmDecision): string[] {
-  const members = parseJson<unknown[]>(decision.members_json, []);
-  const keys = new Set<string>();
-  const add = (value: string) => {
-    const key = value.trim().replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
-    if (/^k[0-9a-z]+$/.test(key)) keys.add(key);
-  };
-  for (const member of members) {
-    if (typeof member !== "string") continue;
-    const cleaned = member.trim();
-    add(cleaned);
-    add(cleaned.split(/\s+/)[0] ?? "");
-    const bracketed = cleaned.match(/^\[(k[0-9a-z]+)\]/i)?.[1];
-    if (bracketed) add(bracketed);
-    const embedded = cleaned.match(/\b(k[0-9a-z]+)\b/i)?.[1];
-    if (embedded) add(embedded);
-  }
-  return [...keys];
 }
 
 function decisionFindings(decision: ConfirmDecision, findings: FindingRow[]): FindingRow[] {
@@ -6609,6 +6526,7 @@ function renderInlineMarkdown(text: string): ReactNode[] {
 
 function CommandPalette({ projects, currentProjectUuid, onClose, onNewProject, onLaunch }: { projects: ProjectSnapshot[]; currentProjectUuid?: string; onClose: () => void; onNewProject: () => void; onLaunch: () => void }) {
   const [query, setQuery] = useState("");
+  const { dialogRef, onDialogKeyDown } = useDialogFocus(onClose);
   const commands = useMemo(() => {
     const projectCommands = projects.map((project) => ({ id: `p-${project.uuid}`, label: project.name, meta: "project", run: () => go(projectPathFor(project)) }));
     const current = currentProjectUuid ? projects.find((project) => project.uuid === currentProjectUuid) : undefined;
@@ -6626,7 +6544,7 @@ function CommandPalette({ projects, currentProjectUuid, onClose, onNewProject, o
   }, [projects, query, currentProjectUuid, onNewProject, onLaunch]);
   return (
     <div className="modal-back command-back" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="command-menu" role="dialog" aria-modal="true" aria-label="Command menu">
+      <section ref={dialogRef} tabIndex={-1} onKeyDown={onDialogKeyDown} className="command-menu" role="dialog" aria-modal="true" aria-label="Command menu">
         <div className="command-input-row">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Jump to a project or run a command..." autoFocus />
           <IconButton icon="x" title="Close" aria-label="Close command menu" onClick={onClose} />
