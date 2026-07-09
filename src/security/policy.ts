@@ -167,7 +167,8 @@ export function analyzeConfirmBashCommandSafety(command: StructuredReproductionC
   if (args.some((arg) => /[\0\r\n]/.test(arg))) {
     return { blocked: true, reason: "Blocked by flounder guardrail: confirm command arguments must be simple argv entries." };
   }
-  if (program.toLowerCase() === "env" && !unwrapSafeEnvCommand(command)) {
+  const effective = program.toLowerCase() === "env" ? unwrapSafeEnvCommand(command) : command;
+  if (!effective) {
     return {
       blocked: true,
       reason: "Blocked by flounder guardrail: env wrappers cannot override executable lookup, runtime injection, or sandbox safety settings.",
@@ -175,13 +176,15 @@ export function analyzeConfirmBashCommandSafety(command: StructuredReproductionC
   }
   const workspaceDecision = analyzeWorkspacePathSafety(args);
   if (workspaceDecision.blocked) return workspaceDecision;
-  const destructiveDecision = analyzeDestructiveFilesystemCommandSafety(program, args);
+  const effectiveProgram = effective.program.trim();
+  const effectiveArgs = effective.args.map((arg) => String(arg));
+  const destructiveDecision = analyzeDestructiveFilesystemCommandSafety(effectiveProgram, effectiveArgs);
   if (destructiveDecision.blocked) return destructiveDecision;
-  const inlineFileDecision = analyzeInlineGeneratedFileWriteSafety(program, args);
+  const inlineFileDecision = analyzeInlineGeneratedFileWriteSafety(effectiveProgram, effectiveArgs);
   if (inlineFileDecision.blocked) return inlineFileDecision;
-  const rendered = [program, ...args].join(" ");
+  const rendered = [effectiveProgram, ...effectiveArgs].join(" ");
   const broadcast = findMatch(rendered, CONFIRM_BROADCAST_PATTERNS);
-  if (broadcast && targetsNonLocalNetwork(args)) {
+  if (broadcast && targetsNonLocalNetwork(effectiveArgs)) {
     return {
       blocked: true,
       reason:
@@ -320,7 +323,7 @@ function isReadOnlyForgeForkCommand(args: string[]): boolean {
   const verb = args.find((arg) => !arg.startsWith("-"));
   return verb === "test"
     && hasRemoteForkTarget(args)
-    && !args.some((arg) => arg === "--ffi" || arg === "--broadcast" || /send-?raw-?transaction/i.test(arg));
+    && !args.some((arg) => arg === "--ffi" || arg.startsWith("--ffi=") || arg === "--broadcast" || /send-?raw-?transaction/i.test(arg));
 }
 
 function hasRemoteForkTarget(args: string[]): boolean {
@@ -443,7 +446,7 @@ function unwrapSafeEnvCommand(command: StructuredReproductionCommand): Structure
   }
   const wrappedProgram = args[index];
   if (!wrappedProgram) return undefined;
-  if (wrappedProgram.includes("/") || wrappedProgram.includes("\\") || /[\s;&|`$<>]/.test(wrappedProgram)) return undefined;
+  if (wrappedProgram.startsWith("-") || wrappedProgram.includes("/") || wrappedProgram.includes("\\") || /[\s;&|`$<>]/.test(wrappedProgram)) return undefined;
   return { program: wrappedProgram, args: args.slice(index + 1) };
 }
 

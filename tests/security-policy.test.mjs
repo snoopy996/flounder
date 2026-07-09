@@ -117,6 +117,7 @@ test("destructive filesystem commands stay blocked even in network-enabled confi
     cmd("sed", "-i", "s/a/b/g", "contracts/Target.sol"),
     cmd("git", "-C", "sources/repo", "clean", "-fdx"),
     cmd("git", "-C", "sources/repo", "reset", "--hard"),
+    cmd("env", "FOO=bar", "rm", "-rf", "sources/tmp"),
   ]) {
     const decision = analyzeConfirmBashCommandSafety(c);
     assert.equal(decision.blocked, true, `${c.program} ${c.args.join(" ")} must be blocked`);
@@ -251,6 +252,7 @@ test("open-world egress is granted per command instead of per phase", () => {
     cmd("gh", "api", "-iXPOST", "repos/example/project/issues"),
     cmd("gh", "api", "repos/example/project/issues", "-ftitle=mutate"),
     cmd("gh", "repo", "clone", "example/project", "--", "--upload-pack=touch-pwned"),
+    cmd("forge", "test", "--fork-url", "https://mainnet.example", "--ffi=true"),
   ]) assert.equal(openWorldCommandNeedsNetwork(c, "inspect"), false, `${c.program} must remain network-sealed`);
 
   assert.equal(openWorldCommandNeedsNetwork(cmd("npm", "install"), "build"), true);
@@ -263,6 +265,7 @@ test("env wrappers cannot alter the executable or sandbox settings behind an egr
     cmd("env", "FOUNDRY_FFI=true", "forge", "test", "--fork-url", "https://mainnet.example"),
     cmd("env", "CURL_HOME=poc", "curl", "https://mainnet.example"),
     cmd("env", "LD_PRELOAD=poc/shim.so", "curl", "https://mainnet.example"),
+    cmd("env", "-u", "FOO", "curl", "https://mainnet.example"),
   ]) {
     assert.equal(analyzeConfirmBashCommandSafety(c).blocked, true, `${c.args[0]} must be rejected`);
     assert.equal(analyzeAgentBashCommandSafety(c).blocked, true, `${c.args[0]} must be rejected in sealed agent mode too`);
