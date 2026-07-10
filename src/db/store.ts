@@ -15,6 +15,12 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { enforceSubmissionReadiness } from "../util/submission-readiness.js";
+import type {
+  RunGroupState,
+  WorkItemInput as EvaluationWorkItemInput,
+  WorkItemOutcome,
+  WorkItemState,
+} from "../evaluation/contracts.js";
 
 // A static `import ... from "node:sqlite"` emits the builtin's ExperimentalWarning at link
 // time, before sqlite-quiet's body can install the filter. Loading it via require() during
@@ -189,7 +195,15 @@ export interface FindingQuery extends FindingFilter {
   offset?: number | undefined;
 }
 
-const SCHEMA_VERSION = 4;
+export interface RunGroupInput {
+  name: string;
+  kind?: string | undefined;
+  parallelism?: number | undefined;
+  config?: unknown;
+  budget?: unknown;
+}
+
+const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -375,6 +389,67 @@ CREATE TABLE IF NOT EXISTS provider(
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS run_group(
+  id INTEGER PRIMARY KEY,
+  uuid TEXT UNIQUE NOT NULL,
+  name TEXT UNIQUE NOT NULL,
+  kind TEXT NOT NULL,
+  state TEXT NOT NULL,
+  parallelism INTEGER NOT NULL DEFAULT 1,
+  config_json TEXT,
+  budget_json TEXT,
+  summary_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS work_item(
+  id INTEGER PRIMARY KEY,
+  uuid TEXT UNIQUE NOT NULL,
+  run_group_id INTEGER NOT NULL REFERENCES run_group(id) ON DELETE CASCADE,
+  item_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  state TEXT NOT NULL,
+  outcome TEXT,
+  target_bundle_json TEXT NOT NULL,
+  material_policy_json TEXT NOT NULL,
+  evidence_contract_json TEXT NOT NULL,
+  result_json TEXT,
+  project_id INTEGER REFERENCES project(id) ON DELETE SET NULL,
+  run_id INTEGER REFERENCES run(id) ON DELETE SET NULL,
+  job_id INTEGER REFERENCES job(id) ON DELETE SET NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT,
+  UNIQUE(run_group_id, item_key)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_group_state ON work_item(run_group_id, state);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_item_job ON work_item(job_id) WHERE job_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS work_item_attempt(
+  id INTEGER PRIMARY KEY,
+  work_item_id INTEGER NOT NULL REFERENCES work_item(id) ON DELETE CASCADE,
+  attempt_number INTEGER NOT NULL,
+  job_id INTEGER NOT NULL,
+  run_id INTEGER REFERENCES run(id) ON DELETE SET NULL,
+  state TEXT NOT NULL,
+  outcome TEXT,
+  result_json TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT,
+  UNIQUE(work_item_id, attempt_number),
+  UNIQUE(job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_attempt_item ON work_item_attempt(work_item_id, attempt_number);
 `;
 
 const ADDITIVE_COLUMNS = [
@@ -1775,6 +1850,259 @@ export class MetadataStore {
     ).get(projectId) as { n: number }).n);
   }
 
+  // --- run groups + independently resumable work items ---------------------
+
+  createRunGroup(input: RunGroupInput): Record<string, unknown> {
+    const ts = now();
+    const uuid = randomUUID();
+    const parallelism = Math.max(1, Math.floor(input.parallelism ?? 1));
+    const info = this.db
+      .prepare(
+        `INSERT INTO run_group(uuid, name, kind, state, parallelism, config_json, budget_json, created_at, updated_at)
+         VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?)`,
+      )
+      .run(uuid, input.name, input.kind ?? "evaluation", parallelism, jsonOrNull(input.config), jsonOrNull(input.budget), ts, ts);
+    return this.getRunGroupById(Number(info.lastInsertRowid))!;
+  }
+
+  getRunGroupById(id: number): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM run_group WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  }
+
+  getRunGroupByUuid(uuid: string): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM run_group WHERE uuid = ?").get(uuid) as Record<string, unknown> | undefined;
+  }
+
+  getRunGroupByName(name: string): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM run_group WHERE name = ?").get(name) as Record<string, unknown> | undefined;
+  }
+
+  listRunGroups(limit = 100, offset = 0): Array<Record<string, unknown>> {
+    return this.db
+      .prepare("SELECT * FROM run_group ORDER BY created_at DESC LIMIT ? OFFSET ?")
+      .all(Math.max(1, Math.floor(limit)), Math.max(0, Math.floor(offset))) as Array<Record<string, unknown>>;
+  }
+
+  countRunGroups(): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM run_group").get() as { n: number }).n);
+  }
+
+  addWorkItems(runGroupId: number, items: EvaluationWorkItemInput[]): Array<Record<string, unknown>> {
+    const insert = this.db.prepare(
+      `INSERT INTO work_item(uuid, run_group_id, item_key, kind, state, target_bundle_json, material_policy_json,
+                             evidence_contract_json, project_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+    );
+    const ts = now();
+    this.transaction(() => {
+      for (const item of items) {
+        insert.run(
+          randomUUID(),
+          runGroupId,
+          item.itemKey,
+          item.kind,
+          JSON.stringify(item.targetBundle),
+          JSON.stringify(item.materialPolicy),
+          JSON.stringify(item.evidenceContract),
+          item.projectId ?? null,
+          ts,
+          ts,
+        );
+      }
+      this.db.prepare("UPDATE run_group SET updated_at = ? WHERE id = ?").run(ts, runGroupId);
+    });
+    return this.listWorkItems(runGroupId);
+  }
+
+  listWorkItems(runGroupId: number): Array<Record<string, unknown>> {
+    return this.db.prepare("SELECT * FROM work_item WHERE run_group_id = ? ORDER BY id").all(runGroupId) as Array<Record<string, unknown>>;
+  }
+
+  getWorkItem(id: number): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM work_item WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  }
+
+  getWorkItemByJob(jobId: number): Record<string, unknown> | undefined {
+    return this.db.prepare("SELECT * FROM work_item WHERE job_id = ?").get(jobId) as Record<string, unknown> | undefined;
+  }
+
+  listWorkItemAttempts(workItemId: number): Array<Record<string, unknown>> {
+    return this.db
+      .prepare("SELECT * FROM work_item_attempt WHERE work_item_id = ? ORDER BY attempt_number")
+      .all(workItemId) as Array<Record<string, unknown>>;
+  }
+
+  runGroupForJob(jobId: number): Record<string, unknown> | undefined {
+    return this.db
+      .prepare("SELECT rg.* FROM run_group rg JOIN work_item wi ON wi.run_group_id = rg.id WHERE wi.job_id = ?")
+      .get(jobId) as Record<string, unknown> | undefined;
+  }
+
+  startRunGroup(uuid: string, parallelism?: number): boolean {
+    const group = this.getRunGroupByUuid(uuid);
+    if (!group || group.state === "finished" || group.state === "cancelled" || group.state === "failed") return false;
+    const nextParallelism = Math.max(1, Math.floor(parallelism ?? (Number(group.parallelism) || 1)));
+    const ts = now();
+    return Number(this.db
+      .prepare("UPDATE run_group SET state = 'running', parallelism = ?, started_at = COALESCE(started_at, ?), ended_at = NULL, updated_at = ? WHERE id = ?")
+      .run(nextParallelism, ts, ts, Number(group.id)).changes) > 0;
+  }
+
+  setRunGroupState(uuid: string, state: RunGroupState): boolean {
+    const terminal = state === "finished" || state === "failed" || state === "cancelled";
+    const ts = now();
+    return Number(this.db
+      .prepare("UPDATE run_group SET state = ?, ended_at = CASE WHEN ? THEN COALESCE(ended_at, ?) ELSE NULL END, updated_at = ? WHERE uuid = ?")
+      .run(state, terminal ? 1 : 0, ts, ts, uuid).changes) > 0;
+  }
+
+  pendingRunGroupDispatch(runGroupId: number, limit: number): Array<Record<string, unknown>> {
+    const group = this.getRunGroupById(runGroupId);
+    if (!group || group.state !== "running") return [];
+    const active = Number((this.db
+      .prepare("SELECT COUNT(*) AS n FROM work_item WHERE run_group_id = ? AND job_id IS NOT NULL AND state IN ('queued','claimed','running')")
+      .get(runGroupId) as { n: number }).n);
+    const available = Math.max(0, Math.min(Math.max(1, Math.floor(limit)), Number(group.parallelism) - active));
+    if (available === 0) return [];
+    return this.db
+      .prepare("SELECT * FROM work_item WHERE run_group_id = ? AND state = 'queued' AND job_id IS NULL ORDER BY id LIMIT ?")
+      .all(runGroupId, available) as Array<Record<string, unknown>>;
+  }
+
+  attachWorkItemJob(workItemId: number, jobId: number): boolean {
+    const ts = now();
+    let attached = false;
+    this.transaction(() => {
+      const info = this.db
+        .prepare("UPDATE work_item SET job_id = ?, attempts = attempts + 1, updated_at = ? WHERE id = ? AND state = 'queued' AND job_id IS NULL")
+        .run(jobId, ts, workItemId);
+      if (Number(info.changes) === 0) return;
+      const item = this.getWorkItem(workItemId)!;
+      this.db
+        .prepare(
+          `INSERT INTO work_item_attempt(work_item_id, attempt_number, job_id, state, created_at, updated_at)
+           VALUES (?, ?, ?, 'queued', ?, ?)`,
+        )
+        .run(workItemId, Number(item.attempts), jobId, ts, ts);
+      attached = true;
+    });
+    return attached;
+  }
+
+  markWorkItemClaimed(jobId: number): void {
+    const ts = now();
+    // claimJob already holds an IMMEDIATE transaction; keep these statements in
+    // that transaction instead of trying to nest another SQLite transaction.
+    this.db.prepare("UPDATE work_item SET state = 'claimed', updated_at = ? WHERE job_id = ? AND state = 'queued'").run(ts, jobId);
+    this.db.prepare("UPDATE work_item_attempt SET state = 'claimed', updated_at = ? WHERE job_id = ? AND state = 'queued'").run(ts, jobId);
+  }
+
+  markWorkItemRunning(jobId: number, runId: number): void {
+    const ts = now();
+    this.transaction(() => {
+      this.db
+        .prepare("UPDATE work_item SET state = 'running', run_id = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE job_id = ? AND state IN ('queued','claimed')")
+        .run(runId, ts, ts, jobId);
+      this.db
+        .prepare("UPDATE work_item_attempt SET state = 'running', run_id = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE job_id = ? AND state IN ('queued','claimed')")
+        .run(runId, ts, ts, jobId);
+    });
+  }
+
+  settleWorkItemByJob(
+    jobId: number,
+    state: Extract<WorkItemState, "finished" | "failed" | "cancelled">,
+    outcome: WorkItemOutcome,
+    result: unknown,
+    error?: string,
+  ): boolean {
+    const ts = now();
+    let settled = false;
+    this.transaction(() => {
+      const info = this.db
+        .prepare(
+          `UPDATE work_item SET state = ?, outcome = ?, result_json = ?, last_error = ?, ended_at = ?, updated_at = ?
+            WHERE job_id = ? AND state IN ('queued','claimed','running')`,
+        )
+        .run(state, outcome, jsonOrNull(result), error ?? null, ts, ts, jobId);
+      if (Number(info.changes) === 0) return;
+      this.db
+        .prepare(
+          `UPDATE work_item_attempt SET state = ?, outcome = ?, result_json = ?, error = ?, ended_at = ?, updated_at = ?
+            WHERE job_id = ? AND state IN ('queued','claimed','running')`,
+        )
+        .run(state, outcome, jsonOrNull(result), error ?? null, ts, ts, jobId);
+      settled = true;
+    });
+    return settled;
+  }
+
+  failUnscheduledWorkItem(workItemId: number, outcome: Extract<WorkItemOutcome, "invalid" | "blocked">, error: string): boolean {
+    const ts = now();
+    return Number(this.db
+      .prepare("UPDATE work_item SET state = 'failed', outcome = ?, result_json = ?, last_error = ?, ended_at = ?, updated_at = ? WHERE id = ? AND state = 'queued' AND job_id IS NULL")
+      .run(outcome, JSON.stringify({ accepted: false, reason: outcome, error }), error, ts, ts, workItemId).changes) > 0;
+  }
+
+  cancelRunGroupItems(runGroupId: number): number[] {
+    const activeJobs = (this.db
+      .prepare("SELECT job_id FROM work_item WHERE run_group_id = ? AND job_id IS NOT NULL AND state IN ('queued','claimed','running')")
+      .all(runGroupId) as Array<{ job_id: number }>).map((row) => Number(row.job_id));
+    const ts = now();
+    this.transaction(() => {
+      this.db
+        .prepare("UPDATE work_item_attempt SET state = 'cancelled', outcome = COALESCE(outcome, 'blocked'), error = COALESCE(error, 'run group cancelled'), ended_at = COALESCE(ended_at, ?), updated_at = ? WHERE job_id IN (SELECT job_id FROM work_item WHERE run_group_id = ? AND job_id IS NOT NULL AND state IN ('queued','claimed','running'))")
+        .run(ts, ts, runGroupId);
+      this.db
+        .prepare("UPDATE work_item SET state = 'cancelled', outcome = COALESCE(outcome, 'blocked'), last_error = COALESCE(last_error, 'run group cancelled'), ended_at = COALESCE(ended_at, ?), updated_at = ? WHERE run_group_id = ? AND state IN ('queued','claimed','running')")
+        .run(ts, ts, runGroupId);
+    });
+    return activeJobs;
+  }
+
+  retryBlockedWorkItem(workItemId: number): boolean {
+    const item = this.getWorkItem(workItemId);
+    if (!item || (item.state !== "failed" && item.state !== "cancelled") || item.outcome !== "blocked") return false;
+    const group = this.getRunGroupById(Number(item.run_group_id));
+    if (!group || group.state === "cancelled") return false;
+    const ts = now();
+    let retried = false;
+    this.transaction(() => {
+      const info = this.db
+        .prepare(
+          `UPDATE work_item
+              SET state = 'queued', outcome = NULL, result_json = NULL, job_id = NULL, run_id = NULL,
+                  last_error = NULL, started_at = NULL, ended_at = NULL, updated_at = ?
+            WHERE id = ? AND state IN ('failed','cancelled') AND outcome = 'blocked'`,
+        )
+        .run(ts, workItemId);
+      if (Number(info.changes) === 0) return;
+      if (group.state === "finished" || group.state === "failed") {
+        this.db.prepare("UPDATE run_group SET state = 'paused', ended_at = NULL, updated_at = ? WHERE id = ?").run(ts, Number(group.id));
+      } else {
+        this.db.prepare("UPDATE run_group SET updated_at = ? WHERE id = ?").run(ts, Number(group.id));
+      }
+      retried = true;
+    });
+    return retried;
+  }
+
+  refreshRunGroupCompletion(runGroupId: number): Record<string, unknown> | undefined {
+    const group = this.getRunGroupById(runGroupId);
+    if (!group) return undefined;
+    const rows = this.listWorkItems(runGroupId);
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[String(row.outcome ?? row.state)] = (counts[String(row.outcome ?? row.state)] ?? 0) + 1;
+    const summary = { totalItems: rows.length, counts };
+    const active = rows.some((row) => row.state === "queued" || row.state === "claimed" || row.state === "running");
+    const ts = now();
+    const state = group.state === "running" && !active ? "finished" : String(group.state);
+    this.db
+      .prepare("UPDATE run_group SET state = ?, summary_json = ?, ended_at = CASE WHEN ? = 'finished' THEN COALESCE(ended_at, ?) ELSE ended_at END, updated_at = ? WHERE id = ?")
+      .run(state, JSON.stringify(summary), state, ts, ts, runGroupId);
+    return this.getRunGroupById(runGroupId);
+  }
+
   // --- daemons + job queue (control plane for remote execution) -------------
 
   /** Mint a bearer token for a new daemon. The operator configures it on the daemon side. */
@@ -1857,6 +2185,7 @@ export class MetadataStore {
         | undefined;
       if (!row) return;
       this.db.prepare("UPDATE job SET status = 'dispatched', daemon_id = ?, updated_at = ? WHERE id = ?").run(daemonId, now(), row.id);
+      this.markWorkItemClaimed(row.id);
       claimed = row;
     });
     return claimed ? { id: claimed.id, project: claimed.project, spec: jsonParseOrNull(claimed.spec_json) } : undefined;
@@ -1864,6 +2193,7 @@ export class MetadataStore {
 
   setJobRun(jobId: number, runId: number): void {
     this.db.prepare("UPDATE job SET run_id = ?, status = 'running', updated_at = ? WHERE id = ?").run(runId, now(), jobId);
+    this.markWorkItemRunning(jobId, runId);
   }
 
   setJobStatus(jobId: number, status: string, error?: string): void {

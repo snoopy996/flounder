@@ -16,6 +16,8 @@ export * from "./agent/tools.js";
 export * from "./config.js";
 export * from "./db/store.js";
 export * from "./db/record.js";
+export * from "./evaluation/contracts.js";
+export * from "./evaluation/run-groups.js";
 export * from "./ingest/source.js";
 export * from "./llm/client.js";
 export * from "./llm/claude-code.js";

@@ -26,7 +26,7 @@ async function withServer(fn) {
 test("api: GET /api is a self-describing catalog of every resource + operation", async () => {
   await withServer(async (base) => {
     const cat = await (await fetch(base + "/api")).json();
-    assert.deepEqual(cat.resources, ["project", "provider", "daemon", "run", "scope", "discovery-backlog", "finding", "confirm-decision"]);
+    assert.deepEqual(cat.resources, ["project", "provider", "daemon", "run", "run-group", "work-item", "scope", "discovery-backlog", "finding", "confirm-decision"]);
     const sigs = cat.endpoints.map((e) => e.method + " " + e.path);
     for (const expected of [
       "GET /api/projects", "PATCH /api/projects/order", "POST /api/projects", "GET /api/projects/:uuid",
@@ -37,6 +37,10 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
       "GET /api/providers", "POST /api/providers", "GET /api/providers/:id",
       "PATCH /api/providers/:id", "DELETE /api/providers/:id",
       "GET /api/daemons", "POST /api/daemons",
+      "GET /api/run-groups", "POST /api/run-groups", "GET /api/run-groups/:uuid",
+      "POST /api/run-groups/:uuid/items", "POST /api/run-groups/:uuid/start",
+      "POST /api/run-groups/:uuid/pause", "POST /api/run-groups/:uuid/cancel",
+      "GET /api/run-groups/:uuid/report", "GET /api/work-items/:id", "POST /api/work-items/:id/retry",
       "GET /api/jobs/:id", "POST /api/jobs/:id/cancel",
       "GET /api/runs/:id", "PATCH /api/runs/:id", "POST /api/runs/:id/stop",
       "GET /api/runs/:id/log",

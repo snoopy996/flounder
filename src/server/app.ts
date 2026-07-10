@@ -29,6 +29,8 @@ import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
 import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionReadinessWork } from "../util/submission-readiness.js";
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
+import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
+import { buildWorkItemLaunchSpec, renderRunGroupReport, settleWorkItem } from "../evaluation/run-groups.js";
 
 const UI_HTML_PATH = fileURLToPath(new URL("./public/index.html", import.meta.url));
 const UI_PUBLIC_DIR = path.dirname(UI_HTML_PATH);
@@ -340,6 +342,76 @@ const ROUTES: Route[] = [
   }),
 
   route({
+    method: "GET", path: "/api/run-groups",
+    summary: "List durable run groups for benchmark evaluation, repeated samples, regression replay, and multi-target campaigns. Lifecycle state is separate from each item's security/scoring outcome.",
+    query: { limit: "number? (default 100)", offset: "number? (default 0)" },
+    handler: runGroupList,
+  }),
+  route({
+    method: "POST", path: "/api/run-groups",
+    summary: "Create a durable run group, optionally with its initial work items. Target bundles and evidence contracts are schema-validated; manifest commands are metadata only and never bypass Flounder's sandbox or confirmation policy.",
+    body: {
+      name: "string (required, unique)",
+      kind: "string? — evaluation|campaign|batch|custom display category",
+      parallelism: "positive integer? (default 1)",
+      config: "object? — shared provider/model/thinking defaults",
+      budget: "object? — persisted accounting limits/notes; never a security outcome",
+      items: "work-item[]? — audit-target, verify-claim, benchmark-case, or regression-replay items",
+    },
+    handler: runGroupCreate,
+  }),
+  route({
+    method: "GET", path: "/api/run-groups/:uuid",
+    summary: "Read one run group with every independently resumable work item, attempts, linked job/run, outcome, and stored evidence result.",
+    params: { uuid: "run-group UUID" },
+    handler: runGroupGet,
+  }),
+  route({
+    method: "POST", path: "/api/run-groups/:uuid/items",
+    summary: "Append validated work items to a draft or paused run group without replacing prior attempts or evidence.",
+    params: { uuid: "run-group UUID" },
+    body: { items: "work-item[] (required) — each has itemKey, kind, targetBundle, materialPolicy, and evidenceContract" },
+    handler: runGroupItemsAdd,
+  }),
+  route({
+    method: "POST", path: "/api/run-groups/:uuid/start",
+    summary: "Start or resume a run group and queue only enough existing Flounder jobs to satisfy its parallelism. The scheduler survives server restarts because group/item/job state is stored in SQLite.",
+    params: { uuid: "run-group UUID" },
+    body: { parallelism: "positive integer? — override the group's durable concurrency" },
+    handler: runGroupStart,
+  }),
+  route({
+    method: "POST", path: "/api/run-groups/:uuid/pause",
+    summary: "Pause future work-item dispatch. Already queued/claimed/running jobs finish and keep their evidence; start resumes remaining items.",
+    params: { uuid: "run-group UUID" },
+    handler: runGroupPause,
+  }),
+  route({
+    method: "POST", path: "/api/run-groups/:uuid/cancel",
+    summary: "Cancel a run group and all queued/claimed/running work-item jobs while preserving completed evidence and attempt history.",
+    params: { uuid: "run-group UUID" },
+    handler: runGroupCancel,
+  }),
+  route({
+    method: "GET", path: "/api/run-groups/:uuid/report",
+    summary: "Regenerate a run-group score/outcome report entirely from persisted work-item results without rerunning model work.",
+    params: { uuid: "run-group UUID" },
+    handler: runGroupReport,
+  }),
+  route({
+    method: "GET", path: "/api/work-items/:id",
+    summary: "Read one durable work item, including lifecycle state, security/scoring outcome, immutable attempt history, linked job/run, and evidence result.",
+    params: { id: "work-item id" },
+    handler: workItemGet,
+  }),
+  route({
+    method: "POST", path: "/api/work-items/:id/retry",
+    summary: "Retry only a blocked/failed work item while preserving its prior attempt evidence. Benchmark misses are independent results and cannot be rewritten as retries.",
+    params: { id: "work-item id" },
+    handler: workItemRetry,
+  }),
+
+  route({
     method: "GET", path: "/api/providers",
     summary: "List saved provider profiles — a reusable model strategy (provider + model + thinking, with optional per-phase map/dig/refute overrides) that a project selects.",
     handler: (c) => sendJson(c.res, 200, { providers: c.store.listProviders() }),
@@ -541,8 +613,8 @@ export function apiCatalog(): {
 } {
   return {
     name: "flounder",
-    description: "REST API for tracking and driving white-hat audits. Resources: project (CRUD), run (launch/stop/read), scope, discovery-backlog, finding, confirm-decision. Runs execute on connected daemons; every UI operation is one of these calls.",
-    resources: ["project", "provider", "daemon", "run", "scope", "discovery-backlog", "finding", "confirm-decision"],
+    description: "REST API for tracking and driving white-hat audits and durable evaluation groups. Runs execute on connected daemons; every UI operation is one of these calls.",
+    resources: ["project", "provider", "daemon", "run", "run-group", "work-item", "scope", "discovery-backlog", "finding", "confirm-decision"],
     endpoints: ROUTES.filter((r) => !r.hidden).map((r) => ({
       method: r.method,
       path: r.path,
@@ -572,6 +644,10 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
   const artifactReconciled = reconcileSuccessfulArtifactRuns(store);
   if (artifactReconciled > 0) console.log(`[flounder ui] reconciled ${artifactReconciled} completed run artifact${artifactReconciled === 1 ? "" : "s"}`);
   const plane = new ControlPlane();
+  reconcileTerminalRunGroupItems(store, plane);
+  for (const group of store.listRunGroups(10_000, 0)) {
+    if (group.state === "running") scheduleRunGroupWith(store, plane, Number(group.id));
+  }
   // NOTE: we do NOT reconcile `running` rows on startup — runs execute on daemons, which
   // survive a server restart. Blind-killing them here would be wrong. (A future daemon
   // heartbeat can reconcile rows whose daemon has gone stale.)
@@ -3567,6 +3643,233 @@ function annotateConfirmDecisionMaterialStaleness(
   };
 }
 
+// ---- durable run groups + work items --------------------------------------
+
+function runGroupList(c: Ctx): void {
+  const limit = clampInt(c.url.searchParams.get("limit"), 100, 1, 500);
+  const offset = clampInt(c.url.searchParams.get("offset"), 0, 0, 1_000_000);
+  const groups = c.store.listRunGroups(limit, offset).map((group) => runGroupApiRow(c.store, group));
+  sendJson(c.res, 200, { runGroups: groups, total: c.store.countRunGroups(), limit, offset });
+}
+
+async function runGroupCreate(c: Ctx): Promise<void> {
+  const body = objectValue(await readBody(c.req));
+  if (!body) return sendJson(c.res, 400, { error: "request body must be an object" });
+  try {
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (rawItems.length > 0) {
+      const manifest = normalizeRunGroupManifest({ version: body.version ?? 1, ...body, items: rawItems });
+      const group = c.store.createRunGroup({ name: manifest.name, kind: manifest.kind, parallelism: manifest.parallelism, config: manifest.config, budget: manifest.budget });
+      c.store.addWorkItems(Number(group.id), manifest.items);
+      return sendJson(c.res, 201, runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!));
+    }
+    const name = stringValue(body.name).trim();
+    if (!name) return sendJson(c.res, 400, { error: "name is required" });
+    const parallelism = optionalPositiveInt(body.parallelism, 1);
+    if (parallelism === undefined) return sendJson(c.res, 400, { error: "parallelism must be a positive integer" });
+    const group = c.store.createRunGroup({
+      name,
+      kind: stringValue(body.kind).trim() || "evaluation",
+      parallelism,
+      ...(objectValue(body.config) ? { config: body.config } : {}),
+      ...(objectValue(body.budget ?? body.budgets) ? { budget: body.budget ?? body.budgets } : {}),
+    });
+    sendJson(c.res, 201, runGroupApiRow(c.store, group));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(c.res, /UNIQUE constraint failed/.test(message) ? 409 : 400, { error: message });
+  }
+}
+
+function runGroupGet(c: Ctx): void {
+  const group = c.store.getRunGroupByUuid(c.params.uuid ?? "");
+  group ? sendJson(c.res, 200, runGroupApiRow(c.store, group)) : sendJson(c.res, 404, { error: "no such run group" });
+}
+
+async function runGroupItemsAdd(c: Ctx): Promise<void> {
+  const group = c.store.getRunGroupByUuid(c.params.uuid ?? "");
+  if (!group) return sendJson(c.res, 404, { error: "no such run group" });
+  if (group.state !== "draft" && group.state !== "paused") return sendJson(c.res, 409, { error: "work items may only be appended while a group is draft or paused" });
+  const body = objectValue(await readBody(c.req));
+  const rawItems = body && Array.isArray(body.items) ? body.items : [];
+  if (rawItems.length === 0) return sendJson(c.res, 400, { error: "items must be a non-empty array" });
+  try {
+    c.store.addWorkItems(Number(group.id), rawItems.map((item, index) => normalizeWorkItemInput(item, index)));
+    sendJson(c.res, 200, runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(c.res, /UNIQUE constraint failed/.test(message) ? 409 : 400, { error: message });
+  }
+}
+
+async function runGroupStart(c: Ctx): Promise<void> {
+  const group = c.store.getRunGroupByUuid(c.params.uuid ?? "");
+  if (!group) return sendJson(c.res, 404, { error: "no such run group" });
+  if (c.store.listWorkItems(Number(group.id)).length === 0) return sendJson(c.res, 409, { error: "run group has no work items" });
+  const body = objectValue(await readBody(c.req)) ?? {};
+  const parallelism = body.parallelism === undefined ? undefined : optionalPositiveInt(body.parallelism, undefined);
+  if (body.parallelism !== undefined && parallelism === undefined) return sendJson(c.res, 400, { error: "parallelism must be a positive integer" });
+  if (!c.store.startRunGroup(String(group.uuid), parallelism)) return sendJson(c.res, 409, { error: `run group cannot start from state ${String(group.state)}` });
+  const scheduled = scheduleRunGroup(c, Number(group.id));
+  sendJson(c.res, 200, { ...runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!), scheduled });
+}
+
+function runGroupPause(c: Ctx): void {
+  const group = c.store.getRunGroupByUuid(c.params.uuid ?? "");
+  if (!group) return sendJson(c.res, 404, { error: "no such run group" });
+  if (group.state !== "running") return sendJson(c.res, 409, { error: "only a running group can be paused" });
+  c.store.setRunGroupState(String(group.uuid), "paused");
+  sendJson(c.res, 200, runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!));
+}
+
+function runGroupCancel(c: Ctx): void {
+  const group = c.store.getRunGroupByUuid(c.params.uuid ?? "");
+  if (!group) return sendJson(c.res, 404, { error: "no such run group" });
+  if (group.state === "finished" || group.state === "failed" || group.state === "cancelled") {
+    return sendJson(c.res, 409, { error: `run group cannot be cancelled from state ${String(group.state)}` });
+  }
+  const jobs = c.store.cancelRunGroupItems(Number(group.id));
+  for (const jobId of jobs) {
+    c.store.cancelJob(jobId, "run group cancelled by operator");
+    c.plane.cancel(jobId);
+  }
+  c.store.setRunGroupState(String(group.uuid), "cancelled");
+  sendJson(c.res, 200, { ...runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!), canceledJobs: jobs });
+}
+
+function runGroupReport(c: Ctx): void {
+  const group = c.store.getRunGroupByUuid(c.params.uuid ?? "");
+  if (!group) return sendJson(c.res, 404, { error: "no such run group" });
+  c.store.refreshRunGroupCompletion(Number(group.id));
+  const current = c.store.getRunGroupById(Number(group.id))!;
+  sendJson(c.res, 200, { group: current, ...renderRunGroupReport(current, c.store.listWorkItems(Number(group.id))) });
+}
+
+function workItemGet(c: Ctx): void {
+  const item = c.store.getWorkItem(Number(c.params.id));
+  item ? sendJson(c.res, 200, { workItem: workItemApiRow(c.store, item) }) : sendJson(c.res, 404, { error: "no such work item" });
+}
+
+function workItemRetry(c: Ctx): void {
+  const item = c.store.getWorkItem(Number(c.params.id));
+  if (!item) return sendJson(c.res, 404, { error: "no such work item" });
+  if (!c.store.retryBlockedWorkItem(Number(item.id))) {
+    return sendJson(c.res, 409, { error: "only blocked failed/cancelled work items in a non-cancelled group can be retried" });
+  }
+  const group = c.store.getRunGroupById(Number(item.run_group_id))!;
+  const scheduled = group.state === "running" ? scheduleRunGroup(c, Number(group.id)) : 0;
+  sendJson(c.res, 200, { ...runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!), scheduled });
+}
+
+function runGroupApiRow(store: MetadataStore, group: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...group,
+    config: parseStoredJson(group.config_json),
+    budget: parseStoredJson(group.budget_json),
+    summary: parseStoredJson(group.summary_json),
+    items: store.listWorkItems(Number(group.id)).map((item) => workItemApiRow(store, item)),
+  };
+}
+
+function workItemApiRow(store: MetadataStore, item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...item,
+    targetBundle: parseStoredJson(item.target_bundle_json),
+    materialPolicy: parseStoredJson(item.material_policy_json),
+    evidenceContract: parseStoredJson(item.evidence_contract_json),
+    result: parseStoredJson(item.result_json),
+    attemptHistory: store.listWorkItemAttempts(Number(item.id)).map((attempt) => ({
+      ...attempt,
+      result: parseStoredJson(attempt.result_json),
+    })),
+  };
+}
+
+function scheduleRunGroup(c: Ctx, runGroupId: number): number {
+  return scheduleRunGroupWith(c.store, c.plane, runGroupId);
+}
+
+function scheduleRunGroupWith(store: MetadataStore, plane: ControlPlane, runGroupId: number): number {
+  const group = store.getRunGroupById(runGroupId);
+  if (!group || group.state !== "running") return 0;
+  let scheduled = 0;
+  while (true) {
+    const pending = store.pendingRunGroupDispatch(runGroupId, Number(group.parallelism) || 1);
+    if (pending.length === 0) break;
+    let progressed = false;
+    for (const item of pending) {
+      try {
+        const spec = buildWorkItemLaunchSpec(item, group);
+        const bundle = parseStoredJson(item.target_bundle_json);
+        const daemonId = typeof bundle?.daemonId === "number" ? bundle.daemonId : undefined;
+        const jobId = store.enqueueJob(spec.target, spec, daemonId);
+        if (!store.attachWorkItemJob(Number(item.id), jobId)) {
+          store.cancelJob(jobId, "work item was concurrently scheduled");
+          continue;
+        }
+        scheduled += 1;
+        progressed = true;
+      } catch (error) {
+        progressed = store.failUnscheduledWorkItem(Number(item.id), "invalid", error instanceof Error ? error.message : String(error)) || progressed;
+      }
+    }
+    if (!progressed) break;
+  }
+  store.refreshRunGroupCompletion(runGroupId);
+  if (scheduled > 0) plane.nudge();
+  return scheduled;
+}
+
+function settleRunGroupWorkItem(c: Ctx, jobId: number, status: "done" | "error" | "canceled", error?: string): void {
+  settleRunGroupWorkItemWith(c.store, c.plane, jobId, status, error);
+}
+
+function settleRunGroupWorkItemWith(store: MetadataStore, plane: ControlPlane, jobId: number, status: "done" | "error" | "canceled", error?: string): void {
+  const item = store.getWorkItemByJob(jobId);
+  if (!item) return;
+  const group = store.getRunGroupById(Number(item.run_group_id));
+  if (!group) return;
+  const job = store.getJob(jobId);
+  const runId = job && typeof job.run_id === "number" ? job.run_id : undefined;
+  const run = runId !== undefined ? store.getRun(runId) : undefined;
+  const projectId = run && typeof run.project_id === "number" ? run.project_id : typeof item.project_id === "number" ? item.project_id : undefined;
+  const findings = projectId === undefined ? [] : store.listFindings(projectId).filter((finding) => runId === undefined || finding.run_id === runId);
+  const settlement = settleWorkItem({ item, jobStatus: status, ...(error ? { jobError: error } : {}), ...(run ? { run } : {}), findings });
+  store.settleWorkItemByJob(jobId, settlement.state, settlement.outcome, settlement.result, settlement.error);
+  store.refreshRunGroupCompletion(Number(group.id));
+  if (store.getRunGroupById(Number(group.id))?.state === "running") scheduleRunGroupWith(store, plane, Number(group.id));
+}
+
+function reconcileTerminalRunGroupItems(store: MetadataStore, plane: ControlPlane): void {
+  for (const group of store.listRunGroups(10_000, 0)) {
+    if (group.state !== "running" && group.state !== "paused") continue;
+    for (const item of store.listWorkItems(Number(group.id))) {
+      if (typeof item.job_id !== "number" || (item.state !== "queued" && item.state !== "claimed" && item.state !== "running")) continue;
+      const job = store.getJob(item.job_id);
+      const status = job?.status;
+      if (status === "done" || status === "error" || status === "canceled") {
+        settleRunGroupWorkItemWith(store, plane, item.job_id, status, typeof job?.error === "string" ? job.error : undefined);
+      }
+    }
+  }
+}
+
+function parseStoredJson(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function optionalPositiveInt(value: unknown, fallback: number | undefined): number | undefined {
+  if (value === undefined || value === null) return fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 // ---- providers (model-strategy profiles) ----------------------------------
 
 const THINKING = new Set<string>(THINKING_LEVELS);
@@ -4282,6 +4585,7 @@ async function daemonJobStatus(c: Ctx): Promise<void> {
       if (run && run.status === "running") c.store.finishRun(runId, status === "canceled" ? "killed" : "error");
     }
   }
+  settleRunGroupWorkItem(c, jobId, status, body.error);
   sendJson(c.res, 200, { ok: true });
 }
 
@@ -4322,11 +4626,13 @@ function reconcileLostExecutorJobs(store: MetadataStore, plane: ControlPlane): n
     const freshDaemonLostJob = daemonHasFreshHeartbeat && timestampOlderThan(jobTouchedAt, DAEMON_LOST_JOB_GRACE_MS);
     if (!freshDaemonLostJob && !activity?.staleActivity) continue;
 
-    store.setJobStatus(jobId, "canceled", daemonOnline ? "executor no longer holds this job" : "executor offline before completion");
+    const error = daemonOnline ? "executor no longer holds this job" : "executor offline before completion";
+    store.setJobStatus(jobId, "canceled", error);
     if (runId !== undefined) {
       const run = store.getRun(runId);
       if (run && run.status === "running") store.finishRun(runId, "killed");
     }
+    settleRunGroupWorkItemWith(store, plane, jobId, "canceled", error);
     changed += 1;
   }
   return changed;

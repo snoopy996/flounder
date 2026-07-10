@@ -47,12 +47,24 @@ try {
   assert.equal(currentStore.listScopes(Number(project.id)).some((scope) => scope.scope_id === "S1" && scope.status === "audited"), true);
   assert.equal(currentStore.listFindings(Number(project.id)).some((finding) => finding.finding_key === "krelease" && finding.status === "suspected"), true);
   assert.equal(Number(currentStore.getJob(jobId)?.daemon_id), daemon.id);
+  const group = currentStore.createRunGroup({ name: "upgrade-evaluation", kind: "evaluation", parallelism: 1 });
+  currentStore.addWorkItems(Number(group.id), [{
+    itemKey: "upgrade-control",
+    kind: "benchmark-case",
+    targetBundle: { target: "upgrade-control", targetClass: "logic", sourcePaths: ["src"], corpusPaths: [] },
+    materialPolicy: { posture: "blind", materials: [] },
+    evidenceContract: { kind: "benchmark-oracle", expectedOutcome: "reject-positive", successPatterns: [], failurePatterns: [], requiresDifferential: false, requiresRefutation: true, networkPolicy: "sealed" },
+  }]);
+  assert.equal(currentStore.listWorkItems(Number(group.id)).length, 1, "run-group tables are added during release upgrade");
   currentStore.close();
 
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
   const raw = new DatabaseSync(dbPath);
   assert.equal(raw.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
   assert.ok(Number(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value) > 0);
+  assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM run_group").get().n, 1);
+  assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM work_item").get().n, 1);
+  assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'work_item_attempt'").get().n, 1);
   raw.close();
   console.log(`Database upgrade contract passed (${tag} -> current).`);
 } finally {

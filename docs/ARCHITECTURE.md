@@ -14,6 +14,7 @@ The main layers are:
 - Provider adapters: `src/llm/pi-ai.ts`, with explicit local CLI fallbacks in `src/llm/codex-cli.ts` and `src/llm/claude-code.ts`.
 - Pi integration: `src/pi/extension.ts` registers workflow tools for `prepare`, `run`, `map`, `audit`, and `confirm`, plus the shell guardrail.
 - Tracking store: `src/db/store.ts` records every run's metadata to SQLite (see [Tracking, API, and UI](#tracking-api-and-ui)).
+- Evaluation control plane: `src/evaluation/contracts.ts` validates run-group manifests, material policy, capability-surface context, and evidence contracts; `src/evaluation/run-groups.ts` maps work items onto the existing audit kernel and scores only persisted evidence.
 - Server / UI: `src/server/` (control-plane REST API `app.ts` + execution-plane `daemon.ts` + web dashboard).
 
 ## Product Model
@@ -32,6 +33,51 @@ payout-readiness checks in the path when a live target exists, while contest
 work can prioritize short verify/report batches, skip real-target confirmation
 when the venue is source-only, and append-map novel scopes without losing prior
 coverage or duplicate/submission state.
+
+## Evaluation and harness-improvement boundary
+
+Run groups are an outer control-plane loop, not a second agent runtime. A group
+contains independently resumable work items for benchmark cases, blind audits,
+claim verification, replay, or multi-target campaigns. The scheduler uses the
+existing SQLite job queue and daemon protocol:
+
+```mermaid
+flowchart LR
+  MANIFEST["Validated group manifest"] --> ITEM["Durable work items"]
+  ITEM --> JOB["Existing daemon job queue"]
+  JOB --> KERNEL["Existing run / audit --verify kernel"]
+  KERNEL --> GATE["Existing sandbox + confirmation gate"]
+  GATE --> RESULT["Persisted item outcome"]
+  RESULT --> REPORT["Regenerated group report"]
+```
+
+The lifecycle axis (`queued`, `claimed`, `running`, terminal) is deliberately
+separate from the evidence axis (`confirmed`, `refuted`, `no_findings`,
+`blocked`, and so on). A build or daemon failure therefore cannot become a safe
+control pass. Group concurrency counts queued daemon jobs as occupied slots,
+and terminal item reconciliation plus next-item dispatch run again after a
+control-plane restart.
+
+Every dispatch also appends a `work_item_attempt` row. Retrying is limited to
+blocked failed/cancelled items and resets only the current item projection; the
+prior job, run, outcome, and diagnostic remain immutable attempt history.
+Scored controls require a complete healthy run, and positive evidence that asks
+for independent refutation cannot pass with a missing or errored refutation
+stage.
+
+Corpus visibility is fail-closed: every corpus path needs an explicit material
+decision, duplicate or undeclared inclusions are rejected, and `warning` cannot
+dispatch until an operator resolves it. Blind scored items also reject
+free-form scope notes; structured capability-surface context is the narrow
+model-visible alternative.
+
+The editable/evolvable surface stops outside the trusted computing boundary.
+Manifests may select authorized materials, model settings, repeated cases, and
+evidence requirements, but they cannot execute their own commands, enable host
+execution, relax network policy, bypass allowed sandbox backends, or mint
+findings. Future harness-candidate proposal work must use these persisted
+results as input while keeping the evaluator, command policy, material boundary,
+and confirmation gate outside the optimization loop.
 
 ## Audit Flow
 
@@ -257,6 +303,10 @@ Findings are persisted **incrementally** — as each scope's dig lands, then re-
 **REST API + self-describing catalog (`src/server/app.ts`).** A `node:http` server that binds to `127.0.0.1` by default. Every workflow operation is a REST resource so an AI agent can drive the whole flow without the UI: **project** (CRUD, including selected daemon, default provider profile, task/clue config, source/build/corpus paths, budgets, phase provider overrides, engagement config, archive/pin/manual order; project resource URLs use UUIDs, not names), **provider** (model strategy profiles), **daemon** (CRUD, token minting, rename, revoke), **run** (`POST /api/projects/:uuid/runs` **enqueues a job** and returns its `jobId`; `verb:"run"` is the automatic prepare-if-needed -> map/dig -> synthesize -> verify -> confirm -> report pipeline; contest projects first settle missing verify/report work, then open short batches and append-map when configured; open Next Actions are attached to the launch spec so the daemon can resolve or route them before opening unrelated fresh coverage; `GET /api/runs/:id`; `POST /api/runs/:id/stop`; `GET /api/runs/:id/artifact?name=` serves an allowlisted report or discovery-health artifact), **discovery-backlog** (`GET /api/projects/:uuid/backlog?kind=&status=` and `PATCH /api/backlog/:id`), and read-only **scope** / **finding** (paginated + filterable) / **confirm-decision**. Project detail embeds `latestRunHealth`, `backlogCounts`, open backlog rows, and open resource requests so the dashboard and agents do not scrape run directories. Backlog rows expose `actionability`, `action_owner`, `recommended_action`, and `primary_action_label`: agents advance coverage rows, resolve setup/resource rows when possible, route ambiguous rows to the right safe workflow action, and ask the operator only for explicit credentials, authorization, or unavailable external resources. Findings carry two operator axes: `PATCH /api/projects/:uuid/scopes/:id` with `{prioritize:true}` bumps a scope to the front of the dig queue, and `PATCH /api/findings/:id/tracking` advances a finding's operator state. **Confirm is finding-grained**: `POST …/runs` with `verb:"confirm"` and *no* run dir reproduces every still-pending confirmable finding (the control plane locates each one's source run dir from its `run_id` and passes the pending set); with `findingId`/`findingIds` it confirms selected findings; a re-run skips already-decided findings (resume by `confirm_status`). **Report is finding-grained** too: selected `findingIds` regenerate those reports, `regenerateReports:true` regenerates every current reportable finding, and an unselected report run generates only missing reports. The CLI commands `flounder continue --project <uuid|name>` and `flounder report --project <uuid|name>` drive the same project endpoints; `continue` posts `verb:"run"`, while report `--finding` sends selected `findingIds` and `--all` sends `regenerateReports:true`. A cross-project **`GET /api/bugs`** powers the Findings view by returning findings joined with project plus status/tracking aggregates; it supports project scoping (`project=<uuid>`) and `tracking=active` to hide ignored rows. `GET /api` returns a catalog of every endpoint (method, path, params, body, summary) — an agent fetches it once to learn the surface. The execution-plane protocol — `/api/daemon/*` (register, SSE stream, claim, run-start, progress PATCH, activity, job-status, pipeline worklists), each **bearer-token-authenticated** — is **hidden from the catalog** (it is machine-to-machine, not agent-facing). Routing is a data-driven table, so the catalog and the handlers cannot drift.
 
 **Live streams.** `GET /api/stream` (SSE) pushes the project snapshot ~1/s (computed from aggregate queries, so it stays cheap with many findings). `GET /api/runs/:id/log` (SSE) streams a run's live **token-level** activity (thinking/output deltas + tool calls) from a per-run in-memory bus that the daemon feeds via batched activity POSTs, and `?format=json`/`?tail=N` also returns the durable `events.jsonl` tail so an agent can inspect terminal errors after the live stream is gone.
+
+Run-group and work-item resources add durable create/start/pause/cancel/retry/report
+operations to that same catalog. They are currently API/CLI surfaces; dashboard
+views remain planned.
 
 **UI (`src/server/ui`).** A React/Vite TypeScript app compiled into `dist/server/public` and served by the Node control plane. It is **one client of the API above** — it can be ignored entirely in favor of the API. A project is created from a prominent task/clue composer plus execution daemon, default provider profile, source/build/corpus paths, coverage, and optional phase provider overrides. The project directory defaults to the project UUID under the daemon workspace. Its detail view shows the **prepare -> map -> dig -> synthesize -> verify -> confirm -> report** workflow, the current phase, elapsed timing, live model activity, scope coverage, and run health. The primary button is **Run** before any pipeline run and **Continue** after one exists; finer phase actions live under More actions. A project-level **Next Actions** tab groups discovery backlog rows into agent-owned coverage work, setup work, and routing work; coverage rows expose Continue, Expand map, and scope-prioritization actions, while setup and routing rows run the agent to resolve safe local work or narrow the blocker to a concrete external ask. The remaining project tabs show the scope queue you can prioritize/skip/resume, including badges for follow-up scope provenance; findings that **stream in as each scope lands** and update status through refutation; project-scoped finding filters; per-finding tracking including `ignored`; real-target outcomes; selected-finding Verify/Confirm/Report actions; per-scope and per-finding durations; and viewable Markdown **reports**. The cross-project **Findings** view tracks every finding plus submission status, supports project/status/tracking filters, and defaults to Active findings (hiding ignored rows). **Settings** holds provider profiles (provider + model + thinking, with optional phase/role defaults), daemon CRUD, and archived projects. UI state derivation lives in `src/server/ui/src/domain.ts`, API types/client code live in `src/server/ui/src/api.ts`, and every action remains a single REST call.
 

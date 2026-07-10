@@ -76,6 +76,7 @@
     "dist/agent/**",
     "dist/agents/**",
     "dist/db/**",
+    "dist/evaluation/**",
     "dist/ingest/**",
     "dist/lens/**",
     "dist/llm/**",

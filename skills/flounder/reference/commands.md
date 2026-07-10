@@ -50,7 +50,7 @@ CLI naming convention:
 
 - Workflow verbs stay top-level: `flounder run`, `flounder continue`,
   `flounder map`, `flounder audit`, `flounder verify`,
-  `flounder confirm`, and `flounder report`.
+  `flounder confirm`, `flounder report`, and `flounder group`.
 - Server/control-plane resource commands live under `flounder server ...`.
 - `flounder daemon ...` commands run on the daemon machine and can touch local
   provider auth, workspace paths, and executor settings. Start executors with
@@ -76,6 +76,10 @@ CLI naming convention:
 | `flounder verify <file> --source ...` | Alias for `audit --verify`; confirm or refute suspected findings by local execution |
 | `flounder confirm <run-dir> --source <paths...>` | Open-world reproduction and submit/no-submit decision sheet |
 | `flounder report --project <uuid\|name> [--finding <id>...] [--all]` | Generate missing formal reports, or regenerate selected/all reportable findings |
+| `flounder group create --manifest <file>` | Create a durable validated evaluation, replay, batch, or multi-target group |
+| `flounder group start <uuid\|name> [--parallel <n>]` | Start/resume bounded group work through the existing daemon queue |
+| `flounder group status\|pause\|cancel\|report <uuid\|name>` | Inspect/control group state or regenerate its persisted evidence report |
+| `flounder group retry <work-item-id>` | Retry a blocked item after setup repair while retaining immutable prior attempt evidence |
 | `flounder history import-run --target <name> --run <dir>` | Import an existing run directory into tracked history |
 
 ## Materials

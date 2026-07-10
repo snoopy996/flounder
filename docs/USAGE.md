@@ -200,7 +200,7 @@ Most users should start from the dashboard or from `flounder run <clue>`. The CL
 
 CLI layout is intentionally split by where the command runs:
 
-- **Workflow verbs stay top-level.** Examples: `flounder prepare`, `flounder run`, `flounder map`, `flounder audit`, `flounder verify`, `flounder confirm`, `flounder report`.
+- **Workflow verbs stay top-level.** Examples: `flounder prepare`, `flounder run`, `flounder map`, `flounder audit`, `flounder verify`, `flounder confirm`, `flounder report`, and durable `flounder group` evaluation workflows.
 - **Server/control-plane resources live under `flounder server ...`.** Examples: `flounder server project list`, `flounder server run list`, `flounder server finding list`, `flounder server daemon list`, `flounder server daemon-token mint`.
 - **Daemon-machine local operations live under `flounder daemon ...`.** Examples: `flounder daemon start --server ... --token ...`, `flounder daemon provider login openai-codex`, `flounder daemon provider check openai-codex`.
 
@@ -220,9 +220,137 @@ The sealed verbs (`run --source`, `map`, and `audit`) share the tools, the confi
 | `flounder verify <findings.json> --source <paths...>` | alias for `audit --verify`; confirm-or-refute existing suspected findings by execution |
 | `flounder confirm <run-dir> --source <paths...>` | open-world: reproduce a run's findings on the real target |
 | `flounder report --project <uuid\|name> [--finding <id>...] [--all]` | generate missing formal reports, regenerate selected reports, or regenerate every current reportable finding |
+| `flounder group create --manifest <file>` | create a durable evaluation, replay, batch, or multi-target group from validated work items |
+| `flounder group start <uuid\|name> [--parallel <n>]` | start or resume bounded work-item scheduling through the existing daemon queue |
+| `flounder group status|pause|cancel|report <uuid\|name>` | inspect or control durable group state, or regenerate its result report without model work |
+| `flounder group retry <work-item-id>` | retry a blocked item after setup repair while preserving prior attempt evidence |
 | `flounder history import-run --target <name> --run <dir>` | import an existing run directory into tracked history |
 
 `prepare` and the sealed verbs are **unbounded by default** (a run ends when the model is done, not at a step count) — a fixed budget silently truncates useful acquisition or a productive dig. Standard coverage caps only the next dig batch to 30 scopes; it does not cap prepare, map, or per-scope dig turns. Cap a phase only when you want to: `--max-steps` for `prepare`, `--map-steps` / `--dig-steps` for map/dig, or `--max-steps` for `run --quick` / `audit <region>`. A killed run **resumes** (it skips MAP and the already-audited scopes), so longer unbounded runs are safe to interrupt.
+
+## Evaluation run groups
+
+Run groups are the durable outer loop around the existing audit kernel. They do
+not add a second audit strategy or confirmation path. Each work item resolves to
+an existing sealed `run` or `audit --verify` job, executes on a daemon, and stores
+lifecycle separately from its evidence outcome:
+
+- lifecycle: `queued -> claimed -> running -> finished|failed|cancelled`;
+- outcome: `confirmed`, `refuted`, `findings_reported`, `no_findings`, `blocked`,
+  or `invalid`;
+- `blocked` covers setup, build, daemon, or resource failure and is never scored
+  as a negative security result;
+- a manifest `command` is descriptive evidence metadata only. It is never run
+  directly; confirmation still requires the normal policy-gated audit tools;
+- group manifests cannot select host execution or open-world access. Real-target
+  work must use `flounder confirm` and its existing no-broadcast policy.
+
+A minimal positive/control manifest looks like:
+
+```json
+{
+  "version": 1,
+  "name": "logic-regression",
+  "kind": "evaluation",
+  "parallelism": 2,
+  "config": {
+    "provider": "openai-codex",
+    "thinking": "xhigh"
+  },
+  "items": [
+    {
+      "itemKey": "positive",
+      "kind": "benchmark-case",
+      "targetBundle": {
+        "target": "eval-c1-f1-s1",
+        "targetClass": "logic",
+        "sourcePaths": ["./fixtures/c1"],
+        "corpusPaths": ["./docs/design.md"]
+      },
+      "materialPolicy": {
+        "posture": "blind",
+        "materials": [
+          {
+            "path": "./docs/design.md",
+            "provenance": "official-docs",
+            "operatorLabel": "design-intent",
+            "policyDecision": "included",
+            "reason": "Answer-free design intent."
+          }
+        ]
+      },
+      "evidenceContract": {
+        "kind": "benchmark-oracle",
+        "expectedOutcome": "detect-positive",
+        "requiresDifferential": true,
+        "requiresRefutation": true,
+        "networkPolicy": "sealed"
+      }
+    },
+    {
+      "itemKey": "safe-control",
+      "kind": "benchmark-case",
+      "targetBundle": {
+        "target": "eval-c1-f2-s1",
+        "targetClass": "logic",
+        "sourcePaths": ["./fixtures/c2"],
+        "corpusPaths": []
+      },
+      "evidenceContract": {
+        "kind": "benchmark-oracle",
+        "expectedOutcome": "reject-positive",
+        "networkPolicy": "sealed"
+      }
+    }
+  ]
+}
+```
+
+Relative material paths are resolved against the manifest directory by the CLI:
+
+```bash
+flounder group create --manifest ./evaluation.json
+flounder group start logic-regression --parallel 2
+flounder group status logic-regression
+flounder group report logic-regression
+```
+
+If setup, build, daemon, or resource failure blocks an item, retry that item by
+its numeric id after fixing the blocker:
+
+```bash
+flounder group retry <work-item-id>
+flounder group start logic-regression
+```
+
+Only blocked failed/cancelled items are retryable. Each dispatch writes an
+immutable attempt row, so retrying never overwrites the prior job, run, error,
+or evidence. A benchmark miss is a real sample, not a retryable infrastructure
+failure; represent repeated samples as separate work items.
+
+Scored items require a terminal `done` run and a `healthy` run-health verdict.
+Positive evidence that requires independent refutation is blocked unless the
+persisted refutation stage completed without errors. This prevents shallow,
+resource-limited, or partially evaluated controls from being counted as safe.
+
+Keep every model-visible target name, directory, filename, comment, and corpus
+entry neutral. Blind benchmark/replay items cannot add a free-form `scopeNote`.
+`itemKey` and `expectedOutcome` stay in the control plane, but a source path
+such as `known-bug-positive/` would leak the answer into the audit and invalidate
+the evaluation.
+
+Every declared corpus path needs one explicit material-policy decision; there
+is no default inclusion. An unresolved `warning` blocks dispatch until the
+operator changes it to `included` or `excluded`, so a warning never silently
+crosses the blind-material boundary.
+
+For a `targetClass` of `capability-surface`, the target bundle must also declare
+neutral `entrypoints`, `inputs`, `effects`, `authorities`, `boundaries`, and
+local fixtures. Flounder supplies the semantic fields as planning context to the
+model; fixture paths remain control-plane metadata and must already be reachable
+under the declared source/build inputs. Neither can confirm a finding by itself.
+Use local fake mail, PR, MCP, browser, or repository fixtures rather than real
+accounts and tokens.
 
 ## Most effective setup
 
@@ -470,7 +598,7 @@ curl "localhost:4500/api/projects/$PROJECT_UUID/findings?status=confirmed-differ
 curl "localhost:4500/api/projects/$PROJECT_UUID/confirm-decisions?reproduced=yes"  # the confirmed bugs
 ```
 
-Resources: **project** (CRUD, including selected daemon, provider profile, task/clue, source/build/corpus paths, archive/pin/manual order; project URLs are UUID-only), **provider** (model strategy profiles), **daemon** (CRUD — mint/rename/revoke), **run** (`POST /api/projects/:uuid/runs` enqueues a job a daemon claims; `verb:"run"` is the automatic prepare-if-needed -> map/dig -> synthesize -> verify -> confirm -> report pipeline; `GET /api/runs/:id`; `POST /api/runs/:id/stop`; `GET /api/runs/:id/artifact?name=` reads an allowlisted report or discovery-health artifact), and read-only **scope** / **finding** / **confirm-decision** (paginated + filterable). **Discovery-backlog** rows are project-scoped agent-owned Next Actions: `GET /api/projects/:uuid/backlog?kind=&status=` lists coverage gaps, resource requests, and follow-up scopes with `actionability` (`agent-runnable`, `agent-resource`, `agent-review`), `action_owner`, `recommended_action`, and `primary_action_label`; `PATCH /api/backlog/:id {"status":"resolved"|"ignored"|"stale"|"open"}` updates state without deleting provenance. Agents should try to resolve every open Next Action through the existing project workflow and narrow any truly external dependency to a concrete credential, authorization, or resource request. Operator actions: `PATCH …/scopes/:id {prioritize:true}` reorders the dig queue; `PATCH /api/findings/:id/tracking` advances a finding's submission state, including `ignored` for human-dismissed machine findings; a confirm `POST …/runs {verb:"confirm"}` reproduces all pending findings (or selected findings with `findingId`/`findingIds`); a report `POST …/runs {verb:"report", findingIds:[...]}` regenerates selected reports, `{"verb":"report","regenerateReports":true}` regenerates every current reportable finding, and an unselected report run writes only missing reports. `flounder continue --project <uuid|name>` drives the same Run/Continue project pipeline from the CLI. `flounder report --project <uuid|name>` drives the same project action from the CLI; add `--finding <id>` for selected regeneration or `--all` for full regeneration. `GET /api/bugs` powers the cross-project Findings view and supports `project=<uuid>`, `status=...`, `tracking=active/ignored/...`, `limit`, and `offset`. `GET /api/stream` is an SSE feed for live updates; `GET /api/runs/:id/log` streams a run's live token-level activity, fed by the executing daemon.
+Resources: **project** (CRUD, including selected daemon, provider profile, task/clue, source/build/corpus paths, archive/pin/manual order; project URLs are UUID-only), **provider** (model strategy profiles), **daemon** (CRUD — mint/rename/revoke), **run** (`POST /api/projects/:uuid/runs` enqueues a job a daemon claims; `verb:"run"` is the automatic prepare-if-needed -> map/dig -> synthesize -> verify -> confirm -> report pipeline; `GET /api/runs/:id`; `POST /api/runs/:id/stop`; `GET /api/runs/:id/artifact?name=` reads an allowlisted report or discovery-health artifact), **run-group** / **work-item** (`POST /api/run-groups`, `POST /api/run-groups/:uuid/start`, pause/cancel/report, `GET /api/work-items/:id`, and `POST /api/work-items/:id/retry` for blocked attempts), and read-only **scope** / **finding** / **confirm-decision** (paginated + filterable). **Discovery-backlog** rows are project-scoped agent-owned Next Actions: `GET /api/projects/:uuid/backlog?kind=&status=` lists coverage gaps, resource requests, and follow-up scopes with `actionability` (`agent-runnable`, `agent-resource`, `agent-review`), `action_owner`, `recommended_action`, and `primary_action_label`; `PATCH /api/backlog/:id {"status":"resolved"|"ignored"|"stale"|"open"}` updates state without deleting provenance. Agents should try to resolve every open Next Action through the existing project workflow and narrow any truly external dependency to a concrete credential, authorization, or resource request. Operator actions: `PATCH …/scopes/:id {prioritize:true}` reorders the dig queue; `PATCH /api/findings/:id/tracking` advances a finding's submission state, including `ignored` for human-dismissed machine findings; a confirm `POST …/runs {verb:"confirm"}` reproduces all pending findings (or selected findings with `findingId`/`findingIds`); a report `POST …/runs {verb:"report", findingIds:[...]}` regenerates selected reports, `{"verb":"report","regenerateReports":true}` regenerates every current reportable finding, and an unselected report run writes only missing reports. `flounder continue --project <uuid|name>` drives the same Run/Continue project pipeline from the CLI. `flounder report --project <uuid|name>` drives the same project action from the CLI; add `--finding <id>` for selected regeneration or `--all` for full regeneration. `GET /api/bugs` powers the cross-project Findings view and supports `project=<uuid>`, `status=...`, `tracking=active/ignored/...`, `limit`, and `offset`. `GET /api/stream` is an SSE feed for live updates; `GET /api/runs/:id/log` streams a run's live token-level activity, fed by the executing daemon.
 
 ## Library API
 

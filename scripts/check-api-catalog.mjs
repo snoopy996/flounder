@@ -58,6 +58,15 @@ assert.equal(typeof scopePatch.body?.prioritize, "string", "scope patch catalog 
 assert.match(scopePatch.body.prioritize, /top/i, "scope prioritize body description must say it moves a scope to the top");
 assert.match(scopePatch.body.status, /deferred.*pending/s, "scope patch catalog must document defer/resume statuses");
 
+const runGroupCreate = endpoint("POST", "/api/run-groups");
+assert.match(runGroupCreate.summary, /schema-validated/i, "run-group manifests must advertise validation");
+assert.match(runGroupCreate.summary, /never bypass/i, "run-group manifests must preserve the sandbox/confirmation boundary");
+const runGroupStart = endpoint("POST", "/api/run-groups/:uuid/start");
+assert.match(runGroupStart.summary, /parallelism/i, "run-group start must document bounded scheduling");
+const workItemRetry = endpoint("POST", "/api/work-items/:id/retry");
+assert.match(workItemRetry.summary, /preserving.*prior attempt evidence/i, "work-item retry must preserve immutable attempt evidence");
+assert.match(workItemRetry.summary, /cannot be rewritten as retries/i, "benchmark misses must not be hidden by retry semantics");
+
 for (const { name, pattern } of stalePatterns) {
   assert.doesNotMatch(publicText, pattern, `catalog/CLI help still exposes ${name}`);
 }

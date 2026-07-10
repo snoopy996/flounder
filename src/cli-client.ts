@@ -64,6 +64,13 @@ async function api(server: string, method: string, route: string, body?: unknown
   return (await res.json().catch(() => ({}))) as Record<string, unknown>;
 }
 
+/** Low-level control-plane request for durable product resources such as run groups.
+ * Execution-bearing callers should still use launchViaApi/launchProjectRunViaApi so run
+ * streaming and stop semantics stay consistent. */
+export async function requestControlPlane(server: string, method: string, route: string, body?: unknown): Promise<Record<string, unknown>> {
+  return api(server, method, route, body);
+}
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Fetch a run-dir artifact's text over the control plane (the same allowlisted endpoint the UI's

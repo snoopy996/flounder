@@ -2,10 +2,11 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultConfig, defaultOutputDir, defaultWorkspaceDir, normalizeProjectContext, normalizeRoleModels, type AuditorConfig } from "./config.js";
 import { CLI_CONFIG_KEYS, configFilePath, getCliConfigValue, isCliConfigKey, loadCliConfig, setCliConfigValue, unsetCliConfigValue, type CliConfigKey } from "./config-file.js";
-import { launchProjectRunViaApi, launchViaApi, ran, resolveServer, fetchArtifact } from "./cli-client.js";
+import { launchProjectRunViaApi, launchViaApi, ran, resolveServer, fetchArtifact, requestControlPlane } from "./cli-client.js";
 import { buildProjectContinueBody } from "./cli-project.js";
 import { deriveScopeNote } from "./scope-note.js";
 import type { LaunchSpec } from "./server/run-manager.js";
@@ -15,6 +16,7 @@ import { startUiServer } from "./server/app.js";
 import { runDaemon } from "./server/daemon.js";
 import { isSandboxBackend } from "./security/sandbox.js";
 import { knownRuntimeProviders, loginProvider, printProviderCheck, providerAuthStatus } from "./provider-auth.js";
+import { absolutizeRunGroupManifest, normalizeRunGroupManifest } from "./evaluation/contracts.js";
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
@@ -35,6 +37,11 @@ async function main(argv: string[]): Promise<void> {
 
   if (cmd === "config") {
     runConfigCommand(rest);
+    return;
+  }
+
+  if (cmd === "group") {
+    await runGroupCommand(rest);
     return;
   }
 
@@ -773,6 +780,106 @@ function canonicalVerifyArgs(args: string[], verifyFile: string, removePositiona
   return ["--verify", verifyFile, ...out];
 }
 
+async function runGroupCommand(args: string[]): Promise<void> {
+  const [subcommand, ref, ...rest] = args;
+  if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
+    printGroupHelp();
+    return;
+  }
+  const allArgs = ref ? [ref, ...rest] : rest;
+  const server = resolveServer(readFlag(allArgs, "--server"));
+  if (subcommand === "create") {
+    const manifestPath = readFlag(allArgs, "--manifest");
+    const nameOverride = readFlag(allArgs, "--name");
+    const parallelismOverride = readIntFlag(allArgs, "--parallel");
+    let body: Record<string, unknown>;
+    if (manifestPath) {
+      const absoluteManifest = path.resolve(manifestPath);
+      const manifest = absolutizeRunGroupManifest(
+        normalizeRunGroupManifest(JSON.parse(await readFile(absoluteManifest, "utf8"))),
+        path.dirname(absoluteManifest),
+      );
+      body = {
+        ...manifest,
+        ...(nameOverride ? { name: nameOverride } : {}),
+        ...(parallelismOverride !== undefined ? { parallelism: parallelismOverride } : {}),
+      };
+    } else {
+      const name = nameOverride ?? (ref && !ref.startsWith("--") ? ref : undefined);
+      if (!name) throw new Error("flounder group create needs --name <name> or --manifest <file>");
+      body = { name, ...(parallelismOverride !== undefined ? { parallelism: parallelismOverride } : {}) };
+    }
+    const created = await requestControlPlane(server, "POST", "/api/run-groups", body);
+    console.log(`created run group ${String(created.name)} (${String(created.uuid)}) with ${Array.isArray(created.items) ? created.items.length : 0} item(s)`);
+    return;
+  }
+  if (subcommand === "retry") {
+    const workItemId = ref && !ref.startsWith("--") ? Number(ref) : Number(readFlag(rest, "--item"));
+    if (!Number.isInteger(workItemId) || workItemId < 1) throw new Error("flounder group retry needs a positive work-item id");
+    const result = await requestControlPlane(server, "POST", `/api/work-items/${workItemId}/retry`, {});
+    printRunGroupStatus(result);
+    return;
+  }
+  const groupRef = ref && !ref.startsWith("--") ? ref : readFlag(rest, "--group");
+  if (!groupRef) throw new Error(`flounder group ${subcommand} needs a group UUID or name`);
+  const uuid = await resolveRunGroupUuid(server, groupRef);
+  if (subcommand === "start") {
+    const parallelism = readIntFlag(rest, "--parallel");
+    const result = await requestControlPlane(server, "POST", `/api/run-groups/${encodeURIComponent(uuid)}/start`, parallelism === undefined ? {} : { parallelism });
+    printRunGroupStatus(result);
+    return;
+  }
+  if (subcommand === "pause" || subcommand === "cancel") {
+    const result = await requestControlPlane(server, "POST", `/api/run-groups/${encodeURIComponent(uuid)}/${subcommand}`, {});
+    printRunGroupStatus(result);
+    return;
+  }
+  if (subcommand === "status") {
+    printRunGroupStatus(await requestControlPlane(server, "GET", `/api/run-groups/${encodeURIComponent(uuid)}`));
+    return;
+  }
+  if (subcommand === "report") {
+    const report = await requestControlPlane(server, "GET", `/api/run-groups/${encodeURIComponent(uuid)}/report`);
+    console.log(typeof report.markdown === "string" ? report.markdown : JSON.stringify(report, null, 2));
+    return;
+  }
+  throw new Error(`Unknown group command "${subcommand}". Use: flounder group create|start|status|pause|cancel|retry|report`);
+}
+
+async function resolveRunGroupUuid(server: string, ref: string): Promise<string> {
+  const response = await requestControlPlane(server, "GET", "/api/run-groups?limit=500");
+  const groups = Array.isArray(response.runGroups) ? response.runGroups as Array<Record<string, unknown>> : [];
+  const matches = groups.filter((group) => group.uuid === ref || group.name === ref);
+  if (matches.length === 1 && typeof matches[0]!.uuid === "string") return matches[0]!.uuid;
+  if (matches.length > 1) throw new Error(`run-group name "${ref}" is ambiguous; use the UUID`);
+  return ref;
+}
+
+function printRunGroupStatus(group: Record<string, unknown>): void {
+  const items = Array.isArray(group.items) ? group.items as Array<Record<string, unknown>> : [];
+  console.log(`${String(group.name ?? group.uuid)} [${String(group.state ?? "unknown")}] ${items.length} item(s)${typeof group.scheduled === "number" ? ` · ${group.scheduled} newly scheduled` : ""}`);
+  for (const item of items) {
+    console.log(`  ${String(item.item_key)}  ${String(item.kind)}  [${String(item.state)}]  ${String(item.outcome ?? "-")}`);
+  }
+}
+
+function printGroupHelp(): void {
+  console.log(`flounder group — durable batch/evaluation run groups.
+
+Usage:
+  flounder group create --manifest <file> [--name <name>] [--parallel <n>]
+  flounder group create --name <name>
+  flounder group start <uuid|name> [--parallel <n>]
+  flounder group status <uuid|name>
+  flounder group pause <uuid|name>
+  flounder group cancel <uuid|name>
+  flounder group retry <work-item-id>
+  flounder group report <uuid|name>
+
+Manifests contain validated work items, target bundles, material policies, and evidence
+contracts. They cannot enable host execution or bypass the normal sandbox/confirmation gate.`);
+}
+
 async function runHistoryCommand(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (subcommand !== "import-run") {
@@ -1018,6 +1125,7 @@ Usage:
   flounder confirm <run-dir> --source <paths...>                                  open-world: reproduce a run's findings on the real target
   flounder report  --project <uuid|name> [--finding <id>...] [--all]              generate missing reports or regenerate selected/all formal reports
   flounder continue --project <uuid|name>                                         finish the stored project pipeline round (same as the UI Continue button)
+  flounder group create|start|status|pause|cancel|retry|report                    durable evaluation, replay, and multi-target work groups
   flounder history import-run --target <name> --run <dir>
   flounder server project list                                                   list tracked projects
   flounder server run list [--project <name>]                                    list run history globally or for one project

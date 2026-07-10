@@ -85,6 +85,7 @@ Use these when the user is not asking for a full end-to-end audit:
 | "Is this locally confirmed bug real on mainnet/deployment?" | `flounder confirm <run-dir>` or selected project Confirm. |
 | "Prepare submission package" | selected Report; include only execution-backed, non-ignored findings. |
 | "Triage noisy machine findings" | update tracking: `ignored` for dismissed, `open` to recover. |
+| "Run a benchmark / regression set / positive and safe controls" | Create a validated manifest and use `flounder group create --manifest <file>`, then `flounder group start <uuid|name>`. Keep blind material policy explicit, require execution evidence for positives, and require zero confirmed findings on safe/control items. Retry only blocked items with `flounder group retry <work-item-id>`; repeated samples are separate items. |
 
 ## Core Operating Rules
 
