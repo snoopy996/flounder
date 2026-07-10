@@ -1,4 +1,4 @@
-import type { RunGroupRow, WorkItemRow } from "./api";
+import type { HarnessDecision, HarnessExperimentRow, RunGroupRow, WorkItemRow } from "./api";
 
 export type EvaluationTone = "neutral" | "active" | "success" | "danger" | "warning";
 
@@ -134,6 +134,29 @@ export function canRetryWorkItem(group: RunGroupRow, item: WorkItemRow): boolean
   return group.state !== "cancelled"
     && item.outcome === "blocked"
     && (item.state === "failed" || item.state === "cancelled");
+}
+
+export function harnessExperimentLabel(experiment: HarnessExperimentRow): string {
+  if (experiment.decision === "promote") return "Promote";
+  if (experiment.decision === "reject") return "Rejected";
+  if (experiment.decision === "needs-more-samples") return "More samples";
+  if (experiment.state === "proposal-ready") return "Proposal ready";
+  if (experiment.state === "evaluating") return "Awaiting score";
+  return "Needs evidence";
+}
+
+export function harnessExperimentTone(experiment: HarnessExperimentRow): EvaluationTone {
+  if (experiment.decision === "promote") return "success";
+  if (experiment.decision === "reject") return "danger";
+  if (experiment.decision === "needs-more-samples" || experiment.state === "needs-evidence") return "warning";
+  if (experiment.state === "evaluating") return "active";
+  return "neutral";
+}
+
+export function harnessDecisionLabel(decision: HarnessDecision): string {
+  if (decision === "promote") return "Promote candidate";
+  if (decision === "reject") return "Reject candidate";
+  return "Needs more samples";
 }
 
 function sentenceCase(value: string): string {

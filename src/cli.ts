@@ -45,6 +45,11 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (cmd === "experiment") {
+    await runHarnessExperimentCommand(rest);
+    return;
+  }
+
   if (cmd === "ui") {
     if (rest[0] === "help" || rest.includes("--help") || rest.includes("-h")) {
       printUiHelp();
@@ -885,6 +890,116 @@ Manifests contain validated work items, target bundles, material policies, and e
 contracts. They cannot enable host execution or bypass the normal sandbox/confirmation gate.`);
 }
 
+async function runHarnessExperimentCommand(args: string[]): Promise<void> {
+  const [subcommand, ref, ...rest] = args;
+  if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
+    printHarnessExperimentHelp();
+    return;
+  }
+  const allArgs = ref ? [ref, ...rest] : rest;
+  const server = resolveServer(readFlag(allArgs, "--server"));
+  if (subcommand === "list") {
+    const response = await requestControlPlane(server, "GET", "/api/harness-experiments?limit=500");
+    const experiments = Array.isArray(response.experiments) ? response.experiments as Array<Record<string, unknown>> : [];
+    if (experiments.length === 0) console.log("No harness experiments.");
+    for (const experiment of experiments) printHarnessExperimentStatus(experiment);
+    return;
+  }
+  if (subcommand === "create") {
+    const name = readFlag(allArgs, "--name");
+    const baselineRef = readFlag(allArgs, "--baseline");
+    const candidateRef = readFlag(allArgs, "--candidate");
+    const editableFiles = readMultiFlag(allArgs, "--editable-file");
+    if (!name || !baselineRef || editableFiles.length === 0) throw new Error("flounder experiment create needs --name, --baseline, and one or more paths after --editable-file");
+    const baselineRunGroupUuid = await resolveRunGroupUuid(server, baselineRef);
+    const candidateRunGroupUuid = candidateRef ? await resolveRunGroupUuid(server, candidateRef) : undefined;
+    const created = await requestControlPlane(server, "POST", "/api/harness-experiments", {
+      name,
+      baselineRunGroupUuid,
+      ...(candidateRunGroupUuid ? { candidateRunGroupUuid } : {}),
+      editableFiles,
+      promotionPolicy: {
+        ...(readIntFlag(allArgs, "--minimum-samples") !== undefined ? { minimumSamplesPerClass: readIntFlag(allArgs, "--minimum-samples") } : {}),
+        ...(readIntFlag(allArgs, "--minimum-improvements") !== undefined ? { minimumImprovedCases: readIntFlag(allArgs, "--minimum-improvements") } : {}),
+        ...(readFloatFlag(allArgs, "--max-duration-ratio") !== undefined ? { maxDurationRatio: readFloatFlag(allArgs, "--max-duration-ratio") } : {}),
+        ...(readFloatFlag(allArgs, "--max-attempt-ratio") !== undefined ? { maxAttemptRatio: readFloatFlag(allArgs, "--max-attempt-ratio") } : {}),
+      },
+    });
+    printHarnessExperimentStatus(created);
+    return;
+  }
+  const experimentRef = ref && !ref.startsWith("--") ? ref : readFlag(rest, "--experiment");
+  if (!experimentRef) throw new Error(`flounder experiment ${subcommand} needs an experiment UUID or name`);
+  const uuid = await resolveHarnessExperimentUuid(server, experimentRef);
+  if (subcommand === "status") {
+    printHarnessExperimentStatus(await requestControlPlane(server, "GET", `/api/harness-experiments/${encodeURIComponent(uuid)}`));
+    return;
+  }
+  if (subcommand === "attach") {
+    const candidateRef = readFlag(rest, "--candidate");
+    if (!candidateRef) throw new Error("flounder experiment attach needs --candidate <run-group>");
+    const candidateRunGroupUuid = await resolveRunGroupUuid(server, candidateRef);
+    printHarnessExperimentStatus(await requestControlPlane(server, "POST", `/api/harness-experiments/${encodeURIComponent(uuid)}/candidate`, { candidateRunGroupUuid }));
+    return;
+  }
+  if (subcommand === "evaluate") {
+    printHarnessExperimentStatus(await requestControlPlane(server, "POST", `/api/harness-experiments/${encodeURIComponent(uuid)}/evaluate`, {}));
+    return;
+  }
+  if (subcommand === "brief") {
+    const response = await requestControlPlane(server, "GET", `/api/harness-experiments/${encodeURIComponent(uuid)}/brief`);
+    console.log(typeof response.markdown === "string" ? response.markdown : JSON.stringify(response, null, 2));
+    return;
+  }
+  if (subcommand === "proposal") {
+    const proposalPath = readFlag(rest, "--file");
+    if (!proposalPath) throw new Error("flounder experiment proposal needs --file <proposal.json>");
+    const proposal = JSON.parse(await readFile(path.resolve(proposalPath), "utf8")) as unknown;
+    printHarnessExperimentStatus(await requestControlPlane(server, "PATCH", `/api/harness-experiments/${encodeURIComponent(uuid)}/proposal`, { proposal }));
+    return;
+  }
+  throw new Error(`Unknown experiment command "${subcommand}". Use: create|list|status|attach|proposal|evaluate|brief`);
+}
+
+async function resolveHarnessExperimentUuid(server: string, ref: string): Promise<string> {
+  const response = await requestControlPlane(server, "GET", "/api/harness-experiments?limit=500");
+  const experiments = Array.isArray(response.experiments) ? response.experiments as Array<Record<string, unknown>> : [];
+  const matches = experiments.filter((experiment) => experiment.uuid === ref || experiment.name === ref);
+  if (matches.length === 1 && typeof matches[0]!.uuid === "string") return matches[0]!.uuid;
+  if (matches.length > 1) throw new Error(`harness experiment name "${ref}" is ambiguous; use the UUID`);
+  return ref;
+}
+
+function printHarnessExperimentStatus(experiment: Record<string, unknown>): void {
+  const patterns = Array.isArray(experiment.failurePatterns) ? experiment.failurePatterns : [];
+  const scorecard = typeof experiment.scorecard === "object" && experiment.scorecard !== null && !Array.isArray(experiment.scorecard)
+    ? experiment.scorecard as Record<string, unknown>
+    : undefined;
+  console.log(`${String(experiment.name ?? experiment.uuid)} [${String(experiment.state ?? "unknown")}] ${String(experiment.decision ?? "no decision")} · ${patterns.length} weakness pattern(s)`);
+  if (scorecard) {
+    const improved = Array.isArray(scorecard.improvedItemKeys) ? scorecard.improvedItemKeys.length : 0;
+    const regressed = Array.isArray(scorecard.regressedItemKeys) ? scorecard.regressedItemKeys.length : 0;
+    console.log(`  paired result: ${improved} improved · ${regressed} regressed`);
+  }
+}
+
+function printHarnessExperimentHelp(): void {
+  console.log(`flounder experiment — governed harness self-improvement.
+
+Usage:
+  flounder experiment create --name <name> --baseline <group> [--candidate <group>] --editable-file <path...>
+  flounder experiment list
+  flounder experiment status <uuid|name>
+  flounder experiment attach <uuid|name> --candidate <group>
+  flounder experiment proposal <uuid|name> --file <proposal.json>
+  flounder experiment evaluate <uuid|name>
+  flounder experiment brief <uuid|name>
+
+The baseline must be a finished Evaluation. Failure mining uses persisted verifier evidence;
+candidate proposals are limited to approved harness files. Evaluation, material, sandbox,
+confirmation, promotion, merge, and deployment policy remain outside the editable loop.`);
+}
+
 async function runHistoryCommand(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (subcommand !== "import-run") {
@@ -1131,6 +1246,7 @@ Usage:
   flounder report  --project <uuid|name> [--finding <id>...] [--all]              generate missing reports or regenerate selected/all formal reports
   flounder continue --project <uuid|name>                                         finish the stored project pipeline round (same as the UI Continue button)
   flounder group create|start|status|pause|cancel|retry|report                    durable evaluation, replay, and multi-target work groups
+  flounder experiment create|list|status|attach|proposal|evaluate|brief           governed harness candidate experiments and promotion gates
   flounder history import-run --target <name> --run <dir>
   flounder server project list                                                   list tracked projects
   flounder server run list [--project <name>]                                    list run history globally or for one project

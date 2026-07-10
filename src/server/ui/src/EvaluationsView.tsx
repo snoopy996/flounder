@@ -3,6 +3,7 @@ import {
   api,
   type DaemonRow,
   type ExpectedOutcome,
+  type HarnessExperimentRow,
   type ProviderProfile,
   type RunGroupCreatePayload,
   type RunGroupReportResponse,
@@ -24,6 +25,14 @@ import {
   workItemTone,
   type EvaluationTone,
 } from "./evaluation-domain";
+import {
+  AttachHarnessCandidateModal,
+  HarnessExperimentDetail,
+  HarnessExperimentRailRow,
+  HarnessExperimentsOverview,
+  NewHarnessExperimentModal,
+  RefineHarnessProposalModal,
+} from "./HarnessExperimentsView";
 import { Icon } from "./icons";
 
 type EvaluationFilter = "all" | "active" | "attention" | "finished" | "draft";
@@ -39,6 +48,8 @@ interface EvaluationsWorkspaceProps {
 
 export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelect, onToast }: EvaluationsWorkspaceProps) {
   const [groups, setGroups] = useState<RunGroupRow[]>([]);
+  const [experiments, setExperiments] = useState<HarnessExperimentRow[]>([]);
+  const [railMode, setRailMode] = useState<"runs" | "evolution">("runs");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -50,7 +61,11 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
   const [report, setReport] = useState<RunGroupReportResponse | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [busyAction, setBusyAction] = useState("");
+  const [experimentBusy, setExperimentBusy] = useState("");
   const [expandedItem, setExpandedItem] = useState<number | null>(null);
+  const [newExperimentOpen, setNewExperimentOpen] = useState(false);
+  const [attachCandidateOpen, setAttachCandidateOpen] = useState(false);
+  const [refineProposalOpen, setRefineProposalOpen] = useState(false);
 
   const mergeGroup = useCallback((group: RunGroupRow) => {
     setGroups((current) => {
@@ -61,19 +76,47 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
     });
   }, []);
 
+  const mergeExperiment = useCallback((experiment: HarnessExperimentRow) => {
+    setExperiments((current) => {
+      const next = current.some((entry) => entry.uuid === experiment.uuid)
+        ? current.map((entry) => entry.uuid === experiment.uuid ? experiment : entry)
+        : [experiment, ...current];
+      return next.sort(sortExperiments);
+    });
+  }, []);
+
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const response = await api.runGroups();
-      let next = response.runGroups.sort(sortGroups);
-      if (selectedUuid && !next.some((group) => group.uuid === selectedUuid)) {
-        try {
-          next = [await api.runGroup(selectedUuid), ...next].sort(sortGroups);
-        } catch {
-          // The list still provides a useful workspace if a copied URL is stale.
+      const [groupResponse, experimentResponse] = await Promise.all([api.runGroups(), api.harnessExperiments()]);
+      let next = groupResponse.runGroups.sort(sortGroups);
+      let nextExperiments = experimentResponse.experiments.sort(sortExperiments);
+      if (selectedUuid) {
+        const groupExists = next.some((group) => group.uuid === selectedUuid);
+        const experimentExists = nextExperiments.some((experiment) => experiment.uuid === selectedUuid);
+        if (experimentExists) {
+          try {
+            const detail = await api.harnessExperiment(selectedUuid);
+            nextExperiments = nextExperiments
+              .map((experiment) => experiment.uuid === selectedUuid ? detail : experiment)
+              .sort(sortExperiments);
+          } catch {
+            // The lists still provide a useful workspace if a copied URL is stale.
+          }
+        } else if (!groupExists) {
+          try {
+            next = [await api.runGroup(selectedUuid), ...next].sort(sortGroups);
+          } catch {
+            try {
+              nextExperiments = [await api.harnessExperiment(selectedUuid), ...nextExperiments].sort(sortExperiments);
+            } catch {
+              // The lists still provide a useful workspace if a copied URL is stale.
+            }
+          }
         }
       }
       setGroups(next);
+      setExperiments(nextExperiments);
       setError("");
     } catch (refreshError) {
       setError(errorMessage(refreshError));
@@ -95,6 +138,11 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
   }, [needsPolling, refresh]);
 
   const selected = selectedUuid ? groups.find((group) => group.uuid === selectedUuid) : undefined;
+  const selectedExperiment = selectedUuid ? experiments.find((experiment) => experiment.uuid === selectedUuid) : undefined;
+  useEffect(() => {
+    if (selectedExperiment) setRailMode("evolution");
+    else if (selected) setRailMode("runs");
+  }, [selected, selectedExperiment]);
   const visibleGroups = useMemo(() => groups.filter((group) => {
     const metrics = evaluationMetrics(group);
     const text = `${group.name} ${group.kind}`.toLowerCase();
@@ -105,6 +153,15 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
     if (filter === "draft") return group.state === "draft";
     return true;
   }), [filter, groups, query]);
+  const visibleExperiments = useMemo(() => experiments.filter((experiment) => {
+    const text = `${experiment.name} ${experiment.baseline_name} ${experiment.candidate_name ?? ""}`.toLowerCase();
+    if (query.trim() && !text.includes(query.trim().toLowerCase())) return false;
+    if (filter === "active") return experiment.state === "evaluating";
+    if (filter === "attention") return experiment.state === "needs-evidence" || experiment.decision === "reject" || experiment.decision === "needs-more-samples";
+    if (filter === "finished") return experiment.state === "decided";
+    if (filter === "draft") return experiment.state === "proposal-ready";
+    return true;
+  }), [experiments, filter, query]);
 
   async function applyAction(key: string, action: () => Promise<RunGroupRow>, success: string, successTone: ToastTone = "success") {
     setBusyAction(key);
@@ -132,13 +189,44 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
     }
   }
 
+  async function applyExperimentAction(key: string, action: () => Promise<HarnessExperimentRow>, success: string) {
+    setExperimentBusy(key);
+    try {
+      const experiment = await action();
+      mergeExperiment(experiment);
+      onToast(experiment.decision === "promote" ? "success" : "info", success);
+      await refresh(true);
+    } catch (actionError) {
+      onToast("error", errorMessage(actionError));
+    } finally {
+      setExperimentBusy("");
+    }
+  }
+
+  async function copyCandidateBrief(experiment: HarnessExperimentRow) {
+    setExperimentBusy("brief");
+    try {
+      const response = await api.harnessExperimentBrief(experiment.uuid);
+      await copyText(response.markdown);
+      onToast("success", "Bounded candidate brief copied.");
+    } catch (copyError) {
+      onToast("error", errorMessage(copyError));
+    } finally {
+      setExperimentBusy("");
+    }
+  }
+
   const onlineDaemons = daemons.filter((daemon) => daemon.online).length;
   return (
     <>
       <aside className="evaluation-rail" aria-label="Audit evaluations">
         <div className="rail-head">
-          <div><h2>Evaluations</h2><Counter>{groups.length}</Counter></div>
-          <Button size="sm" icon="package" onClick={() => setNewOpen(true)}>New</Button>
+          <div><h2>Evaluations</h2><Counter>{railMode === "runs" ? groups.length : experiments.length}</Counter></div>
+          <Button size="sm" icon="package" onClick={() => railMode === "runs" ? setNewOpen(true) : setNewExperimentOpen(true)}>New</Button>
+        </div>
+        <div className="evaluation-mode-switch" role="tablist" aria-label="Evaluation workspace mode">
+          <button role="tab" aria-selected={railMode === "runs"} className={railMode === "runs" ? "sel" : ""} onClick={() => { setRailMode("runs"); onSelect(); }}>Runs</button>
+          <button role="tab" aria-selected={railMode === "evolution"} className={railMode === "evolution" ? "sel" : ""} onClick={() => { setRailMode("evolution"); onSelect(); }}>Harness</button>
         </div>
         <div className="evaluation-filters">
           <div className="project-search-row evaluation-search-row">
@@ -154,10 +242,12 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
           </select>
         </div>
         <div className="evaluation-list">
-          {loading && groups.length === 0 ? <RailMessage>Loading evaluations…</RailMessage> : null}
+          {loading && groups.length === 0 && experiments.length === 0 ? <RailMessage>Loading evaluations…</RailMessage> : null}
           {!loading && error ? <RailMessage tone="danger">{error}</RailMessage> : null}
-          {!loading && !error && visibleGroups.length === 0 ? <RailMessage>No evaluations match this view.</RailMessage> : null}
-          {visibleGroups.map((group) => <EvaluationRailRow key={group.uuid} group={group} selected={group.uuid === selectedUuid} onSelect={() => onSelect(group.uuid)} />)}
+          {!loading && !error && railMode === "runs" && visibleGroups.length === 0 ? <RailMessage>No evaluations match this view.</RailMessage> : null}
+          {!loading && !error && railMode === "evolution" && visibleExperiments.length === 0 ? <RailMessage>No harness experiments match this view.</RailMessage> : null}
+          {railMode === "runs" ? visibleGroups.map((group) => <EvaluationRailRow key={group.uuid} group={group} selected={group.uuid === selectedUuid} onSelect={() => onSelect(group.uuid)} />) : null}
+          {railMode === "evolution" ? visibleExperiments.map((experiment) => <HarnessExperimentRailRow key={experiment.uuid} experiment={experiment} selected={experiment.uuid === selectedUuid} onSelect={() => onSelect(experiment.uuid)} />) : null}
         </div>
       </aside>
       <main className="evaluation-workspace">
@@ -184,8 +274,20 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
             onReport={() => void openReport(selected)}
             onRetry={(item) => void applyAction(`retry-${item.id}`, () => api.retryWorkItem(item.id), `${item.item_key} is ready to run again.`)}
           />
-        ) : loading && groups.length === 0 ? (
+        ) : selectedExperiment ? (
+          <HarnessExperimentDetail
+            experiment={selectedExperiment}
+            busy={experimentBusy}
+            onBack={() => onSelect()}
+            onAttach={() => setAttachCandidateOpen(true)}
+            onRefine={() => setRefineProposalOpen(true)}
+            onEvaluate={() => void applyExperimentAction("evaluate", () => api.evaluateHarnessExperiment(selectedExperiment.uuid), "Promotion gate evaluated persisted baseline and candidate evidence.")}
+            onCopyBrief={() => void copyCandidateBrief(selectedExperiment)}
+          />
+        ) : loading && groups.length === 0 && experiments.length === 0 ? (
           <EvaluationEmpty title="Loading evaluation workspace" body="Reading durable run groups and evidence state." />
+        ) : railMode === "evolution" ? (
+          <HarnessExperimentsOverview experiments={experiments} onSelect={onSelect} onNew={() => setNewExperimentOpen(true)} />
         ) : groups.length === 0 ? (
           <EvaluationEmpty
             title="Make audit evaluations durable"
@@ -213,6 +315,42 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
             mergeGroup(group);
             setAddItemOpen(false);
             onToast("success", "Work item added with an explicit material policy and evidence contract.");
+          }}
+        />
+      ) : null}
+      {newExperimentOpen ? (
+        <NewHarnessExperimentModal
+          groups={groups}
+          onClose={() => setNewExperimentOpen(false)}
+          onCreated={(experiment) => {
+            mergeExperiment(experiment);
+            setNewExperimentOpen(false);
+            setRailMode("evolution");
+            onSelect(experiment.uuid);
+            onToast(experiment.proposal ? "success" : "warning", experiment.proposal ? "Verifier-grounded weaknesses mined and a bounded candidate proposal created." : "Experiment created, but the baseline has no actionable failed evidence yet.");
+          }}
+        />
+      ) : null}
+      {attachCandidateOpen && selectedExperiment ? (
+        <AttachHarnessCandidateModal
+          experiment={selectedExperiment}
+          groups={groups}
+          onClose={() => setAttachCandidateOpen(false)}
+          onAttached={(experiment) => {
+            mergeExperiment(experiment);
+            setAttachCandidateOpen(false);
+            onToast("success", "Candidate Evaluation attached. The promotion gate can now compare persisted evidence.");
+          }}
+        />
+      ) : null}
+      {refineProposalOpen && selectedExperiment?.proposal ? (
+        <RefineHarnessProposalModal
+          experiment={selectedExperiment}
+          onClose={() => setRefineProposalOpen(false)}
+          onUpdated={(experiment) => {
+            mergeExperiment(experiment);
+            setRefineProposalOpen(false);
+            onToast("success", "Candidate proposal refined without widening its protected boundary.");
           }}
         />
       ) : null}
@@ -615,7 +753,9 @@ function EvaluationReportModal({ report, loading, onClose, onToast }: { report: 
       {loading ? <p className="evaluation-muted">Building the report from persisted evidence…</p> : (
         <div className="evaluation-report">
           <div className="evaluation-report-actions">
-            <Button size="sm" icon="copy" onClick={() => void copyText(markdown).then(() => onToast("success", "Report copied to clipboard."))}>Copy</Button>
+            <Button size="sm" icon="copy" onClick={() => void copyText(markdown)
+              .then(() => onToast("success", "Report copied to clipboard."))
+              .catch((copyError) => onToast("error", errorMessage(copyError)))}>Copy</Button>
             <Button size="sm" icon="download" onClick={() => downloadText("evaluation-report.md", markdown)}>Download</Button>
           </div>
           <pre>{markdown}</pre>
@@ -676,6 +816,10 @@ function sortGroups(a: RunGroupRow, b: RunGroupRow): number {
   return Date.parse(b.updated_at ?? b.created_at ?? "") - Date.parse(a.updated_at ?? a.created_at ?? "");
 }
 
+function sortExperiments(a: HarnessExperimentRow, b: HarnessExperimentRow): number {
+  return Date.parse(b.updated_at ?? b.created_at ?? "") - Date.parse(a.updated_at ?? a.created_at ?? "");
+}
+
 function splitLines(value: string): string[] {
   return value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
 }
@@ -715,13 +859,24 @@ function numberValue(value: unknown): string {
 }
 
 async function copyText(value: string): Promise<void> {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Restricted desktop shells and local HTTP sessions may expose the API but deny writes.
+    }
+  }
   const textarea = document.createElement("textarea");
   textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   textarea.remove();
+  if (!copied) throw new Error("Clipboard access is unavailable in this environment.");
 }
 
 function downloadText(fileName: string, value: string): void {

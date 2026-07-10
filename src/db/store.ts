@@ -23,6 +23,7 @@ import type {
   WorkItemOutcome,
   WorkItemState,
 } from "../evaluation/contracts.js";
+import type { HarnessDecision, HarnessExperimentState, HarnessPromotionPolicy } from "../evaluation/harness-experiments.js";
 
 // A static `import ... from "node:sqlite"` emits the builtin's ExperimentalWarning at link
 // time, before sqlite-quiet's body can install the filter. Loading it via require() during
@@ -232,7 +233,7 @@ export interface RunGroupInput {
   budget?: unknown;
 }
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -548,6 +549,28 @@ CREATE TABLE IF NOT EXISTS work_item_attempt(
 );
 CREATE INDEX IF NOT EXISTS idx_work_item_attempt_item ON work_item_attempt(work_item_id, attempt_number);
 CREATE INDEX IF NOT EXISTS idx_work_item_attempt_run ON work_item_attempt(run_id);
+
+CREATE TABLE IF NOT EXISTS harness_experiment(
+  id INTEGER PRIMARY KEY,
+  uuid TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL DEFAULT 'needs-evidence', -- needs-evidence | proposal-ready | evaluating | decided
+  baseline_run_group_id INTEGER NOT NULL REFERENCES run_group(id) ON DELETE RESTRICT,
+  candidate_run_group_id INTEGER REFERENCES run_group(id) ON DELETE RESTRICT,
+  editable_files_json TEXT NOT NULL,
+  promotion_policy_json TEXT NOT NULL,
+  failure_patterns_json TEXT,
+  preserved_behaviors_json TEXT,
+  proposal_json TEXT,
+  scorecard_json TEXT,
+  decision TEXT, -- promote | reject | needs-more-samples
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  evaluated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_harness_experiment_state ON harness_experiment(state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_harness_experiment_baseline ON harness_experiment(baseline_run_group_id);
+CREATE INDEX IF NOT EXISTS idx_harness_experiment_candidate ON harness_experiment(candidate_run_group_id);
 `;
 
 const ADDITIVE_COLUMNS = [
@@ -599,6 +622,18 @@ const ADDITIVE_COLUMNS = [
   ["confirm_decision", "evidence_level", "ALTER TABLE confirm_decision ADD COLUMN evidence_level TEXT"],
   ["confirm_decision", "submission_confidence", "ALTER TABLE confirm_decision ADD COLUMN submission_confidence TEXT"],
   ["confirm_decision", "report_markdown", "ALTER TABLE confirm_decision ADD COLUMN report_markdown TEXT"],
+  ["run_group", "parallelism", "ALTER TABLE run_group ADD COLUMN parallelism INTEGER NOT NULL DEFAULT 1"],
+  ["run_group", "ended_at", "ALTER TABLE run_group ADD COLUMN ended_at TEXT"],
+  ["work_item", "evidence_contract_json", "ALTER TABLE work_item ADD COLUMN evidence_contract_json TEXT"],
+  ["work_item", "job_id", "ALTER TABLE work_item ADD COLUMN job_id INTEGER"],
+  ["work_item", "ended_at", "ALTER TABLE work_item ADD COLUMN ended_at TEXT"],
+  ["work_item_attempt", "run_id", "ALTER TABLE work_item_attempt ADD COLUMN run_id INTEGER"],
+  ["work_item_attempt", "outcome", "ALTER TABLE work_item_attempt ADD COLUMN outcome TEXT"],
+  ["work_item_attempt", "result_json", "ALTER TABLE work_item_attempt ADD COLUMN result_json TEXT"],
+  ["work_item_attempt", "error", "ALTER TABLE work_item_attempt ADD COLUMN error TEXT"],
+  ["work_item_attempt", "started_at", "ALTER TABLE work_item_attempt ADD COLUMN started_at TEXT"],
+  ["work_item_attempt", "ended_at", "ALTER TABLE work_item_attempt ADD COLUMN ended_at TEXT"],
+  ["work_item_attempt", "updated_at", "ALTER TABLE work_item_attempt ADD COLUMN updated_at TEXT"],
 ] as const;
 
 function now(): string {
@@ -886,6 +921,20 @@ export class MetadataStore {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
+    // Short-lived pre-release evaluation schemas existed before every indexed
+    // queue/run linkage landed. These compatibility columns must exist before
+    // SCHEMA reaches their CREATE INDEX statements. The remaining additive
+    // migration still happens transactionally below.
+    const preSchemaColumns = [
+      ["work_item", "job_id", "ALTER TABLE work_item ADD COLUMN job_id INTEGER"],
+      ["work_item_attempt", "run_id", "ALTER TABLE work_item_attempt ADD COLUMN run_id INTEGER"],
+    ] as const;
+    const missingPreSchemaColumns = preSchemaColumns.filter(([table, column]) => this.hasTable(table) && !this.hasColumn(table, column));
+    if (missingPreSchemaColumns.length > 0) {
+      this.transaction(() => {
+        for (const [, , statement] of missingPreSchemaColumns) this.db.exec(statement);
+      }, "immediate");
+    }
     this.db.exec(SCHEMA);
     // CREATE IF NOT EXISTS does not add columns to old tables. Take the SQLite
     // write reservation before inspecting the schema so concurrent processes
@@ -1019,6 +1068,15 @@ export class MetadataStore {
 
   private runDataMigrations(): void {
     this.transaction(() => {
+      if (this.hasColumn("run_group", "finished_at")) {
+        this.db.exec("UPDATE run_group SET ended_at = COALESCE(ended_at, finished_at) WHERE finished_at IS NOT NULL");
+      }
+      if (this.hasColumn("work_item", "evidence_gate_json")) {
+        this.db.exec("UPDATE work_item SET evidence_contract_json = COALESCE(evidence_contract_json, evidence_gate_json) WHERE evidence_gate_json IS NOT NULL");
+      }
+      if (this.hasColumn("work_item", "finished_at")) {
+        this.db.exec("UPDATE work_item SET ended_at = COALESCE(ended_at, finished_at) WHERE finished_at IS NOT NULL");
+      }
       this.db.exec("UPDATE work_item SET project_id = (SELECT project_id FROM run WHERE run.id = work_item.run_id) WHERE project_id IS NULL AND run_id IS NOT NULL");
       this.db.exec("UPDATE project SET origin = 'evaluation' WHERE origin = 'project' AND name LIKE 'evaluation:%' AND EXISTS (SELECT 1 FROM work_item WHERE work_item.project_id = project.id)");
       this.db.exec(`UPDATE project AS p SET origin = 'evaluation'
@@ -1033,12 +1091,16 @@ export class MetadataStore {
       this.reconcileFindingReportRunIds();
       this.reconcileRefutedVerifyArtifacts();
       this.reconcileConfirmDecisionReports();
-    });
+    }, "immediate");
   }
 
   private hasColumn(table: string, column: string): boolean {
     const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     return rows.some((row) => row.name === column);
+  }
+
+  private hasTable(table: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 AS yes FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
   }
 
   private reconcileConfirmDecisionReports(): void {
@@ -2462,6 +2524,113 @@ export class MetadataStore {
       .prepare("UPDATE run_group SET state = ?, summary_json = ?, ended_at = CASE WHEN ? = 'finished' THEN COALESCE(ended_at, ?) ELSE ended_at END, updated_at = ? WHERE id = ?")
       .run(state, JSON.stringify(summary), state, ts, ts, runGroupId);
     return this.getRunGroupById(runGroupId);
+  }
+
+  // --- harness experiments -------------------------------------------------
+
+  createHarnessExperiment(input: {
+    name: string;
+    baselineRunGroupId: number;
+    candidateRunGroupId?: number | undefined;
+    editableFiles: string[];
+    promotionPolicy: HarnessPromotionPolicy;
+    failurePatterns: unknown[];
+    preservedBehaviors: unknown[];
+    proposal?: unknown;
+    state: HarnessExperimentState;
+  }): Record<string, unknown> {
+    const ts = now();
+    const uuid = randomUUID();
+    const info = this.db.prepare(
+      `INSERT INTO harness_experiment(
+         uuid, name, state, baseline_run_group_id, candidate_run_group_id,
+         editable_files_json, promotion_policy_json, failure_patterns_json,
+         preserved_behaviors_json, proposal_json, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      uuid,
+      input.name,
+      input.state,
+      input.baselineRunGroupId,
+      input.candidateRunGroupId ?? null,
+      JSON.stringify(input.editableFiles),
+      JSON.stringify(input.promotionPolicy),
+      JSON.stringify(input.failurePatterns),
+      JSON.stringify(input.preservedBehaviors),
+      jsonOrNull(input.proposal),
+      ts,
+      ts,
+    );
+    return this.getHarnessExperimentById(Number(info.lastInsertRowid))!;
+  }
+
+  listHarnessExperiments(limit = 100, offset = 0): Array<Record<string, unknown>> {
+    return this.db.prepare(
+      `SELECT he.*,
+              baseline.name AS baseline_name, baseline.uuid AS baseline_uuid, baseline.state AS baseline_state,
+              candidate.name AS candidate_name, candidate.uuid AS candidate_uuid, candidate.state AS candidate_state
+         FROM harness_experiment he
+         JOIN run_group baseline ON baseline.id = he.baseline_run_group_id
+    LEFT JOIN run_group candidate ON candidate.id = he.candidate_run_group_id
+        ORDER BY he.updated_at DESC, he.id DESC
+        LIMIT ? OFFSET ?`,
+    ).all(Math.max(1, limit), Math.max(0, offset)) as Array<Record<string, unknown>>;
+  }
+
+  countHarnessExperiments(): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM harness_experiment").get() as { n: number }).n);
+  }
+
+  getHarnessExperimentById(id: number): Record<string, unknown> | undefined {
+    return this.db.prepare(
+      `SELECT he.*,
+              baseline.name AS baseline_name, baseline.uuid AS baseline_uuid, baseline.state AS baseline_state,
+              candidate.name AS candidate_name, candidate.uuid AS candidate_uuid, candidate.state AS candidate_state
+         FROM harness_experiment he
+         JOIN run_group baseline ON baseline.id = he.baseline_run_group_id
+    LEFT JOIN run_group candidate ON candidate.id = he.candidate_run_group_id
+        WHERE he.id = ?`,
+    ).get(id) as Record<string, unknown> | undefined;
+  }
+
+  getHarnessExperimentByUuid(uuid: string): Record<string, unknown> | undefined {
+    return this.db.prepare(
+      `SELECT he.*,
+              baseline.name AS baseline_name, baseline.uuid AS baseline_uuid, baseline.state AS baseline_state,
+              candidate.name AS candidate_name, candidate.uuid AS candidate_uuid, candidate.state AS candidate_state
+         FROM harness_experiment he
+         JOIN run_group baseline ON baseline.id = he.baseline_run_group_id
+    LEFT JOIN run_group candidate ON candidate.id = he.candidate_run_group_id
+        WHERE he.uuid = ?`,
+    ).get(uuid) as Record<string, unknown> | undefined;
+  }
+
+  attachHarnessExperimentCandidate(id: number, candidateRunGroupId: number): boolean {
+    const ts = now();
+    return Number(this.db.prepare(
+      `UPDATE harness_experiment
+          SET candidate_run_group_id = ?, state = 'evaluating', scorecard_json = NULL,
+              decision = NULL, evaluated_at = NULL, updated_at = ?
+        WHERE id = ? AND baseline_run_group_id <> ?`,
+    ).run(candidateRunGroupId, ts, id, candidateRunGroupId).changes) > 0;
+  }
+
+  updateHarnessExperimentProposal(id: number, proposal: unknown): boolean {
+    return Number(this.db.prepare(
+      `UPDATE harness_experiment
+          SET proposal_json = ?, state = CASE WHEN candidate_run_group_id IS NULL THEN 'proposal-ready' ELSE 'evaluating' END,
+              scorecard_json = NULL, decision = NULL, evaluated_at = NULL, updated_at = ?
+        WHERE id = ?`,
+    ).run(JSON.stringify(proposal), now(), id).changes) > 0;
+  }
+
+  settleHarnessExperiment(id: number, expectedCandidateRunGroupId: number, scorecard: unknown, decision: HarnessDecision): boolean {
+    const ts = now();
+    return Number(this.db.prepare(
+      `UPDATE harness_experiment
+          SET state = 'decided', scorecard_json = ?, decision = ?, evaluated_at = ?, updated_at = ?
+        WHERE id = ? AND candidate_run_group_id = ?`,
+    ).run(JSON.stringify(scorecard), decision, ts, ts, id, expectedCandidateRunGroupId).changes) > 0;
   }
 
   // --- daemons + job queue (control plane for remote execution) -------------

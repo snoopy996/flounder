@@ -27,10 +27,13 @@ const {
   canStartRunGroup,
   evaluationMetrics,
   groupStateTone,
+  harnessExperimentLabel,
+  harnessExperimentTone,
   workItemStateLabel,
   workItemTone,
 } = await loadTsModule("../src/server/ui/src/evaluation-domain.ts");
 const evaluationViewSource = readFileSync(new URL("../src/server/ui/src/EvaluationsView.tsx", import.meta.url), "utf8");
+const harnessViewSource = readFileSync(new URL("../src/server/ui/src/HarnessExperimentsView.tsx", import.meta.url), "utf8");
 
 function item(overrides = {}) {
   return {
@@ -112,4 +115,31 @@ test("ui evaluations: modal footer buttons submit their associated native forms"
   assert.match(evaluationViewSource, /type="submit" form="new-evaluation-form"/);
   assert.match(evaluationViewSource, /type="submit" form="add-work-item-form"/);
   assert.doesNotMatch(evaluationViewSource, /dispatchEvent\(new Event\("submit"/);
+  assert.match(harnessViewSource, /type="submit" form="new-harness-experiment-form"/);
+  assert.match(harnessViewSource, /type="submit" form="refine-harness-proposal-form"/);
+  assert.doesNotMatch(harnessViewSource, /dispatchEvent\(new Event\("submit"/);
+});
+
+test("ui evaluations: harness decisions remain distinct from experiment lifecycle", () => {
+  const base = { state: "decided", decision: null };
+  assert.equal(harnessExperimentLabel({ ...base, decision: "promote" }), "Promote");
+  assert.equal(harnessExperimentTone({ ...base, decision: "promote" }), "success");
+  assert.equal(harnessExperimentLabel({ ...base, decision: "reject" }), "Rejected");
+  assert.equal(harnessExperimentTone({ ...base, decision: "reject" }), "danger");
+  assert.equal(harnessExperimentLabel({ state: "proposal-ready", decision: null }), "Proposal ready");
+  assert.equal(harnessExperimentTone({ state: "evaluating", decision: null }), "active");
+});
+
+test("ui evaluations: harness workspace keeps the promotion boundary visible", () => {
+  assert.match(harnessViewSource, /Promotion stays external/);
+  assert.match(harnessViewSource, /Evaluator, benchmark answers, material policy, sandbox, confirmation\/refutation, tests, promotion, merge, and deploy/);
+  assert.match(harnessViewSource, /Baseline ·/);
+  assert.match(harnessViewSource, /Candidate ·/);
+});
+
+test("ui evaluations: clipboard denial falls back to the legacy copy path", () => {
+  assert.match(evaluationViewSource, /await navigator\.clipboard\.writeText\(value\)/);
+  assert.match(evaluationViewSource, /catch \{\s*\/\/ Restricted desktop shells/);
+  assert.match(evaluationViewSource, /document\.execCommand\("copy"\)/);
+  assert.match(evaluationViewSource, /\.catch\(\(copyError\) => onToast\("error", errorMessage\(copyError\)\)\)/);
 });

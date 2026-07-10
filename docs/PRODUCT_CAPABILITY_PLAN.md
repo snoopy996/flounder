@@ -31,7 +31,17 @@ Implemented foundation:
   infrastructure failure is `blocked`, never a negative security result;
 - immutable per-dispatch attempt evidence plus blocked-only retry, healthy-run
   scoring, required-refutation completeness checks, and fail-closed corpus
-  decisions.
+  decisions;
+- verifier-grounded harness experiments that cluster baseline misses, control
+  failures, blocked execution, and policy-invalid work by terminal cause;
+- bounded candidate proposals limited to approved prompt, skill, and agent
+  harness files, with passing baseline behavior recorded as a preservation set;
+- paired baseline/candidate scoring with stable work-item and contract identity,
+  repeated positive/control minimums, zero-regression checks, blocked/duration/
+  attempt budgets, and deterministic `promote | reject | needs-more-samples`
+  decisions;
+- API, CLI, and an Evaluations/Harness UI for proposal refinement, candidate
+  attachment, score comparison, and public-safe candidate-brief export.
 
 Still planned:
 
@@ -39,11 +49,12 @@ Still planned:
   accepts an explicit validated surface in a target bundle);
 - source-control history context and evidence-package export;
 - suite-specific benchmark translators where the generic manifest is
-  insufficient;
-- verifier-grounded failure mining and bounded harness-candidate proposal.
+  insufficient.
 
 The evaluator, material policy, sandbox, command safety, confirmation gate, and
-promotion decision remain outside any future harness self-improvement loop.
+promotion decision remain outside the harness self-improvement loop. Candidate
+briefs may be implemented on normal reviewable branches or draft pull requests,
+but Flounder never merges or deploys them automatically.
 
 ## Principles
 

@@ -22,6 +22,108 @@ async function tempDbPath() {
   return { dir, dbPath: path.join(dir, "flounder.db") };
 }
 
+test("store: pre-release evaluation tables upgrade before current indexes are created", async () => {
+  const { dbPath } = await tempDbPath();
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec(`
+    CREATE TABLE run_group(
+      id INTEGER PRIMARY KEY,
+      uuid TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL,
+      config_json TEXT,
+      budget_json TEXT,
+      summary_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+    CREATE TABLE work_item(
+      id INTEGER PRIMARY KEY,
+      uuid TEXT NOT NULL UNIQUE,
+      run_group_id INTEGER NOT NULL,
+      item_key TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL,
+      outcome TEXT,
+      target_bundle_json TEXT,
+      material_policy_json TEXT,
+      evidence_gate_json TEXT,
+      result_json TEXT,
+      project_id INTEGER,
+      run_id INTEGER,
+      finding_id INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      UNIQUE(run_group_id, item_key)
+    );
+    CREATE TABLE work_item_attempt(
+      id INTEGER PRIMARY KEY,
+      work_item_id INTEGER NOT NULL,
+      attempt_number INTEGER NOT NULL,
+      job_id INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(work_item_id, attempt_number),
+      UNIQUE(job_id)
+    );
+    INSERT INTO run_group(id, uuid, name, kind, state, created_at, updated_at, finished_at)
+    VALUES (1, 'legacy-group', 'legacy evaluation', 'evaluation', 'finished', '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z', '2026-01-01T00:01:00.000Z');
+    INSERT INTO work_item(id, uuid, run_group_id, item_key, kind, state, outcome, target_bundle_json, material_policy_json, evidence_gate_json, result_json, created_at, updated_at, finished_at)
+    VALUES (1, 'legacy-item', 1, 'case-1', 'benchmark-case', 'finished', 'no_findings',
+      '{"target":"legacy","targetClass":"logic","sourcePaths":["src"],"corpusPaths":[]}',
+      '{"posture":"blind","materials":[]}',
+      '{"kind":"benchmark-oracle","expectedOutcome":"reject-positive","requiresDifferential":false,"requiresRefutation":true,"networkPolicy":"sealed"}',
+      '{"accepted":true}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z', '2026-01-01T00:01:00.000Z');
+  `);
+  legacy.close();
+
+  const store = new MetadataStore(dbPath);
+  const group = store.getRunGroupByUuid("legacy-group");
+  assert.equal(group.parallelism, 1);
+  assert.equal(group.ended_at, "2026-01-01T00:01:00.000Z");
+  const item = store.getWorkItem(1);
+  assert.equal(item.job_id, null);
+  assert.equal(item.ended_at, "2026-01-01T00:01:00.000Z");
+  assert.match(String(item.evidence_contract_json), /reject-positive/);
+  assert.deepEqual(store.listWorkItemAttempts(1), []);
+  const migrated = new DatabaseSync(dbPath, { readOnly: true });
+  const attemptColumns = migrated.prepare("PRAGMA table_info(work_item_attempt)").all().map((row) => row.name);
+  migrated.close();
+  assert.equal(attemptColumns.includes("run_id"), true);
+  store.close();
+});
+
+test("store: harness score settlement cannot overwrite a replaced candidate", async () => {
+  const db = await tempDb();
+  const baseline = db.createRunGroup({ name: "harness baseline" });
+  const firstCandidate = db.createRunGroup({ name: "harness candidate one" });
+  const replacement = db.createRunGroup({ name: "harness candidate two" });
+  const experiment = db.createHarnessExperiment({
+    name: "candidate replacement race",
+    baselineRunGroupId: baseline.id,
+    candidateRunGroupId: firstCandidate.id,
+    editableFiles: ["src/agent/prompts.ts"],
+    promotionPolicy: { minimumSamplesPerClass: 2, minimumImprovedCases: 1, requireAllControlsPass: true, maxBlockedRate: 0, maxDurationRatio: 1.25, maxAttemptRatio: 1.25 },
+    failurePatterns: [],
+    preservedBehaviors: [],
+    state: "evaluating",
+  });
+
+  assert.equal(db.attachHarnessExperimentCandidate(experiment.id, replacement.id), true);
+  assert.equal(db.settleHarnessExperiment(experiment.id, firstCandidate.id, { decision: "promote" }, "promote"), false);
+  assert.equal(db.getHarnessExperimentById(experiment.id).decision, null);
+  assert.equal(db.settleHarnessExperiment(experiment.id, replacement.id, { decision: "reject" }, "reject"), true);
+  assert.equal(db.getHarnessExperimentById(experiment.id).decision, "reject");
+  db.close();
+});
+
 function waitForChild(child) {
   return new Promise((resolve, reject) => {
     let stderr = "";

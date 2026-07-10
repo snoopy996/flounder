@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -7,6 +8,17 @@ import {
   normalizeRunGroupManifest,
 } from "../dist/evaluation/contracts.js";
 import { buildWorkItemLaunchSpec, renderRunGroupReport, settleWorkItem } from "../dist/evaluation/run-groups.js";
+
+test("harness evolution baseline is a valid repeated positive/control manifest", () => {
+  const fixtureUrl = new URL("../fixtures/harness-evolution/baseline.json", import.meta.url);
+  const normalized = normalizeRunGroupManifest(JSON.parse(readFileSync(fixtureUrl, "utf8")));
+  assert.equal(normalized.items.length, 4);
+  assert.equal(normalized.items.filter((item) => item.evidenceContract.expectedOutcome === "detect-positive").length, 2);
+  assert.equal(normalized.items.filter((item) => item.evidenceContract.expectedOutcome === "reject-positive").length, 2);
+  assert.ok(normalized.items.every((item) => item.materialPolicy.posture === "blind" && !item.targetBundle.scopeNote));
+  const absolute = absolutizeRunGroupManifest(normalized, path.dirname(fixtureUrl.pathname));
+  assert.ok(absolute.items.every((item) => path.isAbsolute(item.targetBundle.sourcePaths[0])));
+});
 
 function manifest(overrides = {}) {
   return {

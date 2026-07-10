@@ -86,6 +86,7 @@ Use these when the user is not asking for a full end-to-end audit:
 | "Prepare submission package" | selected Report; include only execution-backed, non-ignored findings. |
 | "Triage noisy machine findings" | update tracking: `ignored` for dismissed, `open` to recover. |
 | "Run a benchmark / regression set / positive and safe controls" | Create a validated manifest and use `flounder group create --manifest <file>`, then `flounder group start <uuid|name>`. Keep blind material policy explicit, require execution evidence for positives, and require zero confirmed findings on safe/control items. Retry only blocked items with `flounder group retry <work-item-id>`; repeated samples are separate items. |
+| "Improve Flounder's harness from Evaluation failures" | Use a finished baseline group, then `flounder experiment create` with an explicit editable-file allowlist. Run the same stable work-item keys on a candidate daemon/workspace, attach that group, and call `flounder experiment evaluate`. Treat `promote` as a review recommendation only; evaluator, safety, merge, and deployment authority remain external. |
 
 ## Core Operating Rules
 

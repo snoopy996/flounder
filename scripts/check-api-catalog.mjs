@@ -67,6 +67,13 @@ const workItemRetry = endpoint("POST", "/api/work-items/:id/retry");
 assert.match(workItemRetry.summary, /preserving.*prior attempt evidence/i, "work-item retry must preserve immutable attempt evidence");
 assert.match(workItemRetry.summary, /cannot be rewritten as retries/i, "benchmark misses must not be hidden by retry semantics");
 
+const experimentCreate = endpoint("POST", "/api/harness-experiments");
+assert.match(experimentCreate.summary, /verifier-grounded/i, "harness weakness mining must remain grounded in persisted verifier evidence");
+assert.match(experimentCreate.summary, /cannot be proposed as edits/i, "harness proposals must advertise the protected boundary");
+const experimentEvaluate = endpoint("POST", "/api/harness-experiments/:uuid/evaluate");
+assert.match(experimentEvaluate.summary, /deterministic promotion gate/i, "harness evaluation must use a product-owned deterministic gate");
+assert.match(experimentEvaluate.summary, /never changes code, merges, or deploys/i, "promotion API must not imply autonomous release authority");
+
 for (const { name, pattern } of stalePatterns) {
   assert.doesNotMatch(publicText, pattern, `catalog/CLI help still exposes ${name}`);
 }

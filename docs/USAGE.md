@@ -228,6 +228,8 @@ The sealed verbs (`run --source`, `map`, and `audit`) share the tools, the confi
 | `flounder group start <uuid\|name> [--parallel <n>]` | start or resume bounded work-item scheduling through the existing daemon queue |
 | `flounder group status|pause|cancel|report <uuid\|name>` | inspect or control durable group state, or regenerate its result report without model work |
 | `flounder group retry <work-item-id>` | retry a blocked item after setup repair while preserving prior attempt evidence |
+| `flounder experiment create --name <name> --baseline <group> [--candidate <group>] --editable-file <paths...>` | mine verifier-grounded baseline failures and create a bounded harness-candidate proposal |
+| `flounder experiment status|attach|proposal|evaluate|brief <uuid\|name>` | inspect/refine the proposal, attach a paired candidate Evaluation, run the deterministic promotion gate, or export the candidate brief |
 | `flounder history import-run --target <name> --run <dir>` | import an existing run directory into tracked history |
 
 `prepare` and the sealed verbs are **unbounded by default** (a run ends when the model is done, not at a step count) — a fixed budget silently truncates useful acquisition or a productive dig. Standard coverage caps only the next dig batch to 30 scopes; it does not cap prepare, map, or per-scope dig turns. Cap a phase only when you want to: `--max-steps` for `prepare`, `--map-steps` / `--dig-steps` for map/dig, or `--max-steps` for `run --quick` / `audit <region>`. A killed run **resumes** (it skips MAP and the already-audited scopes), so longer unbounded runs are safe to interrupt.
@@ -362,6 +364,55 @@ model; fixture paths remain control-plane metadata and must already be reachable
 under the declared source/build inputs. Neither can confirm a finding by itself.
 Use local fake mail, PR, MCP, browser, or repository fixtures rather than real
 accounts and tokens.
+
+## Harness experiments
+
+Harness experiments are a governed outer loop over finished Evaluation groups.
+They do not let a model change its own judge or deploy itself:
+
+1. Mine baseline work items that missed a positive, failed a control, were
+   blocked, or violated policy. Clustering uses the persisted verifier outcome,
+   causal status, and terminal reason rather than text similarity alone.
+2. Record passing positive/control behavior that a candidate must preserve.
+3. Produce a candidate proposal whose files are limited to an explicit allowlist
+   under `prompts/`, `skills/`, or approved agent-harness modules.
+4. Run the same stable work-item keys and contracts as a candidate Evaluation,
+   normally from a daemon/workspace running the candidate branch.
+5. Apply the product-owned gate: sufficient repeated positive/control samples,
+   zero paired regressions, every safe control passing, no unresolved blocked or
+   invalid work, and configured duration/attempt budgets.
+
+The gate returns `promote`, `reject`, or `needs-more-samples`. It never changes
+code, creates an unreviewed merge, or deploys a release. The evaluator, expected
+answers, material policy, sandbox/command safety, confirmation/refutation,
+promotion policy, merge, and deployment authority remain outside the loop.
+
+A buildable four-item baseline is included at
+`fixtures/harness-evolution/baseline.json`. It has two repeated positive samples
+and two repeated safe controls with neutral model-visible names:
+
+```bash
+flounder group create --manifest fixtures/harness-evolution/baseline.json
+flounder group start harness-evolution-baseline --parallel 2
+
+flounder group create --manifest fixtures/harness-evolution/baseline.json \
+  --name harness-evolution-candidate
+flounder group start harness-evolution-candidate --parallel 2
+
+flounder experiment create \
+  --name prompt-candidate-1 \
+  --baseline harness-evolution-baseline \
+  --candidate harness-evolution-candidate \
+  --editable-file src/agent/prompts.ts
+flounder experiment evaluate prompt-candidate-1
+flounder experiment brief prompt-candidate-1
+```
+
+In the dashboard, open **Evaluations → Harness** for the same flow. The detail
+view shows a compact baseline/candidate comparison, mined weaknesses, bounded
+proposal, protected boundary, and the promotion decision. Findings remain the
+product's security output; Harness experiments measure whether the auditor got
+better.
 
 ## Most effective setup
 
@@ -558,7 +609,7 @@ Run artifacts are private by default. Redact before sharing outside the trusted 
 
 Every run records its metadata to a local tracking store at `<out>/flounder.db`. The default `<out>` is `~/.flounder`, so a normal install keeps the tracking database at `~/.flounder/flounder.db`, run artifacts at `~/.flounder/<target>-<timestamp>/`, durable history/build cache at `~/.flounder/history/<target>/`, provider auth at `~/.flounder/agent/auth.json`, and the default daemon workspace at `~/.flounder/workspace`. Existing pi provider credentials can be imported from `~/.pi/agent/auth.json` into the Flounder auth file. System temp directories are reserved for short-lived scratch such as CLI subprocess working directories and inline verify payloads.
 
-The tracking store records the project, run lifecycle, run material fingerprint, run health, discovery backlog, scope coverage, canonical findings, exact occurrences and key aliases, Verify/Confirm/Report attempts, confirm decisions, and Evaluation run groups. Blocked phase work is input-addressed: unchanged inputs stay blocked until materials change or an operator requests a focused retry. It holds metadata and **paths** to on-disk artifacts, not private artifact content. Inspect it across all projects without reading run dirs:
+The tracking store records the project, run lifecycle, run material fingerprint, run health, discovery backlog, scope coverage, canonical findings, exact occurrences and key aliases, Verify/Confirm/Report attempts, confirm decisions, Evaluation run groups, and governed harness experiments. Blocked phase work is input-addressed: unchanged inputs stay blocked until materials change or an operator requests a focused retry. It holds metadata and **paths** to on-disk artifacts, not private artifact content. Inspect it across all projects without reading run dirs:
 
 ```bash
 flounder server project list                    # every project: scope coverage, finding counts, latest run
@@ -589,7 +640,7 @@ A project's detail is the **prepare -> map -> dig -> synthesize -> verify -> con
 
 The cross-project **Findings** view defaults to real Project findings and their submission state. A row shows only the current workflow phase and blocker/next action, keeping the list compact; opening it reveals occurrences, independent-review state, every local/real-target/report attempt, and phase-specific retry. Its source filter can explicitly show Evaluation evidence or all sources; Evaluation rows link to their group and stay read-only for disclosure tracking. Project findings retain project, audit-status, and tracking filters. The default **Active findings** filter hides `ignored` rows, while the **Ignored** view can restore them to `open`. Settings holds provider profiles, daemon CRUD, and archived projects.
 
-The top-level **Evaluations** view drives durable run groups for audit campaigns, benchmark cases, regression replays, and claim verification. Create a draft, add work items with an explicit target bundle, material policy, and evidence contract, then start, pause, resume, or cancel the group. Each row keeps lifecycle state separate from its evidence verdict: a finished item is not shown as passing unless its persisted result satisfies the contract, while blocked and invalid work never enter the score. Expand an item to inspect source/corpus policy, confirmation requirements, result evidence, and every attempt; blocked failed or cancelled items can be retried without losing earlier attempts. Positive recall and safe-control pass rates appear for evaluation-oriented groups, and the Report action regenerates Markdown from stored evidence without rerunning model work.
+The top-level **Evaluations** view has two modes. **Runs** drives durable run groups for audit campaigns, benchmark cases, regression replays, and claim verification. Create a draft, add work items with an explicit target bundle, material policy, and evidence contract, then start, pause, resume, or cancel the group. Each row keeps lifecycle state separate from its evidence verdict: a finished item is not shown as passing unless its persisted result satisfies the contract, while blocked and invalid work never enter the score. Expand an item to inspect source/corpus policy, confirmation requirements, result evidence, and every attempt; blocked failed or cancelled items can be retried without losing earlier attempts. Positive recall and safe-control pass rates appear for evaluation-oriented groups, and the Report action regenerates Markdown from stored evidence without rerunning model work. **Harness** mines finished baselines, refines bounded proposals, attaches candidate groups, compares paired metrics, and shows the product-owned promotion decision without granting merge or deploy authority.
 
 Execution is **decoupled** from the dashboard: the `flounder ui` server is a **control plane** (REST API + SQLite + a job queue) and the audit runs on a **daemon**, so the target code and provider keys stay on the daemon's machine. `flounder ui` spawns a co-located daemon by default (rooted at `--workspace`, default `~/.flounder/workspace`) and reuses its local daemon identity across restarts, so projects pinned to the local executor keep claiming queued work. Pass `--no-daemon` and run `flounder daemon start` elsewhere (with a token from `flounder server daemon-token mint`) to execute on a different host. A project's materials are paths **relative to** its directory under the daemon's workspace; resolution checks the effective real path, so symlinks cannot escape that root. The server binds to `127.0.0.1` by default. Every daemon endpoint is bearer-token-authenticated and verifies that the referenced job/run belongs to that daemon before accepting progress, activity, worklist, or terminal-status updates.
 

@@ -13,8 +13,16 @@ test("cli help lists verify alias and project report regeneration", async () => 
   assert.match(stdout, /flounder report\s+--project <uuid\|name> \[--finding <id>\.\.\.\] \[--all\]/);
   assert.match(stdout, /flounder continue\s+--project <uuid\|name>/);
   assert.match(stdout, /flounder group create\|start\|status\|pause\|cancel\|retry\|report/);
+  assert.match(stdout, /flounder experiment create\|list\|status\|attach\|proposal\|evaluate\|brief/);
   assert.match(stdout, /Without --finding\/--all,\s+report generates only missing reports/);
   assert.match(stdout, /same as the UI Continue button/);
+});
+
+test("cli experiment help documents the governed promotion boundary", async () => {
+  const { stdout } = await execFileAsync(process.execPath, [path.join(root, "dist/cli.js"), "experiment", "--help"], { cwd: root });
+  assert.match(stdout, /flounder experiment create --name <name> --baseline <group>/);
+  assert.match(stdout, /flounder experiment evaluate <uuid\|name>/);
+  assert.match(stdout, /promotion, merge, and deployment policy remain outside the editable loop/);
 });
 
 test("cli group help documents durable manifests and safety boundary", async () => {

@@ -56,6 +56,17 @@ try {
     evidenceContract: { kind: "benchmark-oracle", expectedOutcome: "reject-positive", successPatterns: [], failurePatterns: [], requiresDifferential: false, requiresRefutation: true, networkPolicy: "sealed" },
   }]);
   assert.equal(currentStore.listWorkItems(Number(group.id)).length, 1, "run-group tables are added during release upgrade");
+  const experiment = currentStore.createHarnessExperiment({
+    name: "upgrade-harness-experiment",
+    baselineRunGroupId: Number(group.id),
+    editableFiles: ["src/agent/prompts.ts"],
+    promotionPolicy: { minimumSamplesPerClass: 2, minimumImprovedCases: 1, requireAllControlsPass: true, maxBlockedRate: 0, maxDurationRatio: 1.25, maxAttemptRatio: 1.25 },
+    failurePatterns: [{ id: "upgrade-weakness", kind: "positive-miss", mechanism: "recall", verifierCause: "fixture miss", causalStatus: "finished/no_findings", occurrences: 1, workItemKeys: ["upgrade-control"] }],
+    preservedBehaviors: [],
+    proposal: { title: "Upgrade candidate", hypothesis: "Exercise the additive schema.", failurePatternIds: ["upgrade-weakness"], editableFiles: ["src/agent/prompts.ts"], changes: [{ path: "src/agent/prompts.ts", summary: "No-op upgrade fixture." }], preserve: [] },
+    state: "proposal-ready",
+  });
+  assert.equal(currentStore.getHarnessExperimentByUuid(String(experiment.uuid))?.state, "proposal-ready", "harness experiment tables are added during release upgrade");
   currentStore.close();
 
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
@@ -65,6 +76,7 @@ try {
   assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM run_group").get().n, 1);
   assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM work_item").get().n, 1);
   assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'work_item_attempt'").get().n, 1);
+  assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM harness_experiment").get().n, 1);
   raw.close();
   console.log(`Database upgrade contract passed (${tag} -> current).`);
 } finally {

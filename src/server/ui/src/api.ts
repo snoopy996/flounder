@@ -560,6 +560,109 @@ export interface RunGroupCreatePayload {
   items?: WorkItemPayload[];
 }
 
+export type HarnessExperimentState = "needs-evidence" | "proposal-ready" | "evaluating" | "decided";
+export type HarnessDecision = "promote" | "reject" | "needs-more-samples";
+
+export interface HarnessPromotionPolicy {
+  minimumSamplesPerClass: number;
+  minimumImprovedCases: number;
+  requireAllControlsPass: boolean;
+  maxBlockedRate: number;
+  maxDurationRatio: number;
+  maxAttemptRatio: number;
+}
+
+export interface HarnessFailurePattern {
+  id: string;
+  kind: "positive-miss" | "control-false-positive" | "execution-blocked" | "policy-invalid";
+  mechanism: string;
+  verifierCause: string;
+  causalStatus: string;
+  occurrences: number;
+  workItemKeys: string[];
+}
+
+export interface HarnessCandidateProposal {
+  title: string;
+  hypothesis: string;
+  failurePatternIds: string[];
+  editableFiles: string[];
+  changes: Array<{ path: string; summary: string }>;
+  preserve: string[];
+}
+
+export interface HarnessScoreMetrics {
+  total: number;
+  scored: number;
+  passed: number;
+  positives: number;
+  positivesPassed: number;
+  controls: number;
+  controlsPassed: number;
+  blocked: number;
+  invalid: number;
+  attempts: number;
+  durationSeconds: number | null;
+  passRate: number | null;
+  positiveRecall: number | null;
+  controlPassRate: number | null;
+  blockedRate: number;
+}
+
+export interface HarnessScorecard {
+  decision: HarnessDecision;
+  reasons: string[];
+  baseline: HarnessScoreMetrics;
+  candidate: HarnessScoreMetrics;
+  improvedItemKeys: string[];
+  regressedItemKeys: string[];
+  durationRatio: number | null;
+  attemptRatio: number | null;
+  evaluatedAt: string;
+}
+
+export interface HarnessExperimentRow {
+  id: number;
+  uuid: string;
+  name: string;
+  state: HarnessExperimentState;
+  decision?: HarnessDecision | null;
+  baseline_run_group_id: number;
+  candidate_run_group_id?: number | null;
+  baseline_name: string;
+  baseline_uuid: string;
+  baseline_state: RunGroupState;
+  candidate_name?: string | null;
+  candidate_uuid?: string | null;
+  candidate_state?: RunGroupState | null;
+  editableFiles: string[];
+  promotionPolicy: HarnessPromotionPolicy;
+  failurePatterns: HarnessFailurePattern[];
+  preservedBehaviors: Array<{ workItemKey: string; expectedOutcome: ExpectedOutcome; evidenceGate: string }>;
+  proposal?: HarnessCandidateProposal | null;
+  scorecard?: HarnessScorecard | null;
+  baselineGroup?: RunGroupRow | null;
+  candidateGroup?: RunGroupRow | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  evaluated_at?: string | null;
+}
+
+export interface HarnessExperimentCreatePayload {
+  name: string;
+  baselineRunGroupUuid: string;
+  candidateRunGroupUuid?: string;
+  editableFiles: string[];
+  promotionPolicy?: Partial<HarnessPromotionPolicy>;
+}
+
+export interface HarnessExperimentListResponse {
+  experiments: HarnessExperimentRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ActivityRecord {
   kind: string;
   delta?: string;
@@ -740,6 +843,13 @@ export const api = {
   cancelRunGroup: (uuid: string) => postJson<RunGroupRow>(`/api/run-groups/${encodeURIComponent(uuid)}/cancel`, {}),
   runGroupReport: (uuid: string) => fetchJson<RunGroupReportResponse>(`/api/run-groups/${encodeURIComponent(uuid)}/report`),
   retryWorkItem: (id: number) => postJson<RunGroupRow>(`/api/work-items/${id}/retry`, {}),
+  harnessExperiments: (params = new URLSearchParams({ limit: "500" })) => fetchJson<HarnessExperimentListResponse>(`/api/harness-experiments?${params.toString()}`),
+  harnessExperiment: (uuid: string) => fetchJson<HarnessExperimentRow>(`/api/harness-experiments/${encodeURIComponent(uuid)}`),
+  createHarnessExperiment: (body: HarnessExperimentCreatePayload) => postJson<HarnessExperimentRow>("/api/harness-experiments", body),
+  updateHarnessProposal: (uuid: string, proposal: HarnessCandidateProposal) => patchJson<HarnessExperimentRow>(`/api/harness-experiments/${encodeURIComponent(uuid)}/proposal`, { proposal }),
+  attachHarnessCandidate: (uuid: string, candidateRunGroupUuid: string) => postJson<HarnessExperimentRow>(`/api/harness-experiments/${encodeURIComponent(uuid)}/candidate`, { candidateRunGroupUuid }),
+  evaluateHarnessExperiment: (uuid: string) => postJson<HarnessExperimentRow>(`/api/harness-experiments/${encodeURIComponent(uuid)}/evaluate`, {}),
+  harnessExperimentBrief: (uuid: string) => fetchJson<{ markdown: string }>(`/api/harness-experiments/${encodeURIComponent(uuid)}/brief`),
   bugs: (params: URLSearchParams) =>
     fetchJson<{ findings: FindingRow[]; total: number; limit: number; offset: number; stats: { total: number; active: number; byStatus: Record<string, number>; byTracking: Record<string, number> } }>(`/api/bugs?${params.toString()}`),
   findingReport: (id: number) => fetchJson<{ markdown: string; source: "db" | "generated" }>(`/api/findings/${id}/report`),

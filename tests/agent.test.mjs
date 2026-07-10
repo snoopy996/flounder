@@ -1662,7 +1662,7 @@ test("audit produces an execution-confirmed finding and banks cross-run memory",
     await writeFile(corpusFile, "# Protocol spec\nThe nullifier must be unique per note.\n");
     const cfg = defaultConfig();
     cfg.targetName = "agent-e2e";
-    cfg.sourcePaths = [fixtures];
+    cfg.sourcePaths = [path.join(fixtures, "mock_target.mjs")];
     cfg.corpusPaths = [corpusFile];
     cfg.outputDir = path.join(dir, "runs");
     cfg.auditMaxSteps = 10;

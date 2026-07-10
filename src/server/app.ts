@@ -32,6 +32,20 @@ import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionRead
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
 import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
 import { buildWorkItemLaunchSpec, evaluationTrackingProjectName, renderRunGroupReport, settleWorkItem } from "../evaluation/run-groups.js";
+import {
+  buildHarnessCandidateProposal,
+  harnessEvidenceItemFromRow,
+  mineHarnessWeaknesses,
+  minePreservedBehaviors,
+  normalizeHarnessExperimentInput,
+  normalizeHarnessProposal,
+  renderHarnessCandidateBrief,
+  scoreHarnessExperiment,
+  type HarnessCandidateProposal,
+  type HarnessFailurePattern,
+  type HarnessGroupSnapshot,
+  type HarnessPromotionPolicy,
+} from "../evaluation/harness-experiments.js";
 
 const UI_HTML_PATH = fileURLToPath(new URL("./public/index.html", import.meta.url));
 const UI_PUBLIC_DIR = path.dirname(UI_HTML_PATH);
@@ -430,6 +444,57 @@ const ROUTES: Route[] = [
   }),
 
   route({
+    method: "GET", path: "/api/harness-experiments",
+    summary: "List governed harness-improvement experiments. Each experiment links a finished baseline Evaluation to a bounded candidate and keeps the promotion decision outside the editable harness surface.",
+    query: { limit: "number? (default 100)", offset: "number? (default 0)" },
+    handler: harnessExperimentList,
+  }),
+  route({
+    method: "POST", path: "/api/harness-experiments",
+    summary: "Mine verifier-grounded baseline weaknesses and create a bounded harness-candidate proposal. Editable files are allowlisted; evaluator, material policy, sandbox, confirmation, tests, and promotion policy cannot be proposed as edits.",
+    body: {
+      name: "string (required, unique)",
+      baselineRunGroupUuid: "finished run-group UUID (required)",
+      candidateRunGroupUuid: "run-group UUID? — optional paired candidate Evaluation",
+      editableFiles: "repository-relative string[] (required) — bounded prompts/skills or approved agent harness files",
+      promotionPolicy: "object? — minimum samples/improvements plus blocked, duration, and attempt budgets",
+    },
+    handler: harnessExperimentCreate,
+  }),
+  route({
+    method: "GET", path: "/api/harness-experiments/:uuid",
+    summary: "Read one harness experiment with failure patterns, preserved passing behavior, bounded proposal, paired Evaluation groups, and deterministic scorecard.",
+    params: { uuid: "harness experiment UUID" },
+    handler: harnessExperimentGet,
+  }),
+  route({
+    method: "PATCH", path: "/api/harness-experiments/:uuid/proposal",
+    summary: "Refine the candidate proposal inside its original editable-file and verifier-pattern bounds. This cannot widen the trusted boundary or alter evaluation evidence.",
+    params: { uuid: "harness experiment UUID" },
+    body: { proposal: "bounded harness candidate proposal" },
+    handler: harnessExperimentProposalUpdate,
+  }),
+  route({
+    method: "POST", path: "/api/harness-experiments/:uuid/candidate",
+    summary: "Attach or replace the candidate Evaluation group. Baseline and candidate remain separate immutable run groups and must use stable paired work-item keys.",
+    params: { uuid: "harness experiment UUID" },
+    body: { candidateRunGroupUuid: "run-group UUID (required)" },
+    handler: harnessExperimentCandidateAttach,
+  }),
+  route({
+    method: "POST", path: "/api/harness-experiments/:uuid/evaluate",
+    summary: "Run the deterministic promotion gate over persisted baseline/candidate evidence. It returns promote, reject, or needs-more-samples and never changes code, merges, or deploys.",
+    params: { uuid: "harness experiment UUID" },
+    handler: harnessExperimentEvaluate,
+  }),
+  route({
+    method: "GET", path: "/api/harness-experiments/:uuid/brief",
+    summary: "Export a public-safe candidate brief containing only verifier-grounded failures, bounded editable files, behaviors to preserve, and the external promotion gate.",
+    params: { uuid: "harness experiment UUID" },
+    handler: harnessExperimentBrief,
+  }),
+
+  route({
     method: "GET", path: "/api/providers",
     summary: "List saved provider profiles — a reusable model strategy (provider + model + thinking, with optional per-phase map/dig/refute overrides) that a project selects.",
     handler: (c) => sendJson(c.res, 200, { providers: c.store.listProviders() }),
@@ -633,7 +698,7 @@ export function apiCatalog(): {
   return {
     name: "flounder",
     description: "REST API for tracking and driving white-hat audits and durable evaluation groups. Runs execute on connected daemons; every UI operation is one of these calls.",
-    resources: ["project", "provider", "daemon", "run", "run-group", "work-item", "scope", "discovery-backlog", "finding", "confirm-decision"],
+    resources: ["project", "provider", "daemon", "run", "run-group", "work-item", "harness-experiment", "scope", "discovery-backlog", "finding", "confirm-decision"],
     endpoints: ROUTES.filter((r) => !r.hidden).map((r) => ({
       method: r.method,
       path: r.path,
@@ -3771,6 +3836,178 @@ function workItemRetry(c: Ctx): void {
   const group = c.store.getRunGroupById(Number(item.run_group_id))!;
   const scheduled = group.state === "running" ? scheduleRunGroup(c, Number(group.id)) : 0;
   sendJson(c.res, 200, { ...runGroupApiRow(c.store, c.store.getRunGroupById(Number(group.id))!), scheduled });
+}
+
+function harnessExperimentList(c: Ctx): void {
+  const limit = clampInt(c.url.searchParams.get("limit"), 100, 1, 500);
+  const offset = clampInt(c.url.searchParams.get("offset"), 0, 0, 1_000_000);
+  const experiments = c.store.listHarnessExperiments(limit, offset).map((row) => harnessExperimentApiRow(c.store, row, false));
+  sendJson(c.res, 200, { experiments, total: c.store.countHarnessExperiments(), limit, offset });
+}
+
+async function harnessExperimentCreate(c: Ctx): Promise<void> {
+  try {
+    const input = normalizeHarnessExperimentInput(await readBody(c.req));
+    const baseline = c.store.getRunGroupByUuid(input.baselineRunGroupUuid);
+    if (!baseline) return sendJson(c.res, 404, { error: "no such baseline run group" });
+    if (baseline.state !== "finished") return sendJson(c.res, 409, { error: "baseline run group must be finished before weakness mining" });
+    const candidate = input.candidateRunGroupUuid ? c.store.getRunGroupByUuid(input.candidateRunGroupUuid) : undefined;
+    if (input.candidateRunGroupUuid && !candidate) return sendJson(c.res, 404, { error: "no such candidate run group" });
+    if (candidate && Number(candidate.id) === Number(baseline.id)) return sendJson(c.res, 409, { error: "baseline and candidate run groups must be different" });
+
+    const snapshot = harnessGroupSnapshot(c.store, baseline);
+    const failurePatterns = mineHarnessWeaknesses(snapshot.items);
+    const preservedBehaviors = minePreservedBehaviors(snapshot.items);
+    const proposal = buildHarnessCandidateProposal(failurePatterns, preservedBehaviors, input.editableFiles);
+    const state = candidate ? "evaluating" : proposal ? "proposal-ready" : "needs-evidence";
+    const created = c.store.createHarnessExperiment({
+      name: input.name,
+      baselineRunGroupId: Number(baseline.id),
+      ...(candidate ? { candidateRunGroupId: Number(candidate.id) } : {}),
+      editableFiles: input.editableFiles,
+      promotionPolicy: input.promotionPolicy,
+      failurePatterns,
+      preservedBehaviors,
+      ...(proposal ? { proposal } : {}),
+      state,
+    });
+    sendJson(c.res, 201, harnessExperimentApiRow(c.store, created, true));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(c.res, /UNIQUE constraint failed/.test(message) ? 409 : 400, { error: message });
+  }
+}
+
+function harnessExperimentGet(c: Ctx): void {
+  const experiment = c.store.getHarnessExperimentByUuid(c.params.uuid ?? "");
+  experiment
+    ? sendJson(c.res, 200, harnessExperimentApiRow(c.store, experiment, true))
+    : sendJson(c.res, 404, { error: "no such harness experiment" });
+}
+
+async function harnessExperimentProposalUpdate(c: Ctx): Promise<void> {
+  const experiment = c.store.getHarnessExperimentByUuid(c.params.uuid ?? "");
+  if (!experiment) return sendJson(c.res, 404, { error: "no such harness experiment" });
+  const body = objectValue(await readBody(c.req));
+  if (!body || body.proposal === undefined) return sendJson(c.res, 400, { error: "proposal is required" });
+  try {
+    const proposal = normalizeHarnessProposal(
+      body.proposal,
+      storedArray<string>(experiment.editable_files_json),
+      storedArray<HarnessFailurePattern>(experiment.failure_patterns_json),
+    );
+    c.store.updateHarnessExperimentProposal(Number(experiment.id), proposal);
+    sendJson(c.res, 200, harnessExperimentApiRow(c.store, c.store.getHarnessExperimentById(Number(experiment.id))!, true));
+  } catch (error) {
+    sendJson(c.res, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function harnessExperimentCandidateAttach(c: Ctx): Promise<void> {
+  const experiment = c.store.getHarnessExperimentByUuid(c.params.uuid ?? "");
+  if (!experiment) return sendJson(c.res, 404, { error: "no such harness experiment" });
+  const body = objectValue(await readBody(c.req));
+  const candidateUuid = body ? stringValue(body.candidateRunGroupUuid ?? body.candidate_run_group_uuid).trim() : "";
+  if (!candidateUuid) return sendJson(c.res, 400, { error: "candidateRunGroupUuid is required" });
+  const candidate = c.store.getRunGroupByUuid(candidateUuid);
+  if (!candidate) return sendJson(c.res, 404, { error: "no such candidate run group" });
+  if (Number(candidate.id) === Number(experiment.baseline_run_group_id)) return sendJson(c.res, 409, { error: "baseline and candidate run groups must be different" });
+  if (!c.store.attachHarnessExperimentCandidate(Number(experiment.id), Number(candidate.id))) {
+    return sendJson(c.res, 409, { error: "candidate could not be attached" });
+  }
+  sendJson(c.res, 200, harnessExperimentApiRow(c.store, c.store.getHarnessExperimentById(Number(experiment.id))!, true));
+}
+
+function harnessExperimentEvaluate(c: Ctx): void {
+  const experiment = c.store.getHarnessExperimentByUuid(c.params.uuid ?? "");
+  if (!experiment) return sendJson(c.res, 404, { error: "no such harness experiment" });
+  if (!storedOptionalRecord<HarnessCandidateProposal>(experiment.proposal_json)) return sendJson(c.res, 409, { error: "experiment needs a bounded candidate proposal before evaluation" });
+  const baseline = c.store.getRunGroupById(Number(experiment.baseline_run_group_id));
+  const candidateId = Number(experiment.candidate_run_group_id);
+  const candidate = Number.isFinite(candidateId) && candidateId > 0 ? c.store.getRunGroupById(candidateId) : undefined;
+  if (!baseline || !candidate) return sendJson(c.res, 409, { error: "experiment needs both baseline and candidate run groups" });
+  try {
+    const scorecard = scoreHarnessExperiment(
+      harnessGroupSnapshot(c.store, baseline),
+      harnessGroupSnapshot(c.store, candidate),
+      storedRecord<HarnessPromotionPolicy>(experiment.promotion_policy_json),
+    );
+    if (!c.store.settleHarnessExperiment(Number(experiment.id), Number(candidate.id), scorecard, scorecard.decision)) {
+      return sendJson(c.res, 409, { error: "candidate changed while evaluation was running; evaluate the current candidate again" });
+    }
+    sendJson(c.res, 200, harnessExperimentApiRow(c.store, c.store.getHarnessExperimentById(Number(experiment.id))!, true));
+  } catch (error) {
+    sendJson(c.res, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function harnessExperimentBrief(c: Ctx): void {
+  const experiment = c.store.getHarnessExperimentByUuid(c.params.uuid ?? "");
+  if (!experiment) return sendJson(c.res, 404, { error: "no such harness experiment" });
+  const baseline = c.store.getRunGroupById(Number(experiment.baseline_run_group_id));
+  const proposal = storedOptionalRecord<HarnessCandidateProposal>(experiment.proposal_json);
+  if (!baseline || !proposal) return sendJson(c.res, 409, { error: "experiment has no candidate proposal to export" });
+  sendJson(c.res, 200, {
+    markdown: renderHarnessCandidateBrief({
+      experimentName: String(experiment.name),
+      baselineGroup: harnessGroupSnapshot(c.store, baseline),
+      proposal,
+      patterns: storedArray<HarnessFailurePattern>(experiment.failure_patterns_json),
+      policy: storedRecord<HarnessPromotionPolicy>(experiment.promotion_policy_json),
+    }),
+  });
+}
+
+function harnessExperimentApiRow(store: MetadataStore, row: Record<string, unknown>, detail: boolean): Record<string, unknown> {
+  const parsed = {
+    ...row,
+    editableFiles: storedArray<string>(row.editable_files_json),
+    promotionPolicy: storedRecord<HarnessPromotionPolicy>(row.promotion_policy_json),
+    failurePatterns: storedArray<HarnessFailurePattern>(row.failure_patterns_json),
+    preservedBehaviors: storedArray(row.preserved_behaviors_json),
+    proposal: storedOptionalRecord<HarnessCandidateProposal>(row.proposal_json),
+    scorecard: storedOptionalRecord(row.scorecard_json),
+  };
+  if (!detail) return parsed;
+  const baseline = store.getRunGroupById(Number(row.baseline_run_group_id));
+  const candidateId = Number(row.candidate_run_group_id);
+  const candidate = Number.isFinite(candidateId) && candidateId > 0 ? store.getRunGroupById(candidateId) : undefined;
+  return {
+    ...parsed,
+    baselineGroup: baseline ? runGroupApiRow(store, baseline) : null,
+    candidateGroup: candidate ? runGroupApiRow(store, candidate) : null,
+  };
+}
+
+function harnessGroupSnapshot(store: MetadataStore, group: Record<string, unknown>): HarnessGroupSnapshot {
+  return {
+    uuid: String(group.uuid),
+    name: String(group.name),
+    state: String(group.state),
+    items: store.listWorkItems(Number(group.id)).map(harnessEvidenceItemFromRow),
+  };
+}
+
+function storedArray<T = unknown>(input: unknown): T[] {
+  if (Array.isArray(input)) return input as T[];
+  if (typeof input !== "string" || !input.trim()) return [];
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function storedRecord<T>(input: unknown): T {
+  const parsed = parseStoredJson(input);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("stored harness experiment contract is invalid");
+  return parsed as T;
+}
+
+function storedOptionalRecord<T = Record<string, unknown>>(input: unknown): T | null {
+  if (input === null || input === undefined || input === "") return null;
+  return storedRecord<T>(input);
 }
 
 function runGroupApiRow(store: MetadataStore, group: Record<string, unknown>): Record<string, unknown> {

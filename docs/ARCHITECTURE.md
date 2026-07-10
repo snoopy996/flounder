@@ -14,7 +14,7 @@ The main layers are:
 - Provider adapters: `src/llm/pi-ai.ts`, with explicit local CLI fallbacks in `src/llm/codex-cli.ts` and `src/llm/claude-code.ts`.
 - Pi integration: `src/pi/extension.ts` registers workflow tools for `prepare`, `run`, `map`, `audit`, and `confirm`, plus the shell guardrail.
 - Tracking store: `src/db/store.ts` records every run's metadata to SQLite (see [Tracking, API, and UI](#tracking-api-and-ui)).
-- Evaluation control plane: `src/evaluation/contracts.ts` validates run-group manifests, material policy, capability-surface context, and evidence contracts; `src/evaluation/run-groups.ts` maps work items onto the existing audit kernel and scores only persisted evidence.
+- Evaluation control plane: `src/evaluation/contracts.ts` validates run-group manifests, material policy, capability-surface context, and evidence contracts; `src/evaluation/run-groups.ts` maps work items onto the existing audit kernel and scores only persisted evidence; `src/evaluation/harness-experiments.ts` mines verifier-grounded failures and compares bounded baseline/candidate variants without owning the promotion boundary.
 - Server / UI: `src/server/` (control-plane REST API `app.ts` + execution-plane `daemon.ts` + web dashboard).
 
 ## Product Model
@@ -84,9 +84,22 @@ The editable/evolvable surface stops outside the trusted computing boundary.
 Manifests may select authorized materials, model settings, repeated cases, and
 evidence requirements, but they cannot execute their own commands, enable host
 execution, relax network policy, bypass allowed sandbox backends, or mint
-findings. Future harness-candidate proposal work must use these persisted
-results as input while keeping the evaluator, command policy, material boundary,
-and confirmation gate outside the optimization loop.
+findings. Harness experiments use persisted baseline results to cluster terminal
+verifier causes, record passing behavior that must be preserved, and propose
+changes only inside an explicit file allowlist. The evaluator, expected answers,
+command policy, material boundary, confirmation/refutation gate, promotion
+policy, merge, and deployment authority remain outside the optimization loop.
+
+```mermaid
+flowchart LR
+  BASE["Finished baseline Evaluation"] --> MINE["Verifier-grounded failure mining"]
+  MINE --> PROPOSAL["Bounded candidate brief"]
+  PROPOSAL --> CANDIDATE["Reviewable candidate branch / daemon"]
+  CANDIDATE --> PAIR["Paired candidate Evaluation"]
+  PAIR --> SCORE["Deterministic promotion gate"]
+  SCORE --> DECISION["Promote / reject / more samples"]
+  DECISION --> HUMAN["Human review, CI, merge, release"]
+```
 
 ## Audit Flow
 
@@ -327,10 +340,13 @@ Finding reads are SQL-backed rather than loading a fixed in-memory window. `GET 
 **Live streams.** `GET /api/stream` (SSE) pushes the project snapshot ~1/s (computed from aggregate queries, so it stays cheap with many findings). `GET /api/runs/:id/log` (SSE) streams a run's live **token-level** activity (thinking/output deltas + tool calls) from a per-run in-memory bus that the daemon feeds via batched activity POSTs, and `?format=json`/`?tail=N` also returns the durable `events.jsonl` tail so an agent can inspect terminal errors after the live stream is gone.
 
 Run-group and work-item resources add durable create/start/pause/cancel/retry/report
-operations to that same catalog. The Evaluations dashboard is a first-class client
-of those resources and keeps work-item lifecycle separate from evidence verdicts.
+operations to that same catalog. Harness-experiment resources add weakness mining,
+bounded proposal refinement, candidate attachment, deterministic paired scoring,
+and candidate-brief export. The Evaluations dashboard is a first-class client of
+those resources and keeps work-item lifecycle separate from evidence verdicts and
+experiment lifecycle separate from promotion decisions.
 
-**UI (`src/server/ui`).** A React/Vite TypeScript app compiled into `dist/server/public` and served by the Node control plane. It is **one client of the API above** — it can be ignored entirely in favor of the API. Project detail shows the **prepare -> map -> dig -> synthesize -> verify -> confirm -> report** workflow, live activity, coverage, run health, Next Actions, scopes, findings, real-target outcomes, and reports. The cross-project **Findings** view uses SQL-backed filters and shows one compact current-phase/blocker summary per finding; the report detail expands the full evidence lifecycle and focused retry. **Evaluations** operates durable run groups, evidence contracts, scoring, attempts, retries, and regenerated reports while keeping evaluation evidence separate from disclosure tracking. **Settings** holds provider profiles, daemon CRUD, and archived projects. UI state derivation lives in `src/server/ui/src/domain.ts`, API types/client code live in `src/server/ui/src/api.ts`, and every action remains a single REST call.
+**UI (`src/server/ui`).** A React/Vite TypeScript app compiled into `dist/server/public` and served by the Node control plane. It is **one client of the API above** — it can be ignored entirely in favor of the API. Project detail shows the **prepare -> map -> dig -> synthesize -> verify -> confirm -> report** workflow, live activity, coverage, run health, Next Actions, scopes, findings, real-target outcomes, and reports. The cross-project **Findings** view uses SQL-backed filters and shows one compact current-phase/blocker summary per finding; the report detail expands the full evidence lifecycle and focused retry. **Evaluations** has two compact working modes: Runs operates durable run groups, evidence contracts, scoring, attempts, retries, and regenerated reports; Harness compares baseline/candidate metrics, mined failure patterns, bounded proposals, and promotion decisions. Evaluation evidence remains separate from disclosure tracking. **Settings** holds provider profiles, daemon CRUD, and archived projects. UI state derivation lives in `src/server/ui/src/domain.ts`, API types/client code live in `src/server/ui/src/api.ts`, and every action remains a single REST call.
 
 ## Runnable Gates
 
