@@ -26,7 +26,8 @@ async function withServer(fn) {
 test("api: GET /api is a self-describing catalog of every resource + operation", async () => {
   await withServer(async (base) => {
     const cat = await (await fetch(base + "/api")).json();
-    assert.deepEqual(cat.resources, ["project", "provider", "daemon", "run", "run-group", "work-item", "harness-experiment", "scope", "discovery-backlog", "finding", "confirm-decision"]);
+    assert.equal(cat.maintainerMode, false);
+    assert.deepEqual(cat.resources, ["project", "provider", "daemon", "run", "run-group", "work-item", "scope", "discovery-backlog", "finding", "confirm-decision"]);
     const sigs = cat.endpoints.map((e) => e.method + " " + e.path);
     for (const expected of [
       "GET /api/projects", "PATCH /api/projects/order", "POST /api/projects", "GET /api/projects/:uuid",
@@ -46,6 +47,10 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
       "GET /api/runs/:id", "PATCH /api/runs/:id", "POST /api/runs/:id/stop",
       "GET /api/runs/:id/log",
     ]) assert.ok(sigs.includes(expected), `catalog missing ${expected}`);
+    assert.equal(sigs.some((signature) => signature.includes("harness-experiments")), false, "ordinary catalog must not advertise maintainer-only source-improvement endpoints");
+    const disabledHarness = await fetch(base + "/api/harness-experiments");
+    assert.equal(disabledHarness.status, 403);
+    assert.match((await disabledHarness.json()).error, /maintainer mode required/);
     // every endpoint documents a summary so an agent can learn it
     assert.ok(cat.endpoints.every((e) => typeof e.summary === "string" && e.summary.length > 0));
     const projectCreate = cat.endpoints.find((e) => e.method === "POST" && e.path === "/api/projects");

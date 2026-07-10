@@ -42,11 +42,12 @@ interface EvaluationsWorkspaceProps {
   selectedUuid?: string;
   providers: ProviderProfile[];
   daemons: DaemonRow[];
+  maintainerMode: boolean;
   onSelect: (uuid?: string) => void;
   onToast: (tone: ToastTone, message: string) => void;
 }
 
-export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelect, onToast }: EvaluationsWorkspaceProps) {
+export function EvaluationsWorkspace({ selectedUuid, providers, daemons, maintainerMode, onSelect, onToast }: EvaluationsWorkspaceProps) {
   const [groups, setGroups] = useState<RunGroupRow[]>([]);
   const [experiments, setExperiments] = useState<HarnessExperimentRow[]>([]);
   const [railMode, setRailMode] = useState<"runs" | "evolution">("runs");
@@ -88,7 +89,10 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const [groupResponse, experimentResponse] = await Promise.all([api.runGroups(), api.harnessExperiments()]);
+      const [groupResponse, experimentResponse] = await Promise.all([
+        api.runGroups(),
+        maintainerMode ? api.harnessExperiments() : Promise.resolve({ experiments: [], total: 0, limit: 0, offset: 0 }),
+      ]);
       let next = groupResponse.runGroups.sort(sortGroups);
       let nextExperiments = experimentResponse.experiments.sort(sortExperiments);
       if (selectedUuid) {
@@ -107,10 +111,12 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
           try {
             next = [await api.runGroup(selectedUuid), ...next].sort(sortGroups);
           } catch {
-            try {
-              nextExperiments = [await api.harnessExperiment(selectedUuid), ...nextExperiments].sort(sortExperiments);
-            } catch {
-              // The lists still provide a useful workspace if a copied URL is stale.
+            if (maintainerMode) {
+              try {
+                nextExperiments = [await api.harnessExperiment(selectedUuid), ...nextExperiments].sort(sortExperiments);
+              } catch {
+                // The lists still provide a useful workspace if a copied URL is stale.
+              }
             }
           }
         }
@@ -123,7 +129,16 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [selectedUuid]);
+  }, [maintainerMode, selectedUuid]);
+
+  useEffect(() => {
+    if (maintainerMode) return;
+    setRailMode("runs");
+    setExperiments([]);
+    setNewExperimentOpen(false);
+    setAttachCandidateOpen(false);
+    setRefineProposalOpen(false);
+  }, [maintainerMode]);
 
   useEffect(() => {
     void refresh();
@@ -224,10 +239,10 @@ export function EvaluationsWorkspace({ selectedUuid, providers, daemons, onSelec
           <div><h2>Evaluations</h2><Counter>{railMode === "runs" ? groups.length : experiments.length}</Counter></div>
           <Button size="sm" icon="package" onClick={() => railMode === "runs" ? setNewOpen(true) : setNewExperimentOpen(true)}>New</Button>
         </div>
-        <div className="evaluation-mode-switch" role="tablist" aria-label="Evaluation workspace mode">
+        {maintainerMode ? <div className="evaluation-mode-switch" role="tablist" aria-label="Evaluation workspace mode">
           <button role="tab" aria-selected={railMode === "runs"} className={railMode === "runs" ? "sel" : ""} onClick={() => { setRailMode("runs"); onSelect(); }}>Runs</button>
-          <button role="tab" aria-selected={railMode === "evolution"} className={railMode === "evolution" ? "sel" : ""} onClick={() => { setRailMode("evolution"); onSelect(); }}>Harness</button>
-        </div>
+          <button role="tab" aria-selected={railMode === "evolution"} className={railMode === "evolution" ? "sel" : ""} onClick={() => { setRailMode("evolution"); onSelect(); }}>Harness · Maintainer</button>
+        </div> : null}
         <div className="evaluation-filters">
           <div className="project-search-row evaluation-search-row">
             <Icon name="search" size={14} />

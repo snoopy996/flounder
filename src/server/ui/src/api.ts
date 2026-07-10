@@ -774,6 +774,14 @@ export interface ProjectListResponse {
   statusCounts?: Partial<ProjectStatusCounts>;
 }
 
+export interface ApiCatalogResponse {
+  name: string;
+  description: string;
+  maintainerMode: boolean;
+  resources: string[];
+  endpoints: Array<Record<string, unknown>>;
+}
+
 export interface LaunchPayload {
   verb: string;
   region?: string;
@@ -820,6 +828,7 @@ function projectListPath(params: ProjectListParams = {}): string {
 }
 
 export const api = {
+  catalog: () => fetchJson<ApiCatalogResponse>("/api"),
   projects: (params?: ProjectListParams) => fetchJson<ProjectListResponse>(projectListPath(params)),
   archivedProjects: (params?: Omit<ProjectListParams, "archived">) => fetchJson<ProjectListResponse>(projectListPath({ ...params, archived: true })),
   project: (uuid: string) => fetchJson<ProjectDetail>(`/api/projects/${encodeURIComponent(uuid)}`),

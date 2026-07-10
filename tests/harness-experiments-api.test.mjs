@@ -72,10 +72,13 @@ async function createFinishedGroup(base, out, token, name, acceptedByKey) {
 
 test("harness experiment API mines, bounds, compares, and persists a promotion decision", async () => {
   const out = await mkdtemp(path.join(os.tmpdir(), "flounder-harness-experiment-"));
-  const server = startUiServer({ port: 0, out, host: "127.0.0.1" });
+  const server = startUiServer({ port: 0, out, host: "127.0.0.1", maintainerMode: true });
   if (!server.listening) await new Promise((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
+    const maintainerCatalog = await json(await fetch(`${base}/api`));
+    assert.equal(maintainerCatalog.maintainerMode, true);
+    assert.ok(maintainerCatalog.resources.includes("harness-experiment"));
     const daemon = await json(await request(base, "POST", "/api/daemons", { name: "harness-daemon" }));
     const token = daemon.token;
     const registered = await request(base, "POST", "/api/daemon/register", { name: "harness-daemon", capabilities: {}, workspace: out }, token);
@@ -122,9 +125,7 @@ test("harness experiment API mines, bounds, compares, and persists a promotion d
     assert.equal(listed.total, 1);
     assert.equal(listed.experiments[0].decision, "promote");
 
-    const catalog = await json(await fetch(`${base}/api`));
-    assert.ok(catalog.resources.includes("harness-experiment"));
-    assert.ok(catalog.endpoints.some((endpoint) => endpoint.path === "/api/harness-experiments/:uuid/evaluate"));
+    assert.ok(maintainerCatalog.endpoints.some((endpoint) => endpoint.path === "/api/harness-experiments/:uuid/evaluate"));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

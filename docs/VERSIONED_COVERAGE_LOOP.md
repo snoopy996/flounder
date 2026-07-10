@@ -52,6 +52,9 @@ strategy to use.
   equivalence.
 - Harness candidates cannot edit the evaluator, evidence gates, material policy,
   sandbox policy, promotion policy, tests, merge authority, or deployment logic.
+- Harness is a maintainer-only source-improvement capability. Ordinary Project
+  runs never trigger it, and the default control plane neither advertises nor
+  accepts its operations.
 
 ## Test Plan
 

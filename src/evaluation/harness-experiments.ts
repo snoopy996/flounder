@@ -140,11 +140,8 @@ const DEFAULT_PROMOTION_POLICY: HarnessPromotionPolicy = {
 };
 
 const EDITABLE_HARNESS_FILES = new Set([
-  "src/agent/audit.ts",
-  "src/agent/discovery-artifacts.ts",
   "src/agent/loop.ts",
   "src/agent/memory.ts",
-  "src/agent/prepare.ts",
   "src/agent/prompts.ts",
 ]);
 
@@ -232,7 +229,10 @@ export function mineHarnessWeaknesses(items: HarnessEvidenceItem[]): HarnessFail
 
 export function minePreservedBehaviors(items: HarnessEvidenceItem[]): PreservedBehavior[] {
   return items
-    .filter((item) => item.accepted === true && item.expectedOutcome !== null)
+    // Holdouts belong only to the external evaluator. Leaking even a passing
+    // holdout's key and expected outcome into the candidate brief turns it into
+    // training data and invalidates the generalization gate.
+    .filter((item) => !item.holdout && item.accepted === true && item.expectedOutcome !== null)
     .map((item) => ({ workItemKey: item.itemKey, expectedOutcome: item.expectedOutcome!, evidenceGate: item.evidenceGate }))
     .sort((a, b) => a.workItemKey.localeCompare(b.workItemKey));
 }
@@ -405,7 +405,7 @@ export function renderHarnessCandidateBrief(input: {
   ].join("\n");
 }
 
-export function harnessEvidenceItemFromRow(row: Record<string, unknown>): HarnessEvidenceItem {
+export function harnessEvidenceItemFromRow(row: Record<string, unknown>, groupConfig: Record<string, unknown> = {}): HarnessEvidenceItem {
   const evidence = jsonRecord(row.evidenceContract ?? row.evidence_contract_json);
   const target = jsonRecord(row.targetBundle ?? row.target_bundle_json);
   const material = jsonRecord(row.materialPolicy ?? row.material_policy_json);
@@ -423,7 +423,20 @@ export function harnessEvidenceItemFromRow(row: Record<string, unknown>): Harnes
     outcome: typeof row.outcome === "string" ? row.outcome : null,
     expectedOutcome: expected === "detect-positive" || expected === "reject-positive" ? expected : null,
     evidenceGate: typeof evidence.kind === "string" ? evidence.kind : "unknown",
-    contractFingerprint: createHash("sha256").update(stableJson({ kind: row.kind, target, material, evidence })).digest("hex"),
+    contractFingerprint: createHash("sha256").update(stableJson({
+      kind: row.kind,
+      target,
+      material,
+      evidence,
+      // Provider/model/thinking may be inherited from the run group rather than
+      // repeated in each target bundle. Bind the effective settings so a candidate
+      // cannot win by silently switching to a stronger or different executor.
+      execution: {
+        provider: firstString(target.provider, groupConfig.provider),
+        model: firstString(target.model, groupConfig.model),
+        thinking: firstString(target.thinking, groupConfig.thinking),
+      },
+    })).digest("hex"),
     accepted: typeof result.accepted === "boolean" ? result.accepted : null,
     reason: firstString(result.reason, row.last_error, row.error),
     attempts: finiteInteger(row.attempts) ?? 0,

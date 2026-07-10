@@ -10,7 +10,10 @@ description: >
   daemon, provider profiles, model auth, sandboxed execution, corpus paths,
   source paths, build roots, coverage, or budgets; to monitor live audit activity, continue
   pending scopes, verify suspected vulnerabilities, reproduce findings, or
-  collect execution-backed bug reports.
+  collect execution-backed bug reports; or when a Flounder maintainer asks an
+  agent to improve auditor recall, analyze Evaluation failures, run governed
+  Harness experiments, modify Flounder source in an isolated branch, or prepare
+  a candidate improvement PR.
 ---
 
 # Flounder
@@ -32,6 +35,7 @@ gates.
 | `reference/examples.md` | Concrete Solidity/EVM and ZK examples. |
 | `reference/product.md` | Dashboard, project lifecycle, run phases, tracking, and artifact model. |
 | `reference/safety.md` | White-hat policy, sandbox boundary, evidence ladder, and public-release hygiene. |
+| `reference/maintainer-harness.md` | Maintainer-only agent workflow for Evaluation-driven source improvement and candidate PRs. |
 
 Use progressive disclosure: open only the reference file needed for the current
 task. Do not duplicate long command references into the conversation when a
@@ -86,7 +90,7 @@ Use these when the user is not asking for a full end-to-end audit:
 | "Prepare submission package" | selected Report; include only execution-backed, non-ignored findings. |
 | "Triage noisy machine findings" | update tracking: `ignored` for dismissed, `open` to recover. |
 | "Run a benchmark / regression set / positive and safe controls" | Create a validated manifest and use `flounder group create --manifest <file>`, then `flounder group start <uuid|name>`. Keep blind material policy explicit, require execution evidence for positives, and require zero confirmed findings on safe/control items. Retry only blocked items with `flounder group retry <work-item-id>`; repeated samples are separate items. |
-| "Improve Flounder's harness from Evaluation failures" | Use a finished baseline group, then `flounder experiment create` with an explicit editable-file allowlist. Run the same stable work-item keys on a candidate daemon/workspace, attach that group, and call `flounder experiment evaluate`. Treat `promote` as a review recommendation only; evaluator, safety, merge, and deployment authority remain external. |
+| "Improve Flounder's harness / raise recall / learn from Evaluation failures" | This is maintainer work, not a normal target audit. Confirm the agent is operating in the Flounder source repository with authorization to change it, then read [reference/maintainer-harness.md](reference/maintainer-harness.md) and drive the isolated source-change workflow. |
 
 ## Core Operating Rules
 
@@ -100,6 +104,9 @@ Use these when the user is not asking for a full end-to-end audit:
   live there unless the user explicitly passes `--out` or `--workspace`.
 - Start with `flounder ui` unless the user already has a control plane running.
   CLI verbs are thin clients of that control plane.
+- Start with `flounder ui --maintainer` only when an authorized Flounder
+  maintainer is improving Flounder source. Ordinary Project and Evaluation work
+  must not enable or advertise Harness source-improvement operations.
 - Use `GET /api` before driving the REST API directly; the catalog is the source
   of truth for endpoint shape.
 - Use project-owned docs/specs/audits as corpus. Do not write answer-bearing
@@ -472,6 +479,8 @@ Open only the references needed for the current task:
   [reference/product.md](reference/product.md)
 - white-hat policy, sandbox boundary, and evidence ladder:
   [reference/safety.md](reference/safety.md)
+- maintainer-only Evaluation-to-source-improvement loop:
+  [reference/maintainer-harness.md](reference/maintainer-harness.md)
 
 ## Task Routing
 
@@ -489,6 +498,7 @@ Open only the references needed for the current task:
 | "Ignore this false positive" | Set finding tracking to `ignored`; do not delete it |
 | "Bring back ignored findings" | Filter `tracking=ignored`, then set selected rows back to `open` |
 | "Regenerate reports" | Use `flounder report --project <uuid|name> --finding <id>` or the report action with selected `findingIds` |
+| "Improve Flounder itself from evaluation evidence" | Confirm maintainer context, enable `flounder ui --maintainer`, then follow `reference/maintainer-harness.md`; never run this loop from an ordinary target Project |
 
 ## Deciding The Next Action
 

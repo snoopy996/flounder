@@ -73,6 +73,8 @@ export interface UiServerOptions {
   port?: number;
   host?: string;
   operatorToken?: string;
+  /** Enables Flounder-maintainer surfaces that can propose changes to Flounder itself. */
+  maintainerMode?: boolean;
 }
 
 // The control plane: the live registry of connected daemons (for server→daemon nudges) and
@@ -171,6 +173,7 @@ interface Ctx {
   store: MetadataStore;
   plane: ControlPlane;
   out: string;
+  maintainerMode: boolean;
 }
 
 interface Route {
@@ -182,6 +185,7 @@ interface Route {
   body?: Record<string, string>;
   handler: (c: Ctx) => Promise<void> | void;
   hidden?: boolean; // omit from the catalog (the UI page + the catalog itself)
+  maintainerOnly?: boolean; // hidden and forbidden unless the server explicitly enables maintainer mode
   regex: RegExp;
   paramNames: string[];
 }
@@ -203,7 +207,7 @@ function route(def: Omit<Route, "regex" | "paramNames">): Route {
 
 const ROUTES: Route[] = [
   route({ method: "GET", path: "/", summary: "The web dashboard (HTML).", hidden: true, handler: (c) => { c.res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); c.res.end(loadUiHtml()); } }),
-  route({ method: "GET", path: "/api", summary: "This catalog: every resource and operation, so an agent can self-learn and drive the workflow without the UI.", handler: (c) => sendJson(c.res, 200, apiCatalog()) }),
+  route({ method: "GET", path: "/api", summary: "This catalog: every enabled resource and operation, so an agent can self-learn and drive the workflow without the UI.", handler: (c) => sendJson(c.res, 200, apiCatalog(c.maintainerMode)) }),
 
   route({
     method: "GET", path: "/api/projects",
@@ -448,6 +452,7 @@ const ROUTES: Route[] = [
     summary: "List governed harness-improvement experiments. Each experiment links a finished baseline Evaluation to a bounded candidate and keeps the promotion decision outside the editable harness surface.",
     query: { limit: "number? (default 100)", offset: "number? (default 0)" },
     handler: harnessExperimentList,
+    maintainerOnly: true,
   }),
   route({
     method: "POST", path: "/api/harness-experiments",
@@ -460,12 +465,14 @@ const ROUTES: Route[] = [
       promotionPolicy: "object? — minimum samples/improvements plus blocked, duration, and attempt budgets",
     },
     handler: harnessExperimentCreate,
+    maintainerOnly: true,
   }),
   route({
     method: "GET", path: "/api/harness-experiments/:uuid",
     summary: "Read one harness experiment with failure patterns, preserved passing behavior, bounded proposal, paired Evaluation groups, and deterministic scorecard.",
     params: { uuid: "harness experiment UUID" },
     handler: harnessExperimentGet,
+    maintainerOnly: true,
   }),
   route({
     method: "PATCH", path: "/api/harness-experiments/:uuid/proposal",
@@ -473,6 +480,7 @@ const ROUTES: Route[] = [
     params: { uuid: "harness experiment UUID" },
     body: { proposal: "bounded harness candidate proposal" },
     handler: harnessExperimentProposalUpdate,
+    maintainerOnly: true,
   }),
   route({
     method: "POST", path: "/api/harness-experiments/:uuid/candidate",
@@ -480,18 +488,21 @@ const ROUTES: Route[] = [
     params: { uuid: "harness experiment UUID" },
     body: { candidateRunGroupUuid: "run-group UUID (required)" },
     handler: harnessExperimentCandidateAttach,
+    maintainerOnly: true,
   }),
   route({
     method: "POST", path: "/api/harness-experiments/:uuid/evaluate",
     summary: "Run the deterministic promotion gate over persisted baseline/candidate evidence. It returns promote, reject, or needs-more-samples and never changes code, merges, or deploys.",
     params: { uuid: "harness experiment UUID" },
     handler: harnessExperimentEvaluate,
+    maintainerOnly: true,
   }),
   route({
     method: "GET", path: "/api/harness-experiments/:uuid/brief",
     summary: "Export a public-safe candidate brief containing only verifier-grounded failures, bounded editable files, behaviors to preserve, and the external promotion gate.",
     params: { uuid: "harness experiment UUID" },
     handler: harnessExperimentBrief,
+    maintainerOnly: true,
   }),
 
   route({
@@ -689,17 +700,21 @@ const ROUTES: Route[] = [
   route({ method: "POST", path: "/api/daemon/jobs/:id/status", summary: "(daemon) Report a job's terminal status (done/error/canceled).", hidden: true, handler: daemonJobStatus }),
 ];
 
-export function apiCatalog(): {
+export function apiCatalog(maintainerMode = false): {
   name: string;
   description: string;
+  maintainerMode: boolean;
   resources: string[];
   endpoints: Array<Record<string, unknown>>;
 } {
   return {
     name: "flounder",
-    description: "REST API for tracking and driving white-hat audits and durable evaluation groups. Runs execute on connected daemons; every UI operation is one of these calls.",
-    resources: ["project", "provider", "daemon", "run", "run-group", "work-item", "harness-experiment", "scope", "discovery-backlog", "finding", "confirm-decision"],
-    endpoints: ROUTES.filter((r) => !r.hidden).map((r) => ({
+    description: maintainerMode
+      ? "REST API for white-hat audits, durable evaluations, and explicitly enabled Flounder-maintainer experiments."
+      : "REST API for tracking and driving white-hat audits and durable evaluation groups. Maintainer-only source-improvement surfaces are disabled.",
+    maintainerMode,
+    resources: ["project", "provider", "daemon", "run", "run-group", "work-item", ...(maintainerMode ? ["harness-experiment"] : []), "scope", "discovery-backlog", "finding", "confirm-decision"],
+    endpoints: ROUTES.filter((r) => !r.hidden && (!r.maintainerOnly || maintainerMode)).map((r) => ({
       method: r.method,
       path: r.path,
       summary: r.summary,
@@ -716,6 +731,7 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
   const host = options.host ?? "127.0.0.1"; // localhost by default; exposing the control plane requires operator auth
   const loopback = isLoopbackHost(host);
   const operatorToken = options.operatorToken ?? (loopback ? undefined : process.env.FLOUNDER_UI_TOKEN);
+  const maintainerMode = options.maintainerMode === true;
   if (!isLoopbackHost(host) && !operatorToken) {
     throw new Error("Refusing to bind flounder ui to a non-loopback host without operator auth. Set FLOUNDER_UI_TOKEN and send Authorization: Bearer <token> for control-plane API access.");
   }
@@ -749,10 +765,14 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
         sendJson(res, 401, { error: "unauthorized: a valid operator bearer token is required" });
         return;
       }
+      if (r.maintainerOnly && !maintainerMode) {
+        sendJson(res, 403, { error: "maintainer mode required: restart the control plane with `flounder ui --maintainer`" });
+        return;
+      }
       // .then(run) (not Promise.resolve(run())) so a SYNCHRONOUS throw in a handler becomes a
       // rejection we can turn into a 500 — never an uncaught exception that kills the server.
       Promise.resolve()
-        .then(() => r.handler({ req, res, params, url, store, plane, out }))
+        .then(() => r.handler({ req, res, params, url, store, plane, out, maintainerMode }))
         .catch((error) => {
           if (!res.headersSent) sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
           else res.end();
@@ -785,7 +805,7 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
     store.close();
   });
   server.listen(port, host, () => {
-    console.log(`[flounder ui] http://${host}:${port}  (API catalog: http://${host}:${port}/api · store: ${out}/flounder.db)`);
+    console.log(`[flounder ui] http://${host}:${port}  (API catalog: http://${host}:${port}/api · store: ${out}/flounder.db${maintainerMode ? " · maintainer mode" : ""})`);
   });
   return server;
 }
@@ -3984,11 +4004,12 @@ function harnessExperimentApiRow(store: MetadataStore, row: Record<string, unkno
 }
 
 function harnessGroupSnapshot(store: MetadataStore, group: Record<string, unknown>): HarnessGroupSnapshot {
+  const groupConfig = parseStoredJson(group.config_json) ?? {};
   return {
     uuid: String(group.uuid),
     name: String(group.name),
     state: String(group.state),
-    items: store.listWorkItems(Number(group.id)).map(harnessEvidenceItemFromRow),
+    items: store.listWorkItems(Number(group.id)).map((item) => harnessEvidenceItemFromRow(item, groupConfig)),
   };
 }
 

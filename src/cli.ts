@@ -63,7 +63,7 @@ async function main(argv: string[]): Promise<void> {
     const host = readFlag(rest, "--host") ?? "127.0.0.1";
     const out = resolveOut(rest);
     const workspace = readFlag(rest, "--workspace") ?? defaultWorkspaceDir(); // where the co-located daemon finds project dirs
-    const server = startUiServer({ out, port, host });
+    const server = startUiServer({ out, port, host, maintainerMode: rest.includes("--maintainer") });
     if (rest.includes("--no-daemon")) {
       console.log("[flounder ui] --no-daemon: no executor started. Connect one with `flounder daemon start --server <url> --token <token>`.");
     } else {
@@ -1001,7 +1001,7 @@ function printHarnessExperimentStatus(experiment: Record<string, unknown>): void
 }
 
 function printHarnessExperimentHelp(): void {
-  console.log(`flounder experiment — governed harness self-improvement.
+  console.log(`flounder experiment — maintainer-only governed harness self-improvement.
 
 Usage:
   flounder experiment create --name <name> --baseline <group> [--candidate <group>] --editable-file <path...>
@@ -1012,7 +1012,7 @@ Usage:
   flounder experiment evaluate <uuid|name>
   flounder experiment brief <uuid|name>
 
-The baseline must be a finished Evaluation. Failure mining uses persisted verifier evidence;
+The control plane must be running with \`flounder ui --maintainer\`. The baseline must be a finished Evaluation. Failure mining uses persisted verifier evidence;
 candidate proposals are limited to approved harness files. Evaluation, material, sandbox,
 confirmation, promotion, merge, and deployment policy remain outside the editable loop.`);
 }
@@ -1263,7 +1263,6 @@ Usage:
   flounder report  --project <uuid|name> [--finding <id>...] [--all]              generate missing reports or regenerate selected/all formal reports
   flounder continue --project <uuid|name>                                         finish the stored project pipeline round (same as the UI Continue button)
   flounder group create|start|status|pause|cancel|retry|report                    durable evaluation, replay, and multi-target work groups
-  flounder experiment create|list|status|attach|proposal|evaluate|brief           governed harness candidate experiments and promotion gates
   flounder history import-run --target <name> --run <dir>
   flounder server project list                                                   list tracked projects
   flounder server run list [--project <name>]                                    list run history globally or for one project
@@ -1272,7 +1271,7 @@ Usage:
   flounder server daemon-token mint [name] [--server <url>]                      create a daemon connection token
   flounder config  [list | get <key> | set <key> <value> | unset <key> | path] [--global|--local]   persisted CLI defaults (server, provider, model, thinking, out, posture)
   flounder daemon provider [list | check [provider] | login [provider]]          manage provider auth on this daemon machine
-  flounder ui      [--port <n>] [--host <h>] [--out <dir>] [--workspace <dir>] [--concurrency <n>] [--no-daemon]   control-plane web dashboard + a co-located executor daemon (localhost)
+  flounder ui      [--port <n>] [--host <h>] [--out <dir>] [--workspace <dir>] [--concurrency <n>] [--no-daemon] [--maintainer]   control-plane web dashboard + a co-located executor daemon (localhost)
   flounder daemon start --server <url> --token <token> [--out <dir>] [--workspace <dir>] [--concurrency <n>]   execution plane: claim + run queued jobs (may be a different machine)
 
 CLI layout:
@@ -1389,7 +1388,7 @@ function printUiHelp(): void {
   console.log(`flounder ui — start the control-plane dashboard.
 
 Usage:
-  flounder ui [--port <n>] [--host <h>] [--out <dir>] [--workspace <dir>] [--concurrency <n>] [--no-daemon]
+  flounder ui [--port <n>] [--host <h>] [--out <dir>] [--workspace <dir>] [--concurrency <n>] [--no-daemon] [--maintainer]
 
 Options:
   --port              Dashboard/API port, default 4500
@@ -1398,9 +1397,11 @@ Options:
   --workspace         Co-located daemon workspace, default ~/.flounder/workspace
   --concurrency       Co-located daemon jobs in parallel, default 2
   --no-daemon         Start only the control plane; connect executors with flounder daemon start
+  --maintainer        Enable maintainer-only Harness API/CLI/UI surfaces for improving Flounder source
 
 flounder ui starts the REST API, SQLite tracking store, dashboard, and by default a local
-execution daemon. Target code and provider credentials stay on the daemon machine.`);
+execution daemon. Target code and provider credentials stay on the daemon machine. Harness
+source-improvement surfaces stay disabled unless --maintainer is explicit.`);
 }
 
 function printContinueHelp(): void {

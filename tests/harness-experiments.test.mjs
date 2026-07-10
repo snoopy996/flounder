@@ -53,6 +53,13 @@ test("harness experiment contracts bound every proposed edit outside the trusted
     baselineRunGroupUuid: "baseline",
     editableFiles: ["tests/fixtures/answer.json"],
   }), /outside the bounded harness-edit surface/);
+  for (const protectedFile of ["src/agent/audit.ts", "src/agent/discovery-artifacts.ts", "src/agent/prepare.ts"]) {
+    assert.throws(() => normalizeHarnessExperimentInput({
+      name: "unsafe trusted boundary",
+      baselineRunGroupUuid: "baseline",
+      editableFiles: [protectedFile],
+    }), /outside the bounded harness-edit surface/);
+  }
 
   const patterns = mineHarnessWeaknesses([evidence("p1", "detect-positive", false)]);
   assert.throws(() => normalizeHarnessProposal({
@@ -86,6 +93,7 @@ test("failure mining clusters verifier causes and preserves passing controls", (
     evidence("p1", "detect-positive", false),
     evidence("p2", "detect-positive", false, { holdout: false }),
     evidence("c1", "reject-positive", true),
+    evidence("hidden-control", "reject-positive", true, { holdout: true }),
     evidence("blocked", "detect-positive", null, {
       state: "failed",
       outcome: "blocked",
@@ -114,6 +122,7 @@ test("failure mining clusters verifier causes and preserves passing controls", (
   });
   assert.match(brief, /Protected boundary/);
   assert.match(brief, /never merge or deploy automatically/);
+  assert.doesNotMatch(brief, /hidden-control/);
 });
 
 test("promotion gate requires paired repeated positives and controls with no regression", () => {
@@ -209,7 +218,7 @@ test("promotion gate requires paired repeated positives and controls with no reg
 });
 
 test("stored work-item evidence is normalized without trusting raw JSON", () => {
-  const item = harnessEvidenceItemFromRow({
+  const storedRow = {
     item_key: "p1",
     state: "finished",
     outcome: "confirmed",
@@ -218,7 +227,8 @@ test("stored work-item evidence is normalized without trusting raw JSON", () => 
     result_json: JSON.stringify({ accepted: true }),
     started_at: "2026-07-10T12:00:00.000Z",
     ended_at: "2026-07-10T12:00:12.000Z",
-  });
+  };
+  const item = harnessEvidenceItemFromRow(storedRow);
   assert.deepEqual(item, {
     itemKey: "p1",
     state: "finished",
@@ -238,4 +248,7 @@ test("stored work-item evidence is normalized without trusting raw JSON", () => 
     phaseFunnel: null,
   });
   assert.match(item.contractFingerprint, /^[a-f0-9]{64}$/);
+
+  const alternateExecution = harnessEvidenceItemFromRow(storedRow, { provider: "different-provider", model: "different-model", thinking: "high" });
+  assert.notEqual(alternateExecution.contractFingerprint, item.contractFingerprint);
 });

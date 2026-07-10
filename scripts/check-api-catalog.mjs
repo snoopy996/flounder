@@ -24,7 +24,8 @@ const stalePatterns = [
   },
 ];
 
-const [catalog, cliHelp, uiHelp, daemonHelp, daemonStartHelp] = await Promise.all([
+const [catalog, ordinaryCatalog, cliHelp, uiHelp, daemonHelp, daemonStartHelp] = await Promise.all([
+  Promise.resolve(apiCatalog(true)),
   Promise.resolve(apiCatalog()),
   cli(["--help"]),
   cli(["ui", "--help"]),
@@ -32,11 +33,18 @@ const [catalog, cliHelp, uiHelp, daemonHelp, daemonStartHelp] = await Promise.al
   cli(["daemon", "start", "--help"]),
 ]);
 
+assert.equal(ordinaryCatalog.maintainerMode, false, "ordinary API catalog must report maintainer mode disabled");
+assert.equal(ordinaryCatalog.resources.includes("harness-experiment"), false, "ordinary API catalog must hide maintainer resources");
+assert.equal(ordinaryCatalog.endpoints.some((entry) => entry.path.startsWith("/api/harness-experiments")), false, "ordinary API catalog must hide maintainer endpoints");
+assert.equal(catalog.maintainerMode, true, "maintainer API catalog must report maintainer mode enabled");
+
 const catalogText = flatten(catalog);
 const helpText = [cliHelp, uiHelp, daemonHelp, daemonStartHelp].join("\n");
 const publicText = [catalogText, helpText].join("\n");
 
 assert.match(uiHelp, /flounder ui \[--port <n>\].*--concurrency <n>/s, "ui help must be side-effect-free and document local daemon concurrency");
+assert.match(uiHelp, /--maintainer[\s\S]*maintainer-only Harness API\/CLI\/UI surfaces/, "ui help must document the explicit maintainer capability boundary");
+assert.doesNotMatch(cliHelp, /\bflounder experiment\b/, "ordinary top-level help must not advertise maintainer-only source-improvement commands");
 assert.match(daemonStartHelp, new RegExp(escapeRegExp(daemonStartUsage)), "daemon start help must document the current start command");
 assert.match(cliHelp, /flounder daemon start --server <url> --token <token>/, "top-level CLI help must expose daemon start");
 

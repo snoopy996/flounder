@@ -137,6 +137,12 @@ test("ui evaluations: harness workspace keeps the promotion boundary visible", (
   assert.match(harnessViewSource, /Candidate ·/);
 });
 
+test("ui evaluations: Harness is visible only when the control plane enables maintainer mode", () => {
+  assert.match(evaluationViewSource, /maintainerMode \? api\.harnessExperiments\(\)/);
+  assert.match(evaluationViewSource, /\{maintainerMode \? <div className="evaluation-mode-switch"/);
+  assert.match(evaluationViewSource, /Harness · Maintainer/);
+});
+
 test("ui evaluations: clipboard denial falls back to the legacy copy path", () => {
   assert.match(evaluationViewSource, /await navigator\.clipboard\.writeText\(value\)/);
   assert.match(evaluationViewSource, /catch \{\s*\/\/ Restricted desktop shells/);

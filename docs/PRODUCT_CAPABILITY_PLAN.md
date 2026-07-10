@@ -40,8 +40,9 @@ Implemented foundation:
   repeated positive/control minimums, zero-regression checks, blocked/duration/
   attempt budgets, and deterministic `promote | reject | needs-more-samples`
   decisions;
-- API, CLI, and an Evaluations/Harness UI for proposal refinement, candidate
-  attachment, score comparison, and public-safe candidate-brief export.
+- maintainer-gated API, CLI, and Evaluations/Harness UI for agent-driven source
+  proposal refinement, candidate attachment, score comparison, and public-safe
+  candidate-brief export; ordinary Projects never trigger or expose this loop;
 - material-versioned scope and memory state, independent Map ensembles,
   per-scope obligation/composition outcomes, adaptive Dig sampling, and
   outcome-driven cross-scope synthesis;

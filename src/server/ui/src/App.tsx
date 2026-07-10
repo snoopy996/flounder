@@ -1584,6 +1584,7 @@ export function App() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [archivedProjectLoading, setArchivedProjectLoading] = useState(false);
   const [activeJobsTotal, setActiveJobsTotal] = useState(0);
+  const [maintainerMode, setMaintainerMode] = useState(false);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [providers, setProviders] = useState<ProviderProfile[]>([]);
   const [daemons, setDaemons] = useState<DaemonRow[]>([]);
@@ -1700,13 +1701,15 @@ export function App() {
   }
 
   async function refreshBase() {
-    const [projectRes, archivedRes, providerRes, daemonRes] = await Promise.all([
+    const [catalogRes, projectRes, archivedRes, providerRes, daemonRes] = await Promise.all([
+      api.catalog().catch(() => ({ maintainerMode: false })),
       api.projects({ limit: PROJECT_PAGE_SIZE, q: projectQuery, status: projectStatusParam(projectStatusFilter) }),
       api.archivedProjects({ limit: PROJECT_PAGE_SIZE }),
       api.providers(),
       api.daemons(),
     ]);
     const normalizedProjects = normalizeProjectListResponse(projectRes, projectStatusFilter);
+    setMaintainerMode(catalogRes.maintainerMode === true);
     setProjects(normalizedProjects.projects);
     setArchivedProjects(archivedRes.projects);
     setProjectsTotal(normalizedProjects.total);
@@ -2187,6 +2190,7 @@ export function App() {
             selectedUuid={route.evaluationUuid}
             providers={providers}
             daemons={daemons}
+            maintainerMode={maintainerMode}
             onSelect={(uuid) => go(uuid ? `/evaluations/${encodeURIComponent(uuid)}` : "/evaluations")}
             onToast={(tone, message) => setToast({ tone, message })}
           />

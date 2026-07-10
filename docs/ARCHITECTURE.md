@@ -271,6 +271,13 @@ Each `flounder confirm` writes `confirm_provenance.json` (frozen findings' finge
 
 Per-target memory lives at `<out>/history/<target>/memory.jsonl`. Notes carry material fingerprints and typed provenance (`finding`, `dead-end`, `resource`, and others); exact duplicates are suppressed. Audit kickoff recalls only the current material snapshot plus explicitly portable general learning, so stale source-specific conclusions cannot cross a Prepare boundary.
 
+Harness experiments are a maintainer capability, not an audit phase. The
+control plane omits their routes from `GET /api`, returns a maintainer-mode error
+for direct calls, and hides the Harness UI unless it was explicitly started with
+`flounder ui --maintainer`. A separate repository agent may then use Evaluation
+evidence to edit allowlisted Flounder source in a worktree and propose a PR; the
+product itself never rewrites source, merges, or deploys.
+
 The discovery backlog files are intentionally not findings and not a framework-owned search strategy. They are narrow affordances: the model records what it could not cover, what resource would unblock proof, or what adjacent scope should be audited later; the framework validates/parses them, saves them as artifacts, writes normalized project backlog rows to SQLite, classifies them for agent-owned actionability (`agent-runnable`, `agent-resource`, `agent-review`), surfaces counts through the stage funnel/API/dashboard, passes open rows into the next audit launch as project Next Actions, and keeps follow-up scopes pending for future coverage. A run should resolve or route open Next Actions before opening unrelated fresh coverage; the operator is asked only for explicit credentials, authorization, or unavailable external resources.
 
 Project history lives under `<out>/history/<target>/manifest.json` and records sanitized run metadata, findings, and materials. Paths must stay repository-relative or placeholder-based in public-facing artifacts.
@@ -342,13 +349,15 @@ Finding reads are SQL-backed rather than loading a fixed in-memory window. `GET 
 **Live streams.** `GET /api/stream` (SSE) pushes the project snapshot ~1/s (computed from aggregate queries, so it stays cheap with many findings). `GET /api/runs/:id/log` (SSE) streams a run's live **token-level** activity (thinking/output deltas + tool calls) from a per-run in-memory bus that the daemon feeds via batched activity POSTs, and `?format=json`/`?tail=N` also returns the durable `events.jsonl` tail so an agent can inspect terminal errors after the live stream is gone.
 
 Run-group and work-item resources add durable create/start/pause/cancel/retry/report
-operations to that same catalog. Harness-experiment resources add weakness mining,
-bounded proposal refinement, candidate attachment, deterministic paired scoring,
-and candidate-brief export. The Evaluations dashboard is a first-class client of
-those resources and keeps work-item lifecycle separate from evidence verdicts and
-experiment lifecycle separate from promotion decisions.
+operations to that same catalog. Only explicit maintainer mode adds
+Harness-experiment resources for weakness mining, bounded source proposal
+refinement, candidate attachment, deterministic paired scoring, and
+candidate-brief export; ordinary catalogs omit and reject those routes. The
+Evaluations dashboard is a first-class client of the enabled resources and keeps
+work-item lifecycle separate from evidence verdicts and experiment lifecycle
+separate from promotion decisions.
 
-**UI (`src/server/ui`).** A React/Vite TypeScript app compiled into `dist/server/public` and served by the Node control plane. It is **one client of the API above** — it can be ignored entirely in favor of the API. Project detail shows the **prepare -> map -> dig -> synthesize -> verify -> confirm -> report** workflow, live activity, coverage, run health, Next Actions, scopes, findings, real-target outcomes, and reports. The cross-project **Findings** view uses SQL-backed filters and shows one compact current-phase/blocker summary per finding; the report detail expands the full evidence lifecycle and focused retry. **Evaluations** has two compact working modes: Runs operates durable run groups, evidence contracts, scoring, attempts, retries, and regenerated reports; Harness compares baseline/candidate metrics, mined failure patterns, bounded proposals, and promotion decisions. Evaluation evidence remains separate from disclosure tracking. **Settings** holds provider profiles, daemon CRUD, and archived projects. UI state derivation lives in `src/server/ui/src/domain.ts`, API types/client code live in `src/server/ui/src/api.ts`, and every action remains a single REST call.
+**UI (`src/server/ui`).** A React/Vite TypeScript app compiled into `dist/server/public` and served by the Node control plane. It is **one client of the API above** — it can be ignored entirely in favor of the API. Project detail shows the **prepare -> map -> dig -> synthesize -> verify -> confirm -> report** workflow, live activity, coverage, run health, Next Actions, scopes, findings, real-target outcomes, and reports. The cross-project **Findings** view uses SQL-backed filters and shows one compact current-phase/blocker summary per finding; the report detail expands the full evidence lifecycle and focused retry. **Evaluations** normally operates durable run groups, evidence contracts, scoring, attempts, retries, and regenerated reports. Only explicit maintainer mode adds **Harness · Maintainer** for baseline/candidate metrics, mined failure patterns, bounded source proposals, and promotion decisions. Evaluation evidence remains separate from disclosure tracking. **Settings** holds provider profiles, daemon CRUD, and archived projects. UI state derivation lives in `src/server/ui/src/domain.ts`, API types/client code live in `src/server/ui/src/api.ts`, and every action remains a single REST call.
 
 ## Runnable Gates
 

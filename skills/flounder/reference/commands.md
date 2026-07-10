@@ -32,6 +32,7 @@ provider, API, budget, output, and pi extension details.
 ```bash
 flounder ui                 # dashboard at http://127.0.0.1:4500 plus co-located daemon
 flounder ui --no-daemon     # control plane only
+flounder ui --maintainer    # explicitly enable maintainer-only Harness source-improvement surfaces
 flounder server daemon-token mint [name]
 flounder daemon start --server http://<server>:4500 --token <token>
 flounder daemon provider list
@@ -81,8 +82,8 @@ CLI naming convention:
 | `flounder group start <uuid\|name> [--parallel <n>]` | Start/resume bounded group work through the existing daemon queue |
 | `flounder group status\|pause\|cancel\|report <uuid\|name>` | Inspect/control group state or regenerate its persisted evidence report |
 | `flounder group retry <work-item-id>` | Retry a blocked item after setup repair while retaining immutable prior attempt evidence |
-| `flounder experiment create --name <name> --baseline <group> [--candidate <group>] --editable-file <paths...>` | Mine verifier-grounded failures and create a bounded harness candidate proposal |
-| `flounder experiment status\|attach\|proposal\|evaluate\|brief <uuid\|name>` | Inspect/refine a proposal, attach a paired candidate, apply the deterministic promotion gate, or export the candidate brief |
+| `flounder experiment create --name <name> --baseline <group> [--candidate <group>] --editable-file <paths...>` | Maintainer mode only: mine verifier-grounded failures and create a bounded Flounder source candidate proposal |
+| `flounder experiment status\|attach\|proposal\|evaluate\|brief <uuid\|name>` | Maintainer mode only: inspect/refine a proposal, attach a paired candidate, apply the deterministic promotion gate, or export the candidate brief |
 | `flounder history import-run --target <name> --run <dir>` | Import an existing run directory into tracked history |
 
 ## Materials
