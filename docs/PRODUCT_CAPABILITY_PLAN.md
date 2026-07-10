@@ -24,6 +24,9 @@ Implemented foundation:
   work items mapped onto the existing sealed `run` / `audit --verify` kernel;
 - CLI and self-describing API control plus reports regenerated from persisted
   results without rerunning model work;
+- an Evaluations dashboard with run-group search and filtering, group creation,
+  validated work-item entry, start/pause/cancel/retry controls, evidence-aware
+  scoring, attempt history, and persisted Markdown reports;
 - strict separation of lifecycle, security outcome, and benchmark acceptance;
   infrastructure failure is `blocked`, never a negative security result;
 - immutable per-dispatch attempt evidence plus blocked-only retry, healthy-run
@@ -32,7 +35,6 @@ Implemented foundation:
 
 Still planned:
 
-- dashboard run-group views;
 - model-generated capability-surface preparation (the current foundation
   accepts an explicit validated surface in a target bundle);
 - source-control history context and evidence-package export;
@@ -659,7 +661,7 @@ because the export profiles are product policy, not extension points.
 9. Add private evidence replay and public export checks.
 10. Add capability surface preparation.
 11. Add source-control history context.
-12. Add UI views after the API and store model are stable.
+12. Add UI views after the API and store model are stable. (Implemented.)
 
 This order builds only the generic substrate needed by multiple immediate
 features, then adds concrete features one at a time.
@@ -700,12 +702,11 @@ features, then adds concrete features one at a time.
 
 ### UI Tests
 
-Only after UI implementation:
-
 - run-group list and detail views
-- item status filters
-- blocker grouping
-- report links
+- item and group lifecycle controls
+- blocker visibility and blocked-only retry
+- persisted report access
+- scoring math for positive, control, blocked, and invalid cases
 - no conflation of lifecycle state and security outcome
 
 ## Failure Modes To Cover

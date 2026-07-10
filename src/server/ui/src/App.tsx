@@ -20,6 +20,7 @@ import {
   type ScopeRow,
 } from "./api";
 import { Button, Card, Counter, IconButton, Modal, StateBadge, StatusBadge, useDialogFocus } from "./components";
+import { EvaluationsWorkspace } from "./EvaluationsView";
 import {
   activeFindings,
   bugBountyEngagementLabel,
@@ -73,7 +74,7 @@ import { Icon, type IconName } from "./icons";
 
 const DEFAULT_OPENAI_CODEX_MODEL = "gpt-5.6-sol";
 
-type View = "projects" | "findings" | "settings";
+type View = "projects" | "evaluations" | "findings" | "settings";
 type SettingsPane = "providers" | "daemons" | "archived";
 type ProjectTab = "overview" | "next-actions" | "decisions" | "findings" | "scopes" | "runs" | "activity" | "setup";
 type ModalName = "new-project" | "run" | "edit-project" | "report" | "decision-report" | "run-log" | "artifact" | null;
@@ -94,6 +95,7 @@ const PROJECT_TABS: Array<{ id: ProjectTab; label: string }> = [
 interface RouteState {
   view: View;
   projectUuid?: string;
+  evaluationUuid?: string;
   settingsPane: SettingsPane;
 }
 
@@ -165,6 +167,9 @@ function readRoute(): RouteState {
   const pathname = window.location.pathname;
   const projectMatch = pathname.match(/^\/projects\/([^/]+)\/?$/);
   if (projectMatch) return { view: "projects", projectUuid: decodeURIComponent(projectMatch[1] ?? ""), settingsPane: "providers" };
+  const evaluationMatch = pathname.match(/^\/evaluations\/([^/]+)\/?$/);
+  if (evaluationMatch) return { view: "evaluations", evaluationUuid: decodeURIComponent(evaluationMatch[1] ?? ""), settingsPane: "providers" };
+  if (pathname === "/evaluations" || pathname.startsWith("/evaluations/")) return { view: "evaluations", settingsPane: "providers" };
   if (pathname === "/findings" || pathname.startsWith("/findings/")) return { view: "findings", settingsPane: "providers" };
   if (pathname === "/settings/archived" || pathname.startsWith("/settings/archived/")) return { view: "settings", settingsPane: "archived" };
   if (pathname === "/settings/daemons" || pathname.startsWith("/settings/daemons/")) return { view: "settings", settingsPane: "daemons" };
@@ -2102,7 +2107,7 @@ export function App() {
         localStorage.setItem("flounder-theme-explicit", "1");
         setTheme(theme === "dark" ? "light" : "dark");
       }} /> : null}
-      <div className={`app-shell view-${route.view}${route.projectUuid ? " has-project" : ""}`}>
+      <div className={`app-shell view-${route.view}${route.projectUuid ? " has-project" : ""}${route.evaluationUuid ? " has-evaluation" : ""}`}>
         {route.view === "projects" ? (
           <>
             <ProjectSidebar
@@ -2169,6 +2174,15 @@ export function App() {
               )}
             </main>
           </>
+        ) : null}
+        {route.view === "evaluations" ? (
+          <EvaluationsWorkspace
+            selectedUuid={route.evaluationUuid}
+            providers={providers}
+            daemons={daemons}
+            onSelect={(uuid) => go(uuid ? `/evaluations/${encodeURIComponent(uuid)}` : "/evaluations")}
+            onToast={(tone, message) => setToast({ tone, message })}
+          />
         ) : null}
         {route.view === "findings" ? (
           <GlobalFindingsView
@@ -2293,6 +2307,7 @@ function ShellHeader({ route, running, theme, onTheme, onCommands, onMenu }: { r
       <nav className="topnav desktop-nav" aria-label="Primary">
         <button className={route.view === "projects" ? "sel" : ""} onClick={() => go(route.projectUuid ? projectPath(route.projectUuid) : "/")}>Projects</button>
         <button className={route.view === "findings" ? "sel" : ""} onClick={() => go("/findings")}>Findings</button>
+        <button className={route.view === "evaluations" ? "sel" : ""} onClick={() => go(route.evaluationUuid ? `/evaluations/${encodeURIComponent(route.evaluationUuid)}` : "/evaluations")}>Evaluations</button>
       </nav>
       <div className="topbar-spacer" />
       {running > 0 ? <Counter live>{`${running} running`}</Counter> : null}
@@ -2320,6 +2335,7 @@ function MobileMenu({ route, running, theme, onClose, onTheme }: { route: RouteS
         {running > 0 ? <Counter live>{`${running} running`}</Counter> : null}
         <button className={route.view === "projects" ? "sel" : ""} onClick={() => navigate(route.projectUuid ? projectPath(route.projectUuid) : "/")}>Projects</button>
         <button className={route.view === "findings" ? "sel" : ""} onClick={() => navigate("/findings")}>Findings</button>
+        <button className={route.view === "evaluations" ? "sel" : ""} onClick={() => navigate(route.evaluationUuid ? `/evaluations/${encodeURIComponent(route.evaluationUuid)}` : "/evaluations")}>Evaluations</button>
         <button className={route.view === "settings" ? "sel" : ""} onClick={() => navigate("/settings")}>Settings</button>
         <button onClick={() => { onTheme(); onClose(); }}>{theme === "dark" ? "Light mode" : "Dark mode"}</button>
       </section>
@@ -6535,6 +6551,7 @@ function CommandPalette({ projects, currentProjectUuid, onClose, onNewProject, o
     const base = [
       { id: "new", label: "New project", meta: "create", run: onNewProject },
       { id: "findings", label: "Go to Findings", meta: "view", run: () => go("/findings") },
+      { id: "evaluations", label: "Go to Evaluations", meta: "view", run: () => go("/evaluations") },
       { id: "projects", label: "Go to Projects", meta: "view", run: () => go("/") },
       { id: "settings", label: "Settings", meta: "view", run: () => go("/settings") },
       { id: "providers", label: "Provider profiles", meta: "settings", run: () => go("/settings") },
