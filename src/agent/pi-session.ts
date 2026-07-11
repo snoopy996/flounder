@@ -282,6 +282,7 @@ export async function runAuditSession(input: {
   // assistantMessageEvent (from @earendil-works/pi-ai: thinking_delta / text_delta / *_end).
   let thinkingBuf = "";
   let textBuf = "";
+  let sessionError = "";
   const activityMeta = input.activityStreamId ? { streamId: input.activityStreamId } : {};
   const emitActivity = (event: { kind: string; delta?: string; tool?: string; step?: number }): void => {
     try { input.onActivity?.({ ...event, ...activityMeta }); } catch {}
@@ -299,6 +300,8 @@ export async function runAuditSession(input: {
     } else if (event.type === "tool_execution_end" && event.isError) {
       void input.logger.event("audit_tool_error", { tool: event.toolName, ...activityMeta });
     } else if (event.type === "turn_end") {
+      const error = assistantMessageError((event as { message?: unknown }).message);
+      if (error && !sessionError) sessionError = error;
       if (input.confirm) void checkpointConfirm();
       if (finalizing) {
         finalizeTurns += 1;
@@ -455,6 +458,16 @@ export async function runAuditSession(input: {
         return { steps, stoppedReason: "error" };
       }
       // budgetAborted: fall through to the forced finalize below
+    }
+    if (sessionError && !budgetAborted) {
+      await input.logger.event("audit_session_error", { error: sessionError.slice(0, 500) });
+      if (looksLikeAuthError(sessionError)) {
+        throw new Error(
+          `audit session could not authenticate provider "${input.cfg.provider}". Run \`flounder daemon provider login ${input.cfg.provider}\` on the daemon machine, or start the daemon with that provider's credentials in the environment. For an offline check, run with --mock-llm. Underlying: ${sessionError.slice(0, 300)}`,
+        );
+      }
+      steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: sessionError.slice(0, 500) });
+      return { steps, stoppedReason: "error" };
     }
     await finalizeIfEmpty();
     return { steps, stoppedReason: verifyMissingVerdict ? "error" : budgetAborted ? "step-budget" : "finished" };
@@ -1010,12 +1023,14 @@ export class SessionLlmClient implements LlmClient {
       sessionManager: SessionManager.inMemory(),
     });
     let text = "";
+    let providerError = "";
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "agent_end") {
-        const messages = (event as { messages?: Array<{ role?: string; content?: unknown }> }).messages ?? [];
+        const messages = (event as { messages?: Array<{ role?: string; content?: unknown; stopReason?: unknown; errorMessage?: unknown }> }).messages ?? [];
         for (let i = messages.length - 1; i >= 0; i -= 1) {
           if (messages[i]?.role === "assistant") {
             text = extractMessageText(messages[i]?.content);
+            providerError = assistantMessageError(messages[i]) ?? "";
             break;
           }
         }
@@ -1033,10 +1048,34 @@ export class SessionLlmClient implements LlmClient {
       unsubscribe();
       await shutdownSession(session);
     }
-    await this.logger?.call({ tag: input.tag, model: `${this.cfg.provider}/${modelName}`, system: input.system, user: input.user, response: text });
+    await this.logger?.call({
+      tag: input.tag,
+      model: `${this.cfg.provider}/${modelName}`,
+      system: input.system,
+      user: input.user,
+      response: text,
+      ...(providerError ? { meta: { error: providerError } } : {}),
+    });
+    if (providerError) {
+      if (looksLikeAuthError(providerError)) {
+        throw new Error(`session completion could not authenticate provider "${this.cfg.provider}". Run \`flounder daemon provider login ${this.cfg.provider}\` on the daemon machine, or start the daemon with that provider's credentials in the environment. Underlying: ${providerError.slice(0, 200)}`);
+      }
+      throw new Error(`session completion failed: ${providerError}`);
+    }
     if (text.trim().length === 0) throw new Error(`session completion returned no text: ${this.cfg.provider}/${modelName}`);
     return text;
   }
+}
+
+/** pi AgentSession resolves provider failures as assistant messages instead of
+ * rejecting prompt(). Preserve the upstream reason so quota/auth/transport
+ * failures do not collapse into a misleading empty-completion error. */
+export function assistantMessageError(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return undefined;
+  const row = message as { role?: unknown; stopReason?: unknown; errorMessage?: unknown };
+  if (row.role !== "assistant" || (row.stopReason !== "error" && row.stopReason !== "aborted")) return undefined;
+  if (typeof row.errorMessage === "string" && row.errorMessage.trim()) return row.errorMessage.trim();
+  return `provider returned stopReason=${String(row.stopReason)}`;
 }
 
 function extractMessageText(content: unknown): string {

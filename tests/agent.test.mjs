@@ -19,7 +19,7 @@ import { differentialNetworkForExploitRun, runDifferentialConfirmation } from ".
 import { runDischargeChallenge, runRefutation } from "../dist/agent/refutation.js";
 import { renderReportFileManifest } from "../dist/agent/report.js";
 import { stagePackageSource } from "../dist/agent/package-source.js";
-import { buildSessionPrompt, createIsolatedResourceLoader, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapCheckpointDirective, mapThinkingLevel, prepareCheckpointDirective, promptWithWallClockAbort, resolveFinalizePromptTimeoutMs, toolSchemas, withDetailedCodexReasoningSummary } from "../dist/agent/pi-session.js";
+import { assistantMessageError, buildSessionPrompt, createIsolatedResourceLoader, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapCheckpointDirective, mapThinkingLevel, prepareCheckpointDirective, promptWithWallClockAbort, resolveFinalizePromptTimeoutMs, toolSchemas, withDetailedCodexReasoningSummary } from "../dist/agent/pi-session.js";
 import { MockAuditLlmClient } from "../dist/llm/mock.js";
 import { RunLogger } from "../dist/trace/logger.js";
 import { renderDisclosure } from "../dist/reports/disclosure.js";
@@ -1758,6 +1758,18 @@ test("refutation reports model-call errors without manufacturing a verdict", asy
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("pi session provider failures preserve their upstream error message", () => {
+  assert.equal(
+    assistantMessageError({ role: "assistant", content: [], stopReason: "error", errorMessage: "usage limit reached; retry later" }),
+    "usage limit reached; retry later",
+  );
+  assert.equal(
+    assistantMessageError({ role: "assistant", content: [], stopReason: "aborted" }),
+    "provider returned stopReason=aborted",
+  );
+  assert.equal(assistantMessageError({ role: "assistant", content: [], stopReason: "stop" }), undefined);
 });
 
 test("forced finalize: a run that never writes findings.json still captures hypotheses", async () => {
