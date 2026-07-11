@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { startUiServer } from "../dist/server/app.js";
-import { ensureDaemonDirectories, loadVerifyArtifactReplay } from "../dist/server/daemon.js";
+import { daemonJobTerminalState, ensureDaemonDirectories, loadVerifyArtifactReplay } from "../dist/server/daemon.js";
 import { MetadataStore } from "../dist/db/store.js";
 
 const execFileAsync = promisify(execFile);
@@ -50,6 +50,13 @@ const j = (r) => r.json();
 const ui = (base, method, p, body) => fetch(base + p, { method, ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
 const asDaemon = (base, token, method, p, body) =>
   fetch(base + p, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+
+test("daemon: job terminal state reflects every persisted run phase", () => {
+  assert.equal(daemonJobTerminalState(["done"]), "done");
+  assert.equal(daemonJobTerminalState(["done", "error", "done"]), "error");
+  assert.equal(daemonJobTerminalState(["done", "killed"]), "canceled");
+  assert.equal(daemonJobTerminalState(["done"], true), "canceled");
+});
 
 test("daemon: startup creates the reported product home and workspace directories", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "flounder-daemon-dirs-"));
