@@ -2373,6 +2373,9 @@ test("verify mode isolates generated PoC files between candidates", async () => 
     assert.match(markerReads[0].observation, /no authorized source.*"tests\/verify-marker\.poc\.test\.js"/);
     assert.ok((await stat(path.join(runDir, "audit", "verify-1", "tests", "verify-marker.poc.test.js"))).isFile());
     await assert.rejects(stat(path.join(runDir, "audit", "verify-2", "tests", "verify-marker.poc.test.js")), /ENOENT/);
+    const events = (await readFile(path.join(runDir, "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const verifyStreams = new Set(events.filter((event) => event.streamId?.startsWith("verify-")).map((event) => event.streamId));
+    assert.deepEqual([...verifyStreams].sort(), ["verify-1", "verify-2"], "concurrent verify activity remains independently selectable in the UI");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

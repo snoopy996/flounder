@@ -313,9 +313,9 @@ export async function runAudit(
       verifySession.baselineFiles = await listWorkspaceFiles(verifyWorkspace.absolute);
       if (session.buildCacheDir) verifySession.buildCacheDir = session.buildCacheDir;
       await copyCorpusIntoWorkspace(verifyWorkspace, corpus);
-      const verifyCtx: ToolContext = { cfg: verifyCfg, source, corpus, memory, logger, session: verifySession };
+      const verifyCtx: ToolContext = { cfg: verifyCfg, source, corpus, memory, logger, session: verifySession, activityStreamId: verifyLabel };
       clearScratchFindings(verifySession);
-      const phase = await runPhase(verifyCfg, { mode: "verify", verifySeed: buildVerifySeed(finding), maxSteps: cfg.auditDigSteps }, { ctx: verifyCtx, cwd: verifyWorkspace.absolute });
+      const phase = await runPhase(verifyCfg, { mode: "verify", verifySeed: buildVerifySeed(finding), maxSteps: cfg.auditDigSteps }, { ctx: verifyCtx, cwd: verifyWorkspace.absolute, activityStreamId: verifyLabel });
       ingestFindingsFromScratch(verifySession);
       const normalizedVerdicts = normalizeVerifyVerdicts(verifySession.findings);
       verifySession.findings = normalizedVerdicts.findings;
