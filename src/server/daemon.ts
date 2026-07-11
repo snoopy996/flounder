@@ -80,10 +80,12 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     heartbeat();
     const spec: LaunchSpec = { ...job.spec, out };
     let tracker: RemoteTracker | undefined;
+    const trackers: RemoteTracker[] = [];
     let phaseStarts = 0;
     const sink = activitySink(() => tracker);
     const makeTracker = (cfg: AuditorConfig, runDir: string, kind: RunKind): RunTracker => {
       tracker = new RemoteTracker(base, headers, { jobId: job.id, project: job.project, kind, runDir, provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, budgets: cfg.auditVerify ? { ...configSnapshot(cfg), verify: true, ...(cfg.auditVerifyFromStart ? { verifyFromStart: true } : {}) } : configSnapshot(cfg), additional: phaseStarts > 0 });
+      trackers.push(tracker);
       phaseStarts += 1;
       return tracker;
     };
@@ -143,7 +145,11 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
         }
       }
       await flushTracker();
-      await post(base, headers, `/api/daemon/jobs/${job.id}/status`, { status: abort.signal.aborted ? "canceled" : "done" });
+      const terminal = daemonJobTerminalState(trackers.map((item) => item.terminalState()), abort.signal.aborted);
+      await post(base, headers, `/api/daemon/jobs/${job.id}/status`, {
+        status: terminal,
+        ...(terminal === "error" ? { error: trackers.find((item) => item.terminalState() === "error")?.errorSummary() ?? "one or more run phases finished with status error" } : {}),
+      });
     } catch (error) {
       await flushTracker();
       await post(base, headers, `/api/daemon/jobs/${job.id}/status`, { status: abort.signal.aborted ? "canceled" : "error", error: error instanceof Error ? error.message.slice(0, 500) : String(error) });
@@ -561,6 +567,8 @@ class RemoteTracker implements RunTracker {
   private chain: Promise<void>;
   private runId: number | undefined;
   private readonly targetName: string;
+  private finalStatus: RunStatus | undefined;
+  private latestHealth: RunHealth | undefined;
 
   constructor(
     private readonly base: string,
@@ -608,6 +616,7 @@ class RemoteTracker implements RunTracker {
   }
 
   health(health: RunHealth): void {
+    this.latestHealth = health;
     this.enqueue(() => (this.runId ? this.req("PATCH", `/api/daemon/runs/${this.runId}`, { health }) : Promise.resolve()));
   }
 
@@ -630,7 +639,18 @@ class RemoteTracker implements RunTracker {
   }
 
   finish(status: RunStatus, coverage?: Coverage, findingsTotal?: number): void {
+    this.finalStatus = status;
     this.enqueue(() => (this.runId ? this.req("PATCH", `/api/daemon/runs/${this.runId}`, { finish: { status, coverage, findingsTotal } }) : Promise.resolve()));
+  }
+
+  terminalState(): RunStatus | undefined {
+    return this.finalStatus;
+  }
+
+  errorSummary(): string | undefined {
+    if (this.finalStatus !== "error") return undefined;
+    const reason = this.latestHealth?.reasons.find((entry) => entry.trim());
+    return reason?.slice(0, 500) || "run phase finished with status error";
   }
 
   activity(events: Activity[]): void {
@@ -640,6 +660,15 @@ class RemoteTracker implements RunTracker {
   flush(): Promise<void> {
     return this.chain;
   }
+}
+
+export function daemonJobTerminalState(
+  runStatuses: Array<RunStatus | undefined>,
+  aborted = false,
+): "done" | "error" | "canceled" {
+  if (aborted || runStatuses.includes("killed")) return "canceled";
+  if (runStatuses.includes("error")) return "error";
+  return "done";
 }
 
 export function remoteFindingRows(findings: AgentFinding[], runDir: string, targetName: string): ReturnType<typeof toFindingRow>[] {
