@@ -94,6 +94,23 @@ export function verifyHasRequiredVerdict(session: ToolContext["session"]): boole
   return scratchHasFindings(session);
 }
 
+/** A deep-audit worker has completed its durable handoff once it persisted both
+ * the obligation ledger and a findings artifact (including an explicit empty
+ * findings array). A provider transport error after that boundary must remain
+ * visible in activity, but it must not turn the completed scope attempt into an
+ * infrastructure failure. Incomplete handoffs still fail closed. */
+export function digSessionHasDurableHandoff(input: {
+  deep: boolean;
+  synthesize: boolean;
+  hasScopeOutcome: boolean;
+  hasFindingsArtifact: boolean;
+}): boolean {
+  return input.deep
+    && !input.synthesize
+    && input.hasScopeOutcome
+    && input.hasFindingsArtifact;
+}
+
 export async function promptWithWallClockAbort(
   session: { prompt: (message: string) => Promise<unknown>; abort: () => unknown },
   prompt: string,
@@ -425,6 +442,25 @@ export async function runAuditSession(input: {
     await input.logger.event("audit_findings_finalize_done", { hasFindings: scratchHasFindings(input.ctx.session), hasArtifact: scratchHasFindingsArtifact(input.ctx.session) });
   };
 
+  const settleSessionError = async (message: string): Promise<SessionDriverResult> => {
+    steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: message.slice(0, 500) });
+    const durableHandoff = digSessionHasDurableHandoff({
+      deep: input.deep === true,
+      synthesize: input.synthesize !== undefined,
+      hasScopeOutcome: scratchHasScopeOutcome(input.ctx.session),
+      hasFindingsArtifact: scratchHasFindingsArtifact(input.ctx.session),
+    });
+    if (!durableHandoff) return { steps, stoppedReason: "error" };
+    await input.logger.event("audit_session_error_after_terminal_handoff", {
+      error: message.slice(0, 500),
+      phase: "dig",
+      hasScopeOutcome: true,
+      hasFindingsArtifact: true,
+      ...activityMeta,
+    });
+    return { steps, stoppedReason: "finished" };
+  };
+
   try {
     try {
       await session.prompt(buildSessionPrompt({
@@ -454,8 +490,7 @@ export async function runAuditSession(input: {
             `audit session could not authenticate provider "${input.cfg.provider}". Run \`flounder daemon provider login ${input.cfg.provider}\` on the daemon machine, or start the daemon with that provider's credentials in the environment. For an offline check, run with --mock-llm. Underlying: ${message.slice(0, 300)}`,
           );
         }
-        steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: message.slice(0, 500) });
-        return { steps, stoppedReason: "error" };
+        return await settleSessionError(message);
       }
       // budgetAborted: fall through to the forced finalize below
     }
@@ -466,8 +501,7 @@ export async function runAuditSession(input: {
           `audit session could not authenticate provider "${input.cfg.provider}". Run \`flounder daemon provider login ${input.cfg.provider}\` on the daemon machine, or start the daemon with that provider's credentials in the environment. For an offline check, run with --mock-llm. Underlying: ${sessionError.slice(0, 300)}`,
         );
       }
-      steps.push({ n: stepNo + 1, thought: "", tool: "(session-error)", args: {}, observation: sessionError.slice(0, 500) });
-      return { steps, stoppedReason: "error" };
+      return await settleSessionError(sessionError);
     }
     await finalizeIfEmpty();
     return { steps, stoppedReason: verifyMissingVerdict ? "error" : budgetAborted ? "step-budget" : "finished" };

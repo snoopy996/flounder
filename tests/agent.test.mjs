@@ -19,7 +19,7 @@ import { differentialNetworkForExploitRun, runDifferentialConfirmation } from ".
 import { runDischargeChallenge, runRefutation } from "../dist/agent/refutation.js";
 import { renderReportFileManifest } from "../dist/agent/report.js";
 import { stagePackageSource } from "../dist/agent/package-source.js";
-import { assistantMessageError, buildSessionPrompt, createIsolatedResourceLoader, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapCheckpointDirective, mapThinkingLevel, prepareCheckpointDirective, promptWithWallClockAbort, resolveFinalizePromptTimeoutMs, toolSchemas, withDetailedCodexReasoningSummary } from "../dist/agent/pi-session.js";
+import { assistantMessageError, buildSessionPrompt, createIsolatedResourceLoader, digSessionHasDurableHandoff, FINDINGS_FINALIZE_PROMPT, isPiSessionProvider, mapCheckpointDirective, mapThinkingLevel, prepareCheckpointDirective, promptWithWallClockAbort, resolveFinalizePromptTimeoutMs, toolSchemas, withDetailedCodexReasoningSummary } from "../dist/agent/pi-session.js";
 import { MockAuditLlmClient } from "../dist/llm/mock.js";
 import { RunLogger } from "../dist/trace/logger.js";
 import { renderDisclosure } from "../dist/reports/disclosure.js";
@@ -645,6 +645,39 @@ test("run health distinguishes blocked, shallow, and coverage-incomplete runs", 
   assert.equal(buildRunHealth({ ...base, infraErrors: 1 }).status, "infra-failed");
   assert.equal(verifyBatchStoppedReason("error", 7, 7), "finished");
   assert.equal(verifyBatchStoppedReason("error", 6, 7), "error");
+});
+
+test("deep sessions settle post-handoff transport errors only after both durable artifacts exist", () => {
+  assert.equal(digSessionHasDurableHandoff({
+    deep: true,
+    synthesize: false,
+    hasScopeOutcome: true,
+    hasFindingsArtifact: true,
+  }), true);
+  assert.equal(digSessionHasDurableHandoff({
+    deep: true,
+    synthesize: false,
+    hasScopeOutcome: false,
+    hasFindingsArtifact: true,
+  }), false);
+  assert.equal(digSessionHasDurableHandoff({
+    deep: true,
+    synthesize: false,
+    hasScopeOutcome: true,
+    hasFindingsArtifact: false,
+  }), false);
+  assert.equal(digSessionHasDurableHandoff({
+    deep: true,
+    synthesize: true,
+    hasScopeOutcome: true,
+    hasFindingsArtifact: true,
+  }), false);
+  assert.equal(digSessionHasDurableHandoff({
+    deep: false,
+    synthesize: false,
+    hasScopeOutcome: true,
+    hasFindingsArtifact: true,
+  }), false);
 });
 
 test("scope inventory merge appends novel scopes while preserving existing status", () => {
