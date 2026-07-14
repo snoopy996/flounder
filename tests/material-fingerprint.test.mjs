@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { preparedWorkspaceMaterialFingerprint } from "../dist/agent/acquire.js";
 import { loadSource } from "../dist/ingest/source.js";
 import { materialFingerprint, phaseInputFingerprint } from "../dist/util/material-fingerprint.js";
+import { preparedWorkspaceMaterialFingerprint, reconcileLegacyPreparedMaterialFingerprints } from "../dist/util/prepared-material-fingerprint.js";
 
 test("material fingerprints are traversal-order independent but content and namespace sensitive", () => {
   const sourceA = { path: "src/a.ts", kind: "source", content: "export const a = 1;" };
@@ -57,5 +57,39 @@ test("prepare and audit fingerprint the same staged workspace identically", asyn
     assert.equal(prepareFingerprint, auditFingerprint);
   } finally {
     await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("legacy prepared workspace fingerprints are backfilled only after exact verification", async () => {
+  const runDir = await mkdtemp(path.join(os.tmpdir(), "flounder-legacy-prepare-run-"));
+  const workspace = path.join(runDir, "prepare", "workspace");
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "Target.sol"), "contract Target {}\n");
+    const legacySource = await loadSource([workspace]);
+    const legacyFingerprint = materialFingerprint([
+      { label: "source", docs: legacySource },
+      { label: "build", docs: legacySource },
+      { label: "corpus", docs: [] },
+    ]);
+    const canonicalFingerprint = await preparedWorkspaceMaterialFingerprint(workspace, []);
+    assert.notEqual(legacyFingerprint, canonicalFingerprint);
+
+    const runs = [
+      { id: 1, project_id: 7, kind: "prepare", status: "done", run_dir: runDir, material_fingerprint: legacyFingerprint, started_at: "2026-01-01T00:00:00.000Z" },
+      { id: 2, project_id: 7, kind: "run", status: "done", run_dir: path.join(runDir, "audit"), material_fingerprint: canonicalFingerprint, started_at: "2026-01-01T00:01:00.000Z" },
+      { id: 3, project_id: 8, kind: "prepare", status: "done", run_dir: runDir, material_fingerprint: "sha256:not-legacy", started_at: "2026-01-01T00:00:00.000Z" },
+      { id: 4, project_id: 8, kind: "run", status: "done", run_dir: path.join(runDir, "other"), material_fingerprint: canonicalFingerprint, started_at: "2026-01-01T00:01:00.000Z" },
+    ];
+    const replacements = [];
+    const changed = await reconcileLegacyPreparedMaterialFingerprints(runs, (runId, expected, replacement) => {
+      replacements.push({ runId, expected, replacement });
+      return true;
+    });
+
+    assert.equal(changed, 1);
+    assert.deepEqual(replacements, [{ runId: 1, expected: legacyFingerprint, replacement: canonicalFingerprint }]);
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
   }
 });

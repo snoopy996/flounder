@@ -29,6 +29,7 @@ import { loadScopeInventory, saveScopeInventory } from "../agent/scope-store.js"
 import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
+import { reconcileLegacyPreparedMaterialFingerprints } from "../util/prepared-material-fingerprint.js";
 import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionReadinessWork } from "../util/submission-readiness.js";
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
 import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
@@ -750,6 +751,21 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
   ]);
   const artifactReconciled = reconcileSuccessfulArtifactRuns(store);
   if (artifactReconciled > 0) console.log(`[flounder ui] reconciled ${artifactReconciled} completed run artifact${artifactReconciled === 1 ? "" : "s"}`);
+  const materialFingerprintMigration = reconcileLegacyPreparedMaterialFingerprints(
+    store.listRuns(),
+    (runId, expected, replacement) => {
+      const current = store.getRun(runId);
+      if (stringValue(current?.material_fingerprint) !== expected) return false;
+      store.updateRunMaterialFingerprint(runId, replacement);
+      return true;
+    },
+  ).then((changed) => {
+    if (changed > 0) console.log(`[flounder ui] repaired ${changed} legacy prepared-material fingerprint${changed === 1 ? "" : "s"}`);
+    return changed;
+  }).catch((error) => {
+    console.warn(`[flounder ui] prepared-material fingerprint repair skipped: ${String(error instanceof Error ? error.message : error)}`);
+    return 0;
+  });
   const plane = new ControlPlane();
   reconcileTerminalRunGroupItems(store, plane);
   for (const group of store.listRunGroups(10_000, 0)) {
@@ -779,6 +795,7 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
       // .then(run) (not Promise.resolve(run())) so a SYNCHRONOUS throw in a handler becomes a
       // rejection we can turn into a 500 — never an uncaught exception that kills the server.
       Promise.resolve()
+        .then(() => materialFingerprintMigration)
         .then(() => r.handler({ req, res, params, url, store, plane, out, maintainerMode }))
         .catch((error) => {
           if (!res.headersSent) sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });

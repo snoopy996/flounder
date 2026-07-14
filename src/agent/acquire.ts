@@ -11,8 +11,7 @@ import { isPiSessionProvider, runAuditSession } from "./pi-session.js";
 import { buildTools, newSession, type AgentSession, type ToolContext } from "./tools.js";
 import { RunRecorder, type RunTrackerFactory } from "../db/record.js";
 import type { RunStatus } from "../db/store.js";
-import { loadCorpus, loadSource } from "../ingest/source.js";
-import { materialFingerprint } from "../util/material-fingerprint.js";
+import { preparedWorkspaceMaterialFingerprint } from "../util/prepared-material-fingerprint.js";
 
 // `flounder prepare` — the open-world ACQUISITION phase that runs BEFORE map. Given a clue
 // (a tx, an address, a project, a package, a repo, a link), it resolves the complete dependency
@@ -160,16 +159,6 @@ export async function runPrepare(
   }
 
   return { runDir: logger.runDir, workspaceDir: workspace.absolute, manifest: manifest ?? null, validation };
-}
-
-export async function preparedWorkspaceMaterialFingerprint(workspaceDir: string, corpusPaths: string[]): Promise<string> {
-  const preparedSource = await loadSource([workspaceDir], { publicRoot: workspaceDir });
-  const preparedCorpus = corpusPaths.length > 0 ? await loadCorpus(corpusPaths) : [];
-  return materialFingerprint([
-    { label: "source", docs: preparedSource },
-    { label: "build", docs: preparedSource },
-    { label: "corpus", docs: preparedCorpus },
-  ]);
 }
 
 export function prepareValidationBlockingIssues(validation: PrepareValidation): string[] {
