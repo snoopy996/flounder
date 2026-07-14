@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { preparedWorkspaceMaterialFingerprint } from "../dist/agent/acquire.js";
+import { loadSource } from "../dist/ingest/source.js";
 import { materialFingerprint, phaseInputFingerprint } from "../dist/util/material-fingerprint.js";
 
 test("material fingerprints are traversal-order independent but content and namespace sensitive", () => {
@@ -32,4 +37,25 @@ test("phase input fingerprints normalize object key order while preserving value
 
   assert.equal(first, reordered);
   assert.notEqual(first, changed);
+});
+
+test("prepare and audit fingerprint the same staged workspace identically", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "flounder-material-workspace-"));
+  try {
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "Target.sol"), "contract Target {}\n");
+
+    const prepareFingerprint = await preparedWorkspaceMaterialFingerprint(workspace, []);
+    const auditSource = await loadSource([workspace], { publicRoot: workspace });
+    const auditBuild = await loadSource([workspace], { publicRoot: workspace });
+    const auditFingerprint = materialFingerprint([
+      { label: "source", docs: auditSource },
+      { label: "build", docs: auditBuild },
+      { label: "corpus", docs: [] },
+    ]);
+
+    assert.equal(prepareFingerprint, auditFingerprint);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });

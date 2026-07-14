@@ -149,13 +149,7 @@ export async function runPrepare(
     blockingIssues: blockingIssues.length,
   });
 
-  const preparedSource = await loadSource([workspace.absolute]);
-  const preparedCorpus = stagedCfg.corpusPaths.length > 0 ? await loadCorpus(stagedCfg.corpusPaths) : [];
-  stagedCfg.materialFingerprint = materialFingerprint([
-    { label: "source", docs: preparedSource },
-    { label: "build", docs: preparedSource },
-    { label: "corpus", docs: preparedCorpus },
-  ]);
+  stagedCfg.materialFingerprint = await preparedWorkspaceMaterialFingerprint(workspace.absolute, stagedCfg.corpusPaths);
   recorder.materialFingerprint?.(stagedCfg.materialFingerprint);
 
   const finalStatus: RunStatus = options.signal?.aborted ? "killed" : manifest !== undefined && blockingIssues.length === 0 ? "done" : "error";
@@ -166,6 +160,16 @@ export async function runPrepare(
   }
 
   return { runDir: logger.runDir, workspaceDir: workspace.absolute, manifest: manifest ?? null, validation };
+}
+
+export async function preparedWorkspaceMaterialFingerprint(workspaceDir: string, corpusPaths: string[]): Promise<string> {
+  const preparedSource = await loadSource([workspaceDir], { publicRoot: workspaceDir });
+  const preparedCorpus = corpusPaths.length > 0 ? await loadCorpus(corpusPaths) : [];
+  return materialFingerprint([
+    { label: "source", docs: preparedSource },
+    { label: "build", docs: preparedSource },
+    { label: "corpus", docs: preparedCorpus },
+  ]);
 }
 
 export function prepareValidationBlockingIssues(validation: PrepareValidation): string[] {
