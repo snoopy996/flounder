@@ -381,7 +381,9 @@ async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPla
     if (dirs.length === 0) return undefined;
     return dirs.sort((a, b) => a.split("/").length - b.split("/").length || a.length - b.length)[0];
   };
-  const hasIn = (dir: string, name: string): boolean => manifests.some((entry) => entry.dir === dir && entry.name === name);
+  const hasIn = (dir: string, name: string): boolean => manifests.some((entry) =>
+    normalizePlanDir(entry.dir) === normalizePlanDir(dir) && entry.name === name,
+  );
 
   // Order matters: dependency-install toolchains (npm/pnpm/yarn) run FIRST, because
   // a Solidity/Foundry project often imports its dependencies (e.g. @openzeppelin)
@@ -389,13 +391,12 @@ async function detectToolchains(workspaceAbsolute: string): Promise<ToolchainPla
   // mod download, then the compile toolchains (cargo, Scarb/Cairo, Blueprint/TON,
   // forge).
   //
-  // The package manager is chosen by the lockfile CO-LOCATED with the shallowest
-  // package.json (the project root), NOT by any lockfile anywhere in the tree: a
-  // vendored Foundry lib (e.g. lib/solmate) can ship its own yarn.lock, and a global
-  // match would wrongly run `yarn install` in that sub-dir instead of the root
-  // install that actually fetches the project's dependencies.
-  const pkgDir = shallowest((name) => name === "package.json");
-  if (pkgDir !== undefined) {
+  // Choose the package manager from the lockfile CO-LOCATED with each outermost
+  // package.json. A multi-project audit root can contain sibling buildable packages
+  // that each need their own dependency closure before their Foundry build. Nested
+  // package manifests remain covered by their nearest outer package, so a vendored
+  // Foundry lib cannot redirect installation into its own subdirectory.
+  for (const pkgDir of outermostManifestDirs(manifests, "package.json")) {
     if (hasIn(pkgDir, "pnpm-lock.yaml")) plans.push({ toolchain: "pnpm", ...cwd(pkgDir), commands: [["pnpm", "install", "--frozen-lockfile"]] });
     else if (hasIn(pkgDir, "yarn.lock")) plans.push({ toolchain: "yarn", ...cwd(pkgDir), commands: [["yarn", "install", "--frozen-lockfile"]] });
     else if (hasIn(pkgDir, "package-lock.json")) plans.push({ toolchain: "npm", ...cwd(pkgDir), commands: [["npm", "install", "--no-audit", "--no-fund"]] });

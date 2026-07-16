@@ -208,6 +208,52 @@ test("prepareWorkspaceToolchain limits eager warm-up to the selected scope build
   }
 });
 
+test("prepareWorkspaceToolchain installs dependencies for every outermost package root", async () => {
+  const workspace = await tempDir("flounder-prepare-multi-package-");
+  const binDir = await tempDir("flounder-prepare-bin-");
+  const cacheDir = await tempDir("flounder-prepare-cache-");
+  const logPath = path.join(workspace, "tools.log");
+  const oldPath = process.env.PATH;
+  try {
+    for (const project of ["aqua", "swap-vm"]) {
+      const projectDir = path.join(workspace, "sources", project);
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(path.join(projectDir, "package.json"), `{\"name\":\"${project}\"}\n`);
+      await writeFile(path.join(projectDir, "yarn.lock"), "# yarn lockfile v1\n");
+      await writeFile(path.join(projectDir, "foundry.toml"), "[profile.default]\nsrc = \"src\"\n");
+    }
+    await writeFakeTool(binDir, "yarn", logPath);
+    await writeFakeTool(binDir, "forge", logPath);
+    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+
+    const cfg = defaultConfig();
+    cfg.sandboxBackend = "host";
+    cfg.sandboxAllowHostFallback = true;
+    cfg.auditPrepareTimeoutMs = 10_000;
+    cfg.reproductionMaxLogBytes = 4000;
+    cfg.sourcePaths = [workspace];
+
+    const report = await prepareWorkspaceToolchain({
+      workspace: { absolute: workspace, relative: "workspace" },
+      cfg,
+      logger: logger(),
+      cacheDir,
+    });
+
+    assert.deepEqual(report.results.map((result) => [result.toolchain, result.command, result.cwd, result.ok]), [
+      ["yarn", "yarn install --frozen-lockfile", "sources/aqua", true],
+      ["yarn", "yarn install --frozen-lockfile", "sources/swap-vm", true],
+      ["forge", "forge build", "sources/aqua", true],
+      ["forge", "forge build", "sources/swap-vm", true],
+    ]);
+  } finally {
+    process.env.PATH = oldPath;
+    await rm(workspace, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
 test("prepareWorkspaceToolchain does not report installer progress as an actual tool version", async () => {
   const workspace = await tempDir("flounder-prepare-version-progress-");
   const binDir = await tempDir("flounder-prepare-bin-");
