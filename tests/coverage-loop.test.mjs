@@ -14,6 +14,7 @@ import {
   nextScopeOutcomeSample,
   readScratchScopeOutcome,
   scopeOutcomeNeedsAnotherSample,
+  scopeOutcomeNeedsCoverage,
 } from "../dist/agent/scope-outcomes.js";
 import { newSession } from "../dist/agent/tools.js";
 
@@ -85,6 +86,24 @@ test("scope outcome separates coverage evidence from findings and fails closed o
   assert.equal(blocked.outcome.coverageComplete, false);
   assert.match(blocked.errors.join(" "), /cannot be true while blockers remain/);
   assert.equal(scopeOutcomeNeedsAnotherSample([blocked.outcome]), false, "sampling cannot repair an external resource blocker");
+});
+
+test("resolved region coverage does not stay pending only because synthesis has unresolved edges", () => {
+  const outcome = {
+    scopeId: "S1",
+    sample: 1,
+    coverageComplete: true,
+    obligations: [
+      { id: "O1", statement: "the missing binding is established", status: "unmet", evidence: "confirmed by cmd1" },
+    ],
+    compositionEdges: [
+      { id: "E1", kind: "binding", description: "the input reaches the sink without the required binding", status: "unresolved", from: "input", to: "sink" },
+    ],
+    blockers: [],
+  };
+
+  assert.equal(scopeOutcomeNeedsAnotherSample([outcome]), true, "an adaptive sample may still investigate the unresolved edge");
+  assert.equal(scopeOutcomeNeedsCoverage(outcome), false, "the persisted region handoff is complete even though synthesis still has a lead");
 });
 
 test("invalid composition status cannot be normalized into observed evidence", () => {

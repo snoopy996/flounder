@@ -2237,6 +2237,40 @@ test("resuming requeues legacy audited scopes whose durable outcome is incomplet
   }
 });
 
+test("resuming reconciles complete durable outcomes that a legacy release left pending", async () => {
+  const dir = await tempDir();
+  try {
+    const cfg = defaultConfig();
+    cfg.targetName = "legacy-complete-coverage";
+    cfg.sourcePaths = [fixtures];
+    cfg.outputDir = path.join(dir, "runs");
+    cfg.auditDeep = true;
+    cfg.auditMaxScopes = 1;
+    cfg.auditDigSamples = 1;
+    cfg.auditDigMaxSamples = 1;
+    cfg.auditSynthesize = false;
+    cfg.auditChallengeDischarges = false;
+    cfg.auditRefute = false;
+
+    await runAudit(cfg, { llm: new OutcomeOnlySynthesisLlmClient() });
+    const historyDir = path.join(cfg.outputDir, "history", cfg.targetName);
+    const scopesPath = path.join(historyDir, "scopes.json");
+    const legacyScopes = JSON.parse(await readFile(scopesPath, "utf8"));
+    legacyScopes.find((scope) => scope.id === "S1").status = "pending";
+    await writeFile(scopesPath, JSON.stringify(legacyScopes), "utf8");
+
+    cfg.auditMaxScopes = 0;
+    const { runDir, scopeCoverage } = await runAudit(cfg, { llm: new OutcomeOnlySynthesisLlmClient() });
+    assert.deepEqual(scopeCoverage, { total: 2, audited: 1, pending: 1, deferred: 0 });
+    const repairedScopes = JSON.parse(await readFile(scopesPath, "utf8"));
+    assert.equal(repairedScopes.find((scope) => scope.id === "S1").status, "audited");
+    const events = (await readFile(path.join(runDir, "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(events.find((event) => event.kind === "audit_scope_coverage_reconciled")?.scopes, ["S1"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("pinned region audits persist the same scope outcome contract", async () => {
   const dir = await tempDir();
   try {

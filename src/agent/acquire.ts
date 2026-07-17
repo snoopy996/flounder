@@ -11,8 +11,7 @@ import { isPiSessionProvider, runAuditSession } from "./pi-session.js";
 import { buildTools, newSession, type AgentSession, type ToolContext } from "./tools.js";
 import { RunRecorder, type RunTrackerFactory } from "../db/record.js";
 import type { RunStatus } from "../db/store.js";
-import { loadCorpus, loadSource } from "../ingest/source.js";
-import { materialFingerprint } from "../util/material-fingerprint.js";
+import { preparedWorkspaceMaterialFingerprint } from "../util/prepared-material-fingerprint.js";
 
 // `flounder prepare` — the open-world ACQUISITION phase that runs BEFORE map. Given a clue
 // (a tx, an address, a project, a package, a repo, a link), it resolves the complete dependency
@@ -149,13 +148,9 @@ export async function runPrepare(
     blockingIssues: blockingIssues.length,
   });
 
-  const preparedSource = await loadSource([workspace.absolute]);
-  const preparedCorpus = stagedCfg.corpusPaths.length > 0 ? await loadCorpus(stagedCfg.corpusPaths) : [];
-  stagedCfg.materialFingerprint = materialFingerprint([
-    { label: "source", docs: preparedSource },
-    { label: "build", docs: preparedSource },
-    { label: "corpus", docs: preparedCorpus },
-  ]);
+  // The staged workspace is the complete handoff to sealed audit. Project-local
+  // corpus inputs are acquisition hints, not additional post-Prepare material.
+  stagedCfg.materialFingerprint = await preparedWorkspaceMaterialFingerprint(workspace.absolute, []);
   recorder.materialFingerprint?.(stagedCfg.materialFingerprint);
 
   const finalStatus: RunStatus = options.signal?.aborted ? "killed" : manifest !== undefined && blockingIssues.length === 0 ? "done" : "error";

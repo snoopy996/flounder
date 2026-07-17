@@ -669,7 +669,10 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "cargo") return ["build", "fetch", "check", "generate-lockfile", "vendor", "update"].includes(cargoSubcommand(args) ?? "");
   if (name === "go") return first === "build" || first === "mod"; // go build / go mod download|tidy|vendor
   if (name === "npm") return ["install", "ci", "i"].includes(first ?? "");
-  if (name === "pnpm" || name === "yarn" || name === "bun") return ["install", "i", "ci"].includes(first ?? "") || (name === "yarn" && args.length === 0) || (first === "blueprint" && second === "build");
+  if (name === "pnpm" || name === "yarn" || name === "bun") return ["install", "i", "ci"].includes(first ?? "")
+    || (name === "yarn" && args.length === 0)
+    || (first === "hardhat" && (second === "compile" || second === "typechain"))
+    || (first === "blueprint" && second === "build");
   if (name === "pip" || name === "pip3") return first === "install";
   if (name === "python" || name === "python3") {
     return first === "-m" && (
@@ -678,7 +681,11 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
       (second === "pip" && lower[2] === "install")
     );
   }
-  if (name === "forge") return ["build", "install", "compile", "update"].includes(first ?? "");
+  // `forge inspect` is compiler-backed, read-only introspection (for example,
+  // storage-layout or ABI output). Treat it like a build command so sealed
+  // audits run it against the prepared build workspace with dependencies
+  // available, while it remains ineligible for executable confirmation.
+  if (name === "forge") return ["build", "install", "compile", "update", "inspect"].includes(first ?? "");
   if (name === "cmake") return isAllowedCmakeBuild(args);
   if (name === "ninja") return true;
   if (name === "make" || name === "gmake") return true;
@@ -689,7 +696,7 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "scarb") return ["build", "fetch", "check", "metadata"].includes(scarbSubcommand(args) ?? "");
   if (name === "blueprint") return first === "build";
   if (name === "func-js" || name === "tolk-js" || name === "tact") return args.length > 0 && !isToolInfoArgs(args);
-  if (name === "npx") return (first === "hardhat" && second === "compile") || (first === "blueprint" && second === "build");
+  if (name === "npx") return (first === "hardhat" && (second === "compile" || second === "typechain")) || (first === "blueprint" && second === "build");
   return false;
 }
 

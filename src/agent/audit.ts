@@ -465,14 +465,27 @@ export async function runAudit(
     // incomplete. Requeue generally from durable evidence, never a local id list.
     const latestOutcomesByScope = new Map(latestScopeOutcomes(scopeOutcomes).map((outcome) => [outcome.scopeId, outcome]));
     const requeuedIncompleteScopes: string[] = [];
+    const reconciledCompletedScopes: string[] = [];
     for (const scope of scopeInventory) {
       const outcome = latestOutcomesByScope.get(scope.id);
-      if (scope.status !== "audited" || !outcome || !scopeOutcomeNeedsCoverage(outcome)) continue;
-      scope.status = "pending";
-      requeuedIncompleteScopes.push(scope.id);
+      if (!outcome) continue;
+      const needsCoverage = scopeOutcomeNeedsCoverage(outcome);
+      if (scope.status === "audited" && needsCoverage) {
+        scope.status = "pending";
+        requeuedIncompleteScopes.push(scope.id);
+      } else if (scope.status === "pending" && !needsCoverage) {
+        // Releases that treated unresolved composition leads as incomplete left
+        // fully handed-off scopes pending. Repair those checkpoints from the
+        // durable outcome so resume advances instead of repeating the same DIG.
+        scope.status = "audited";
+        reconciledCompletedScopes.push(scope.id);
+      }
     }
     if (requeuedIncompleteScopes.length > 0) {
       await logger.event("audit_scope_coverage_requeued", { scopes: requeuedIncompleteScopes });
+    }
+    if (reconciledCompletedScopes.length > 0) {
+      await logger.event("audit_scope_coverage_reconciled", { scopes: reconciledCompletedScopes });
     }
     if (!resuming && !cfg.auditAppendMap) {
       await clearCurrentMaterialScopeOutcomes(inventoryDir, cfg.materialFingerprint);

@@ -29,6 +29,7 @@ import { loadScopeInventory, saveScopeInventory } from "../agent/scope-store.js"
 import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
+import { reconcileLegacyPreparedMaterialFingerprints } from "../util/prepared-material-fingerprint.js";
 import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionReadinessWork } from "../util/submission-readiness.js";
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
 import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
@@ -750,6 +751,21 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
   ]);
   const artifactReconciled = reconcileSuccessfulArtifactRuns(store);
   if (artifactReconciled > 0) console.log(`[flounder ui] reconciled ${artifactReconciled} completed run artifact${artifactReconciled === 1 ? "" : "s"}`);
+  const materialFingerprintMigration = reconcileLegacyPreparedMaterialFingerprints(
+    store.listRuns(),
+    (runId, expected, replacement) => {
+      const current = store.getRun(runId);
+      if (stringValue(current?.material_fingerprint) !== expected) return false;
+      store.updateRunMaterialFingerprint(runId, replacement);
+      return true;
+    },
+  ).then((changed) => {
+    if (changed > 0) console.log(`[flounder ui] repaired ${changed} legacy prepared-material fingerprint${changed === 1 ? "" : "s"}`);
+    return changed;
+  }).catch((error) => {
+    console.warn(`[flounder ui] prepared-material fingerprint repair skipped: ${String(error instanceof Error ? error.message : error)}`);
+    return 0;
+  });
   const plane = new ControlPlane();
   reconcileTerminalRunGroupItems(store, plane);
   for (const group of store.listRunGroups(10_000, 0)) {
@@ -779,6 +795,7 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
       // .then(run) (not Promise.resolve(run())) so a SYNCHRONOUS throw in a handler becomes a
       // rejection we can turn into a 500 — never an uncaught exception that kills the server.
       Promise.resolve()
+        .then(() => materialFingerprintMigration)
         .then(() => r.handler({ req, res, params, url, store, plane, out, maintainerMode }))
         .catch((error) => {
           if (!res.headersSent) sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
@@ -2425,19 +2442,19 @@ async function runLaunch(c: Ctx): Promise<void> {
     || stringValue(materialBoundary?.material_fingerprint);
   if (currentMaterialFingerprint) spec.materialFingerprint = currentMaterialFingerprint;
   if (spec.verb === "run") {
-    if (spec.sourcePaths.length > 0) {
+    const prepared = latestPreparedWorkspace(runs);
+    if (prepared && !runBodyHasMaterialOverride(body)) {
+      applyProjectPrepareDefaults(spec, project, runs);
+      spec.pipeline = true;
+      applyPreparedWorkspaceToSpec(spec, prepared);
+    } else if (spec.sourcePaths.length > 0) {
       applyProjectSourceDefaults(spec, project);
       if (!spec.pipeline) spec.pipeline = false;
     } else {
       applyProjectPrepareDefaults(spec, project, runs);
       spec.pipeline = true;
-      const prepared = latestPreparedWorkspace(runs);
       if (prepared) {
-        spec.dir = undefined;
-        spec.sourcePaths = [prepared.workspaceDir];
-        spec.buildRoot = prepared.workspaceDir;
-        spec.clue = undefined;
-        if (!spec.scopeNote && prepared.scopeNote) spec.scopeNote = prepared.scopeNote;
+        applyPreparedWorkspaceToSpec(spec, prepared);
       } else if (spec.clue && spec.sourcePaths.length === 0) {
         resetPipelineCoverageForUnknownInventory(spec);
       }
@@ -2671,6 +2688,11 @@ function runBodyHasConfigOverride(body: Record<string, unknown>, key: string): b
   const overrides = objectValue(body.overrides);
   const config = objectValue(overrides?.config);
   return config?.[key] !== undefined;
+}
+
+function runBodyHasMaterialOverride(body: Record<string, unknown>): boolean {
+  const overrides = objectValue(body.overrides);
+  return overrides?.sourcePaths !== undefined || overrides?.buildRoot !== undefined || overrides?.corpusPaths !== undefined;
 }
 
 function resumeInterruptedCoverageBatch(spec: LaunchSpec, progress: Coverage, runs: Array<Record<string, unknown>>): void {
@@ -3244,11 +3266,17 @@ function applyPreparedWorkspaceIfNeeded(spec: LaunchSpec, runs: Array<Record<str
         : "this project has no source paths and no prepared workspace yet. Run Prepare first, or configure source paths.",
     };
   }
+  applyPreparedWorkspaceToSpec(spec, prepared);
+  return { ok: true };
+}
+
+function applyPreparedWorkspaceToSpec(spec: LaunchSpec, prepared: { workspaceDir: string; manifestPath: string; scopeNote?: string }): void {
   spec.dir = undefined;
   spec.sourcePaths = [prepared.workspaceDir];
   spec.buildRoot = prepared.workspaceDir;
+  spec.corpusPaths = [];
+  spec.clue = undefined;
   if (!spec.scopeNote && prepared.scopeNote) spec.scopeNote = prepared.scopeNote;
-  return { ok: true };
 }
 
 function latestPreparedWorkspace(runs: Array<Record<string, unknown>>): { workspaceDir: string; manifestPath: string; scopeNote?: string } | undefined {

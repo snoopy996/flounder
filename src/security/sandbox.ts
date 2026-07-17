@@ -1355,6 +1355,7 @@ function sandboxEnv(workspace: string, tmpDir: string, cacheDir?: string, comman
     GOCACHE: path.join(pkgCache, "go-build-cache"),
     GOMODCACHE: path.join(pkgCache, "go-mod-cache"),
     NPM_CONFIG_CACHE: path.join(pkgCache, "npm-cache"),
+    YARN_GLOBAL_FOLDER: path.join(pkgCache, "yarn-berry"),
   };
   out.PATH = sandboxToolPath(process.env.PATH);
   if (network === "enabled") {

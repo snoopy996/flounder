@@ -152,11 +152,15 @@ export function nextScopeOutcomeSample(outcomes: ScopeOutcome[], scopeId: string
     .reduce((maximum, outcome) => Math.max(maximum, outcome.sample), 0) + 1;
 }
 
+/** Region coverage is incomplete only when the model says so or leaves an
+ * uncertain/blocked obligation. An unresolved composition edge remains useful
+ * input for adaptive sampling and synthesis, but may itself be the already
+ * established missing binding behind a finding; it must not force the same
+ * completed region to be re-audited forever. */
 export function scopeOutcomeNeedsCoverage(outcome: ScopeOutcome): boolean {
   return !outcome.coverageComplete
     || outcome.blockers.length > 0
-    || outcome.obligations.some((obligation) => obligation.status === "uncertain" || obligation.status === "blocked")
-    || outcome.compositionEdges.some((edge) => edge.status === "unresolved");
+    || outcome.obligations.some((obligation) => obligation.status === "uncertain" || obligation.status === "blocked");
 }
 
 export function mergeScopeOutcomes(existing: ScopeOutcome[], additions: ScopeOutcome[]): ScopeOutcome[] {

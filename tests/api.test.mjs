@@ -320,6 +320,71 @@ test("api: project run defaults leave map/dig turns unbounded and use standard s
   });
 });
 
+test("api: project run prefers the current prepared workspace over stored source paths", async () => {
+  await withServer(async (base, out) => {
+    const json = (r) => r.json();
+    const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await json(await post("/api/projects", {
+      name: "prepared-material-over-source-config",
+      sourcePaths: ["./contracts"],
+      buildRoot: ".",
+      corpusPaths: ["README.md"],
+      config: { prepareClue: "official deployed source and docs" },
+    }));
+    const runDir = path.join(out, "prepared-material-over-source-config-prepare");
+    const workspace = path.join(runDir, "prepare", "workspace");
+    await mkdir(path.join(workspace, "contracts"), { recursive: true });
+    await writeFile(path.join(workspace, "contracts", "Target.sol"), "contract Target {}\n");
+    await writeFile(
+      path.join(workspace, "prepare_manifest.json"),
+      JSON.stringify({
+        clue: "official deployed source and docs",
+        posture: "blind",
+        scope_declaration: "Prepared source snapshot only.",
+        real_target: {
+          requires_confirmation: false,
+          mode: "source-only",
+          ground_truth: [],
+          confirm_guidance: { required: false, not_required_reason: "source-only fixture" },
+        },
+        components: [],
+      }),
+    );
+
+    const store = MetadataStore.openForOutput(out);
+    try {
+      const prepareRun = store.startRun({ projectId: created.id, kind: "prepare", runDir, provider: "openai-codex", model: "gpt-5.5" });
+      store.finishRun(prepareRun, "done");
+    } finally {
+      store.close();
+    }
+
+    const launched = await json(await post(`/api/projects/${created.uuid}/runs`, { verb: "run" }));
+    assert.equal(launched.queued, true);
+    const job = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const spec = JSON.parse(job.spec_json);
+
+    assert.equal(spec.pipeline, true);
+    assert.equal(spec.dir, undefined);
+    assert.deepEqual(spec.sourcePaths, [workspace]);
+    assert.equal(spec.buildRoot, workspace);
+    assert.deepEqual(spec.corpusPaths, []);
+    assert.equal(spec.clue, undefined);
+
+    const explicit = await json(await post(`/api/projects/${created.uuid}/runs`, {
+      verb: "run",
+      overrides: { sourcePaths: ["./explicit"], buildRoot: "./explicit", corpusPaths: ["docs.md"] },
+    }));
+    assert.equal(explicit.queued, true);
+    const explicitJob = (await json(await fetch(base + "/api/jobs/" + explicit.jobId))).job;
+    const explicitSpec = JSON.parse(explicitJob.spec_json);
+    assert.equal(explicitSpec.pipeline, false);
+    assert.deepEqual(explicitSpec.sourcePaths, ["./explicit"]);
+    assert.equal(explicitSpec.buildRoot, "./explicit");
+    assert.deepEqual(explicitSpec.corpusPaths, ["docs.md"]);
+  });
+});
+
 test("api: explicit standard coverage leaves map/dig turns unbounded while capping the batch", async () => {
   await withServer(async (base) => {
     const json = (r) => r.json();
