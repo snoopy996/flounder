@@ -997,7 +997,7 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
       ], "synthesis");
       jobId = store.enqueueJob("pipeline-verify-worklist", { verb: "run", pipeline: true }, daemon.id);
       assert.equal(store.claimJob(daemon.id)?.id, jobId);
-      store.setJobRun(jobId, runId);
+      assert.equal(store.getJob(jobId)?.status, "dispatched", "settle-only pipelines request work before their first phase creates a run");
       suspectedId = Number(store.listFindings(created.id)[0].id);
       store.upsertFindings(created.id, runId, [
         {

@@ -5025,7 +5025,9 @@ async function daemonPipelineWorklist(c: Ctx): Promise<void> {
   if (typeof body.jobId !== "number") return sendJson(c.res, 400, { error: "jobId is required" });
   const job = authorizedDaemonJob(c, daemon, body.jobId);
   if (!job) return;
-  if (job.status !== "running") return sendJson(c.res, 409, { error: "pipeline worklists require a running job" });
+  if (job.status !== "dispatched" && job.status !== "running") {
+    return sendJson(c.res, 409, { error: "pipeline worklists require a dispatched or running job" });
+  }
   const projectName = typeof body.project === "string" ? body.project.trim() : "";
   if (!projectName) return sendJson(c.res, 400, { error: "project is required" });
   if (projectName !== String(job.project)) return sendJson(c.res, 403, { error: "pipeline project does not match the claimed job" });
