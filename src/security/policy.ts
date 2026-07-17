@@ -671,7 +671,7 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "npm") return ["install", "ci", "i"].includes(first ?? "");
   if (name === "pnpm" || name === "yarn" || name === "bun") return ["install", "i", "ci"].includes(first ?? "")
     || (name === "yarn" && args.length === 0)
-    || (first === "hardhat" && second === "compile")
+    || (first === "hardhat" && (second === "compile" || second === "typechain"))
     || (first === "blueprint" && second === "build");
   if (name === "pip" || name === "pip3") return first === "install";
   if (name === "python" || name === "python3") {
@@ -696,7 +696,7 @@ function isAllowedBuildCommand(program: string, args: string[]): boolean {
   if (name === "scarb") return ["build", "fetch", "check", "metadata"].includes(scarbSubcommand(args) ?? "");
   if (name === "blueprint") return first === "build";
   if (name === "func-js" || name === "tolk-js" || name === "tact") return args.length > 0 && !isToolInfoArgs(args);
-  if (name === "npx") return (first === "hardhat" && second === "compile") || (first === "blueprint" && second === "build");
+  if (name === "npx") return (first === "hardhat" && (second === "compile" || second === "typechain")) || (first === "blueprint" && second === "build");
   return false;
 }
 
