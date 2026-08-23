@@ -26,6 +26,7 @@ import { THINKING_LEVELS } from "../config.js";
 import { projectHistoryDir } from "../trace/history.js";
 import { positiveIntegerId } from "../util/ids.js";
 import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
+import { SharedSnapshotStream } from "./shared-snapshot-stream.js";
 import { loadScopeInventory, saveScopeInventory } from "../agent/scope-store.js";
 import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
@@ -5780,20 +5781,33 @@ function runHasDisplayWeight(run: Record<string, unknown>): boolean {
   return false;
 }
 
+type LiveSnapshot = {
+  projects: Array<Record<string, unknown>>;
+  active: Array<Record<string, unknown>>;
+};
+
+const projectSnapshotStreams = new WeakMap<MetadataStore, SharedSnapshotStream<LiveSnapshot>>();
+
+function sharedProjectSnapshotStream(store: MetadataStore, plane: ControlPlane): SharedSnapshotStream<LiveSnapshot> {
+  const existing = projectSnapshotStreams.get(store);
+  if (existing) return existing;
+  const stream = new SharedSnapshotStream(() => {
+    reconcileLostExecutorJobs(store, plane);
+    return {
+      projects: projectSnapshots(store, { limit: PROJECT_STREAM_LIMIT }),
+      active: activeRuns(store, plane),
+    };
+  }, 1200);
+  projectSnapshotStreams.set(store, stream);
+  return stream;
+}
+
 function streamSnapshots(res: ServerResponse, store: MetadataStore, plane: ControlPlane): void {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  const timer = setInterval(tick, 1200);
-  res.on("close", () => clearInterval(timer));
-  tick();
-  // A throw here (closed socket, or a transient store read error) must not crash the server.
-  function tick(): void {
-    try {
-      reconcileLostExecutorJobs(store, plane);
-      res.write(`data: ${JSON.stringify({ projects: projectSnapshots(store, { limit: PROJECT_STREAM_LIMIT }), active: activeRuns(store, plane) })}\n\n`);
-    } catch {
-      clearInterval(timer);
-    }
-  }
+  const unsubscribe = sharedProjectSnapshotStream(store, plane).subscribe((snapshot) => {
+    res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+  });
+  res.on("close", unsubscribe);
 }
 
 // Build a launch spec from the project's stored materials/config + the request body
