@@ -29,6 +29,7 @@ export const DEFAULT_SANDBOX_IMAGE = "flounder-sandbox:latest";
 export const DEFAULT_SANDBOX_BUILD_MIN_FREE_DISK_MB = 2048;
 const APPLE_CONTAINER_SEALED_NETWORK = "flounder-sealed";
 const APPLE_CONTAINER_NETWORK_DNS = ["1.1.1.1", "8.8.8.8"] as const;
+const APPLE_CONTAINER_CLEANUP_GRACE_MS = 750;
 const CACHE_TEMP_PREFIX = ".flounder-cache-";
 const APPLE_CONTAINER_DEFAULT_MEMORY_CAP_MB = 8192;
 const APPLE_CONTAINER_DEFAULT_MEMORY_FLOOR_MB = 1024;
@@ -620,6 +621,15 @@ async function runAppleContainerSandboxProcess(input: ProcessRunInput): Promise<
     if (value !== undefined) containerArgs.push("--env", `${key}=${value}`);
   }
   containerArgs.push(input.options.image, input.command.program, ...input.command.args);
+  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  let cleanupPromise: ReturnType<typeof forceRemoveAppleContainer> | undefined;
+  const scheduleCleanup = (): void => {
+    if (cleanupTimer || cleanupPromise) return;
+    cleanupTimer = setTimeout(() => {
+      cleanupTimer = undefined;
+      cleanupPromise = forceRemoveAppleContainer(containerName);
+    }, APPLE_CONTAINER_CLEANUP_GRACE_MS);
+  };
   const result = await runSpawnedProcess({
     program: "container",
     args: containerArgs,
@@ -627,14 +637,20 @@ async function runAppleContainerSandboxProcess(input: ProcessRunInput): Promise<
     env: containerClientEnv(),
     timeoutMs: input.command.timeoutMs ?? 120_000,
     maxLogBytes: input.maxLogBytes,
+    onTimeout: scheduleCleanup,
+    onAbort: scheduleCleanup,
     ...(input.signal ? { signal: input.signal } : {}),
   });
   if (result.timedOut || result.aborted) {
-    // The Apple CLI may still be unwinding its `container run` XPC session when
-    // the timeout fires. Deleting concurrently races that session and can leave
-    // the per-container VM running indefinitely, so wait for the client process
-    // to exit before retrying and observing cleanup.
-    const cleanup = await forceRemoveAppleContainer(containerName);
+    // Give the Apple CLI a bounded opportunity to unwind its `container run`
+    // XPC session. Some releases fail to forward SIGTERM and never exit, so a
+    // delayed force-delete must also be able to release the waiting client.
+    if (cleanupTimer) {
+      clearTimeout(cleanupTimer);
+      cleanupTimer = undefined;
+    }
+    cleanupPromise ??= forceRemoveAppleContainer(containerName);
+    const cleanup = await cleanupPromise;
     if (!cleanup.ok) {
       result.stderr = appendLimited(
         result.stderr,
