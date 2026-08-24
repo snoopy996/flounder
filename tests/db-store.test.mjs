@@ -22,6 +22,14 @@ async function tempDbPath() {
   return { dir, dbPath: path.join(dir, "flounder.db") };
 }
 
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "The attacker reaches all preconditions with untrusted permissions." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed unauthorized effect." },
+    { id: "impact_bounds", status: "pass", evidence: "Recovery, revocation, timing, and reversibility controls are included in the impact." },
+  ];
+}
+
 test("store: pre-release evaluation tables upgrade before current indexes are created", async () => {
   const { dbPath } = await tempDbPath();
   const legacy = new DatabaseSync(dbPath);
@@ -1000,6 +1008,7 @@ test("store: operator adjudication honors a verified source-only bounty policy",
       required_gates: ["scope", "known_issue", "payout"],
     },
     adjudication: {
+      gates: validTechnicalClaimGates(),
       scope_status: "pass",
       live_impact_status: "not-required",
       known_issue_status: "needs-human",
@@ -1026,7 +1035,9 @@ test("store: operator adjudication honors a verified source-only bounty policy",
   assert.equal(adjudicated.decision.evidence_level, "source-only-local-confirmed");
   const finalAdjudication = JSON.parse(adjudicated.decision.adjudication_json);
   assert.equal(finalAdjudication.live_impact_status, "not-required");
-  assert.deepEqual(finalAdjudication.gates.map((gate) => gate.id), ["scope", "known_issue", "payout"]);
+  assert.deepEqual(finalAdjudication.gates.map((gate) => gate.id), [
+    "scope", "known_issue", "payout", "attacker_reachability", "end_to_end_effect", "impact_bounds",
+  ]);
   db.close();
 });
 
@@ -1053,6 +1064,7 @@ test("store: startup preserves operator-adjudicated fork evidence when safety no
       reproCommandId: "cmd-fork",
       humanGates: "Known-issue and payout review remain pending.",
       engagementProfile: { policy_kind: "bug_bounty", policy_sources: ["https://example.test/bounty/policy"], required_gates: ["scope", "live_impact", "known_issue", "payout"] },
+      adjudication: { gates: validTechnicalClaimGates() },
     }]);
     db.finishRun(confirmRun, "done");
     const decisionId = Number(db.listConfirmDecisions(projectId)[0].id);

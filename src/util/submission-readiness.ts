@@ -13,6 +13,14 @@ export type SubmissionDecisionLike = {
 export type BountyGate = "scope" | "live_impact" | "known_issue" | "payout";
 export type TechnicalClaimGate = "attacker_reachability" | "end_to_end_effect" | "impact_bounds";
 type DecisionGate = BountyGate | TechnicalClaimGate;
+
+export interface TechnicalClaimGateEvidence {
+  id: TechnicalClaimGate;
+  status: string;
+  evidence?: string | undefined;
+}
+
+const TECHNICAL_CLAIM_GATES: TechnicalClaimGate[] = ["attacker_reachability", "end_to_end_effect", "impact_bounds"];
 const DEFAULT_BOUNTY_GATES: BountyGate[] = ["scope", "live_impact", "known_issue", "payout"];
 const SOURCE_ONLY_BOUNTY_GATES: BountyGate[] = ["scope", "known_issue", "payout"];
 
@@ -613,6 +621,17 @@ export function requiredBountyGates(row: SubmissionDecisionLike): BountyGate[] {
     ? SOURCE_ONLY_BOUNTY_GATES
     : DEFAULT_BOUNTY_GATES;
   return [...new Set(declared.length > 0 ? declared : baseline)];
+}
+
+/** Return the execution-grounded claim gates recorded by confirm. Operator review may
+ * carry these gates forward, but it must not manufacture or replace them. */
+export function decisionTechnicalClaimGates(row: SubmissionDecisionLike): TechnicalClaimGateEvidence[] {
+  return TECHNICAL_CLAIM_GATES.flatMap((id) => {
+    const status = bountyGateStatus(decisionAdjudication(row), id);
+    if (!status) return [];
+    const evidence = bountyGateEvidence(decisionAdjudication(row), id);
+    return [{ id, status, ...(evidence ? { evidence } : {}) }];
+  });
 }
 
 function canonicalBountyGate(value: string): BountyGate | undefined {

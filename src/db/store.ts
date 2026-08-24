@@ -14,7 +14,7 @@ import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { enforceSubmissionReadiness, isPermittedSubmissionEvidenceLevel, isSubmissionReadyDecision, needsSubmissionReadinessWork, requiredBountyGates, submissionDecisionSummary } from "../util/submission-readiness.js";
+import { decisionTechnicalClaimGates, enforceSubmissionReadiness, isPermittedSubmissionEvidenceLevel, isSubmissionReadyDecision, needsSubmissionReadinessWork, requiredBountyGates, submissionDecisionSummary } from "../util/submission-readiness.js";
 import { canonicalFindingKey } from "../util/finding-identity.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
 import type {
@@ -2943,8 +2943,15 @@ export class MetadataStore {
       const payoutRecord = payout && typeof payout === "object" && !Array.isArray(payout)
         ? payout as Record<string, unknown>
         : {};
+      const technicalGates = new Map(
+        [...decisionTechnicalClaimGates(target), ...decisionTechnicalClaimGates(evidence)]
+          .map((gate) => [gate.id, gate] as const),
+      );
       const finalAdjudication = {
-        gates: requiredGates.map((gate) => ({ id: gate, status: "pass", evidence: gateEvidenceById[gate]!.trim() })),
+        gates: [
+          ...requiredGates.map((gate) => ({ id: gate, status: "pass", evidence: gateEvidenceById[gate]!.trim() })),
+          ...technicalGates.values(),
+        ],
         scope_status: requiredGates.includes("scope") ? "pass" : "not-required",
         live_impact_status: requiredGates.includes("live_impact") ? "pass" : "not-required",
         known_issue_status: requiredGates.includes("known_issue") ? "pass" : "not-required",

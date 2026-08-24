@@ -2571,6 +2571,7 @@ test("api: operator adjudication requires correlated real-target evidence before
         reproCommandId: "cmd-fork",
         humanGates: "Known-issue review is pending.",
         engagementProfile: { policy_kind: "source_review", required_gates: ["scope"] },
+        adjudication: { gates: validTechnicalClaimGates() },
       }]);
       evidenceDecisionId = Number(store.listConfirmDecisions(created.id)[0].id);
       store.finishRun(evidenceRun, "done");
@@ -2602,6 +2603,7 @@ test("api: operator adjudication requires correlated real-target evidence before
             { id: "live_impact", status: "unknown" },
             { id: "known_issue", status: "needs-human" },
             { id: "payout", status: "unknown" },
+            ...validTechnicalClaimGates(),
           ],
           payout_estimate: { status: "unknown", eligible_min_usd: 500, eligible_max_usd: 1000 },
         },
