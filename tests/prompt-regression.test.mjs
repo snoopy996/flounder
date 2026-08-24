@@ -219,7 +219,10 @@ test("confirm prompt makes bounty adjudication platform-neutral and conservative
   assert.match(AUDIT_CONFIRM_SYSTEM, /evidence_requirement/i);
   assert.match(AUDIT_CONFIRM_SYSTEM, /source_only/i);
   assert.match(AUDIT_CONFIRM_SYSTEM, /Do not add a live-deployment gate/i);
-  assert.match(AUDIT_CONFIRM_SYSTEM, /every gate listed in engagement_profile\.required_gates passes/i);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /mandatory program compliance/i);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /exact technical evidence boundary/i);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /unknown private duplicate or award amount is adjudication risk/i);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /official evidence minimum are met/i);
   assert.match(AUDIT_CONFIRM_SYSTEM, /write that gate as unknown\/needs-human/i);
   assert.match(AUDIT_CONFIRM_SYSTEM, /Never invent a collectible bounty/i);
   assert.doesNotMatch(AUDIT_CONFIRM_SYSTEM, /Immunefi/i);

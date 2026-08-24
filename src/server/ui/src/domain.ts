@@ -13,7 +13,7 @@ export const PHASE_DESC: Record<(typeof PHASES)[number], string> = {
   dig: "Discover scope findings and attempt local proof",
   synthesis: "Synthesize findings into distinct bug candidates",
   verify: "Settle unresolved candidates by local execution",
-  confirm: "Reproduce confirmed findings on the real target",
+  confirm: "Validate findings against the engagement's required evidence boundary",
   report: "Prepare one submission package per bug",
 };
 
@@ -257,130 +257,13 @@ function findingCoveredByDecision(finding: FindingRow, decidedFindingKeys: Set<s
   return Boolean(finding.finding_key && decidedFindingKeys.has(finding.finding_key.toLowerCase()));
 }
 
-function parseJsonObject(raw?: string | null): Record<string, unknown> | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function decisionObject(decision: ConfirmDecision, objectKey: "engagement_profile" | "adjudication", jsonKey: "engagement_profile_json" | "adjudication_json"): Record<string, unknown> | undefined {
-  const direct = decision[objectKey];
-  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct as Record<string, unknown>;
-  return parseJsonObject(decision[jsonKey]);
-}
-
-function normalizedWord(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-}
-
-function stringField(obj: Record<string, unknown> | undefined, keys: string[]): string {
-  if (!obj) return "";
-  for (const key of keys) {
-    const value = obj[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-function gateStatus(adjudication: Record<string, unknown> | undefined, needles: string[], fallbackKeys: string[]): string {
-  const gates = Array.isArray(adjudication?.gates) ? adjudication.gates : [];
-  for (const gate of gates) {
-    if (!gate || typeof gate !== "object" || Array.isArray(gate)) continue;
-    const record = gate as Record<string, unknown>;
-    const id = normalizedWord(record.id ?? record.key ?? record.name ?? record.gate);
-    if (needles.some((needle) => id.includes(needle))) return String(record.status ?? record.result ?? record.state ?? "").trim();
-  }
-  return stringField(adjudication, fallbackKeys);
-}
-
-function isNegativeGateStatus(status: string): boolean {
-  const normalized = normalizedWord(status);
-  return [
-    "fail",
-    "failed",
-    "unknown",
-    "needs_human",
-    "blocked",
-    "missing",
-    "unsettled",
-    "unfunded",
-    "not_funded",
-    "not_live",
-    "no_live",
-    "no_funds",
-    "not_novel",
-    "already_disclosed",
-    "duplicate",
-    "disclosed",
-  ].some((token) => normalized === token || normalized.startsWith(`${token}_`));
-}
-
-function isPassingGateStatus(status: string): boolean {
-  const normalized = normalizedWord(status);
-  if (!normalized || isNegativeGateStatus(normalized)) return false;
-  return ["pass", "passed", "satisfied", "confirmed", "established", "eligible", "ok", "yes", "in_scope", "funded", "live_funded", "novel", "estimated", "collectible", "not_duplicate", "not_disclosed"].some((token) => normalized === token || normalized.startsWith(`${token}_`));
-}
-
-type SubmissionGate = "scope" | "live_impact" | "known_issue" | "payout";
-const DEFAULT_SUBMISSION_GATES: SubmissionGate[] = ["scope", "live_impact", "known_issue", "payout"];
-const SOURCE_ONLY_SUBMISSION_GATES: SubmissionGate[] = ["scope", "known_issue", "payout"];
-
-function decisionRequiredGates(decision: ConfirmDecision): Set<SubmissionGate> {
-  const engagement = decisionObject(decision, "engagement_profile", "engagement_profile_json");
-  const raw = engagement?.required_gates ?? engagement?.requiredGates;
-  const declared = (Array.isArray(raw) ? raw : []).map((value) => {
-    const normalized = normalizedWord(value);
-    if (["scope", "asset", "eligibility"].includes(normalized)) return "scope";
-    if (["live_impact", "live_exposure", "funded_impact", "affected_deployment"].includes(normalized)) return "live_impact";
-    if (["known_issue", "novelty", "duplicate", "disclosure"].includes(normalized)) return "known_issue";
-    if (["payout", "reward", "collectible"].includes(normalized)) return "payout";
-    return undefined;
-  }).filter((value): value is SubmissionGate => Boolean(value));
-  const requirement = normalizedWord(engagement?.evidence_requirement ?? engagement?.evidenceRequirement);
-  const baseline = ["source_only", "published_source", "pre_mainnet_source"].includes(requirement)
-    ? SOURCE_ONLY_SUBMISSION_GATES
-    : DEFAULT_SUBMISSION_GATES;
-  return new Set([...baseline, ...declared]);
-}
-
-function decisionHasOpenSubmissionGate(decision: ConfirmDecision): boolean {
-  const text = (decision.human_gates ?? "").trim().toLowerCase();
-  if (text && !/^(?:none|n\/a|not applicable|no remaining gates?|no human gates?)\.?$/.test(text)) {
-    if (!/\b(?:no|none)\b.{0,32}\b(?:remaining|open|unsettled|human)\b.{0,24}\b(?:gate|gates|blocker|blockers)\b/.test(text)) {
-      if (/\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not established|not confirmed|unknown|unclear|unverified|pending|review|cannot be settled|must)\b/.test(text)) return true;
-    }
-  }
-  const adjudication = decisionObject(decision, "adjudication", "adjudication_json");
-  const required = decisionRequiredGates(decision);
-  const directStatuses = [
-    ["scope", gateStatus(adjudication, ["scope", "venue", "eligib", "asset"], ["scope_status", "scopeStatus"])],
-    ["live_impact", gateStatus(adjudication, ["live", "impact", "fund", "exposure", "deployment"], ["live_impact_status", "liveImpactStatus", "funds_status", "fundsStatus"])],
-    ["known_issue", gateStatus(adjudication, ["known", "novel", "duplicate", "disclos"], ["known_issue_status", "knownIssueStatus", "novelty_status", "noveltyStatus"])],
-    ["payout", gateStatus(adjudication, ["payout", "reward", "collectible", "bounty"], ["payout_status", "payoutStatus", "reward_status", "rewardStatus"])],
-  ].filter(([gate, status]) => required.has(gate as SubmissionGate) && Boolean(status)).map(([, status]) => status as string);
-  return directStatuses.some((status) => !isPassingGateStatus(status));
-}
-
-function hasRealTargetEvidence(decision: ConfirmDecision): boolean {
-  const normalized = normalizedWord(decision.evidence_level);
-  if (normalized === "real_target_reproduced" || normalized === "fork_reproduced" || normalized === "local_fork_reproduced") return true;
-  const engagement = decisionObject(decision, "engagement_profile", "engagement_profile_json");
-  const requirement = normalizedWord(engagement?.evidence_requirement ?? engagement?.evidenceRequirement);
-  const sourceOnlyEvidence = normalized === "source_only_local_confirmed" || normalized === "source_confirmed";
-  return sourceOnlyEvidence && ["source_only", "published_source", "pre_mainnet_source"].includes(requirement)
-    && !decisionRequiredGates(decision).has("live_impact");
-}
-
 export function isSubmissionReadyDecision(decision: ConfirmDecision): boolean {
-  return decision.reproduced === "yes" && decision.recommendation === "submit-candidate" && hasRealTargetEvidence(decision) && !decisionHasOpenSubmissionGate(decision);
+  return decision.decision_summary?.submission.status === "eligible-to-submit";
 }
 
 export function needsSubmissionReadinessWork(decision: ConfirmDecision): boolean {
-  return decision.reproduced === "yes" && decision.recommendation !== "drop" && !isSubmissionReadyDecision(decision) && (decision.recommendation === "submit-candidate" || decisionHasOpenSubmissionGate(decision));
+  if (decision.reproduced !== "yes" || decision.recommendation === "drop") return false;
+  return decision.decision_summary?.submission.status !== "eligible-to-submit";
 }
 
 function confirmDecisionTail(decisions: ConfirmDecision[]): string {
@@ -412,7 +295,11 @@ export function sortScopes(scopes: ScopeRow[]): ScopeRow[] {
 }
 
 export function confirmedDecisions(rows: ConfirmDecision[] | undefined): ConfirmDecision[] {
-  return (rows ?? []).filter((row) => row.reproduced === "yes" && hasRealTargetEvidence(row));
+  return (rows ?? []).filter((row) => {
+    if (row.reproduced !== "yes") return false;
+    const level = row.decision_summary?.technicalEvidence.level;
+    return Boolean(level && level !== "unknown" && level !== "reasoned" && level !== "source-supported");
+  });
 }
 
 const DECISION_RECOMMENDATION_RANK: Record<string, number> = {
@@ -437,6 +324,7 @@ const DECISION_EVIDENCE_RANK: Record<string, number> = {
   "execution-reproduced": 3,
   "locally-reproduced": 3,
   "source-only-local-confirmed": 3,
+  "local-integration-reproduced": 4,
   "source-supported": 2,
   "reasoned": 1,
 };
@@ -449,10 +337,12 @@ function confirmDecisionPriority(decision: ConfirmDecision): number {
   const recommendation = rankToken(decision.recommendation);
   const reproduced = rankToken(decision.reproduced);
   const evidenceLevel = rankToken(decision.evidence_level);
-  const realTargetEvidence = evidenceLevel === "real-target-reproduced" || evidenceLevel === "fork-reproduced" || evidenceLevel === "local-fork-reproduced";
+  const eligible = decision.decision_summary
+    ? decision.decision_summary.submission.status === "eligible-to-submit"
+    : reproduced === "yes" && recommendation === "submit-candidate";
   const group = recommendation === "drop"
     ? 0
-    : reproduced === "yes" && recommendation === "submit-candidate" && realTargetEvidence
+    : reproduced === "yes" && eligible
       ? 5
       : reproduced === "yes"
         ? 4

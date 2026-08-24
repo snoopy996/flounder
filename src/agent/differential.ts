@@ -25,10 +25,14 @@ export interface DifferentialResult {
   findingId: string;
   confirmed: boolean;
   reason: string;
+  baselineCommandId: string;
+  baselinePassed: boolean;
+  patchedCommandId: string | null;
   patchedExitCode: number | null;
   patchedMatched: string[];
   patchedMissing: string[];
   exploitStillReproduces: boolean;
+  patchedCommandRun?: CommandRunRecord;
 }
 
 /**
@@ -59,6 +63,9 @@ export async function runDifferentialConfirmation(input: {
     findingId: finding.id,
     confirmed: false,
     reason,
+    baselineCommandId: exploitRun.id,
+    baselinePassed: exploitRun.passed,
+    patchedCommandId: null,
     patchedExitCode: null,
     patchedMatched: [],
     patchedMissing: [],
@@ -68,6 +75,9 @@ export async function runDifferentialConfirmation(input: {
 
   const fixPatch = finding.fixPatch;
   const patched = finding.patchedSuccessPatterns ?? [];
+  if (!exploitRun.passed || exploitRun.purpose !== "confirm" || exploitRun.targetLinked !== true || exploitRun.timedOut || exploitRun.exitCode !== exploitRun.expectedExitCode || exploitRun.missing.length > 0 || exploitRun.matched.length === 0) {
+    return base("the cited baseline command is not a target-linked, passing purpose=confirm reproduction");
+  }
   if (!fixPatch) return base("no machine-applicable fix_patch supplied");
   if (patched.length === 0) return base("no patched_success_patterns supplied (the test's blocked-exploit signal)");
   if (exploitRun.successPatterns.length === 0) return base("the cited exploit run declared no success_patterns");
@@ -114,6 +124,24 @@ export async function runDifferentialConfirmation(input: {
   // The fix must keep the test compiling/running (exit as expected), make the
   // blocked-exploit signal appear, and stop the exploit from reproducing.
   const confirmed = exitMatched && patchedCheck.missing.length === 0 && !exploitStillReproduces;
+  const patchedCommandId = `${exploitRun.id}:patched`;
+  const patchedCommandRun: CommandRunRecord = {
+    id: patchedCommandId,
+    purpose: "confirm",
+    network: differentialNetworkForExploitRun(input.cfg, exploitRun),
+    passed: confirmed,
+    targetLinked: true,
+    targetLinkReason: `framework differential rerun of target-linked baseline ${exploitRun.id} with declared fix_patch applied`,
+    command: exploitRun.command,
+    commandSpec: exploitRun.commandSpec,
+    successPatterns: patched,
+    matched: patchedCheck.matched,
+    missing: patchedCheck.missing,
+    exitCode: patchedRun.exitCode,
+    expectedExitCode: exploitRun.expectedExitCode,
+    timedOut: patchedRun.timedOut,
+    workspace: exploitRun.workspace,
+  };
 
   const result: DifferentialResult = {
     findingId: finding.id,
@@ -125,11 +153,15 @@ export async function runDifferentialConfirmation(input: {
         : exploitStillReproduces
           ? "the exploit still reproduces after the fix — the fix does not close it"
           : `blocked-exploit signal missing after fix: ${patchedCheck.missing.join(" | ")}`,
+    baselineCommandId: exploitRun.id,
+    baselinePassed: true,
+    patchedCommandId,
     patchedExitCode: patchedRun.exitCode,
     patchedMatched: patchedCheck.matched,
     patchedMissing: patchedCheck.missing,
     exploitStillReproduces,
+    patchedCommandRun,
   };
-  await input.logger.event("audit_differential", { findingId: finding.id, confirmed, exploitStillReproduces, patchedExit: patchedRun.exitCode });
+  await input.logger.event("audit_differential", { findingId: finding.id, confirmed, baselineCommandId: exploitRun.id, patchedCommandId, exploitStillReproduces, patchedExit: patchedRun.exitCode });
   return result;
 }

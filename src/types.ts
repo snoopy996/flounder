@@ -258,6 +258,7 @@ export interface RankedFinding {
   fix: string;
   confirmationStatus: ConfirmationStatus;
   commandRunId?: string;
+  patchedCommandRunId?: string;
   patchedSuccessPatterns?: string[];
   verificationVerdict?: VerificationVerdict;
   reproductionStatus?: ReproductionStatus;

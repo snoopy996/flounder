@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
+import { submissionDecisionSummary } from "../dist/util/submission-readiness.js";
 
 async function loadTsModule(relativePath) {
   const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -22,6 +23,21 @@ const { activeJobCounts, bugBountyEngagementLabel, contestReviewState, decisionH
 const { nextDialogFocusIndex } = await loadTsModule("../src/server/ui/src/dialog-focus.ts");
 const appSource = readFileSync(new URL("../src/server/ui/src/App.tsx", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/server/ui/src/styles.css", import.meta.url), "utf8");
+
+function decisionWithSummary(decision) {
+  return {
+    ...decision,
+    decision_summary: submissionDecisionSummary(decision, { requireImpactInventory: false }),
+  };
+}
+
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "All preconditions are attacker reachable." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed effect." },
+    { id: "impact_bounds", status: "pass", evidence: "Recovery and reversibility controls are included in the impact." },
+  ];
+}
 
 test("ui: queued work stays distinct from running work", () => {
   assert.equal(projectBadgeStatus({ uuid: "queued", name: "Queued", activeRuns: 0, queuedRuns: 1 }), "queued");
@@ -77,7 +93,7 @@ test("ui: global findings default to project evidence and expose explicit evalua
 
 test("ui: findings expose a compact lifecycle summary and focused blocked-phase retry", () => {
   assert.match(appSource, /function FindingLifecycleRail/);
-  assert.match(appSource, /Found.*Local.*Target.*Report.*Disclose/s);
+  assert.match(appSource, /Found.*Local.*Evidence.*Report.*Disclose/s);
   assert.match(appSource, /lifecycle-summary-button/);
   assert.doesNotMatch(appSource, /className="lifecycle-rail"/);
   assert.match(appSource, /function LifecycleEvidencePanel/);
@@ -119,7 +135,7 @@ test("ui: unresolved local and real-target evidence conflicts require review and
   assert.deepEqual(reportableFindings([finding]), []);
   assert.deepEqual(reportableDecisions([decision], [finding]), []);
   assert.match(appSource, /Resolve evidence conflict/);
-  assert.match(appSource, /Local verification conflicts with real-target reproduction/);
+  assert.match(appSource, /Local verification conflicts with confirm-stage evidence/);
   assert.match(appSource, /Evidence conflict/);
   assert.match(appSource, /Report held/);
   assert.match(appSource, /Retry Verify/);
@@ -254,7 +270,7 @@ test("ui: phase cards count report packages by reproduced decision, not linked f
       { id: 3, finding_key: "kgamma", status: "confirmed-differential", confirm_status: null, has_report: false },
     ],
     confirmDecisions: [
-      { bug: "same root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", members_json: JSON.stringify(["kalpha", "kbeta"]) },
+      decisionWithSummary({ bug: "same root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", repro_command_id: "cmd-root", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, members_json: JSON.stringify(["kalpha", "kbeta"]) }),
     ],
   };
   const phases = phaseState(detail, { total: 0, audited: 0, deferred: 0, pending: 0 });
@@ -279,8 +295,8 @@ test("ui: phase cards do not double-count findings already covered by decisions"
       { id: 2, finding_key: "ktwo", status: "confirmed-differential", confirm_status: null, has_report: false },
     ],
     confirmDecisions: [
-      { bug: "submit root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", members_json: JSON.stringify(["kone"]) },
-      { bug: "setup blocker", reproduced: "could-not-set-up", recommendation: "needs-human", members_json: JSON.stringify(["ktwo"]) },
+      decisionWithSummary({ bug: "submit root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", repro_command_id: "cmd-submit", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, members_json: JSON.stringify(["kone"]) }),
+      decisionWithSummary({ bug: "setup blocker", reproduced: "could-not-set-up", recommendation: "needs-human", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, members_json: JSON.stringify(["ktwo"]) }),
     ],
   };
   const phases = phaseState(detail, { total: 0, audited: 0, deferred: 0, pending: 0 });
@@ -299,8 +315,8 @@ test("ui: real-target decisions rank by submit readiness, severity, and confiden
   ]).map((decision) => decision.bug);
   assert.deepEqual(ordered, [
     "critical submit",
-    "medium submit",
     "source-only submit",
+    "medium submit",
     "high non-submit reproduced",
     "critical human gate",
     "critical drop",
@@ -314,13 +330,19 @@ test("ui: policy-authorized pre-mainnet source decisions are reportable", () => 
     reproduced: "yes",
     recommendation: "submit-candidate",
     evidence_level: "source-only-local-confirmed",
+    repro_command_id: "cmd-source",
     human_gates: "",
     engagement_profile: {
       policy_kind: "bug_bounty",
+      policy_sources: ["https://example.test/bounty/pre-mainnet-policy"],
       evidence_requirement: "source_only",
       required_gates: ["scope", "known_issue", "payout"],
     },
     adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official source path is in scope." },
+        ...validTechnicalClaimGates(),
+      ],
       scope_status: "pass",
       live_impact_status: "not_required",
       known_issue_status: "novel",
@@ -328,8 +350,9 @@ test("ui: policy-authorized pre-mainnet source decisions are reportable", () => 
     },
   };
 
-  assert.deepEqual(reportableDecisions([sourceDecision]).map((decision) => decision.id), [7]);
-  assert.deepEqual(reportableDecisions([{ ...sourceDecision, engagement_profile: undefined }]), []);
+  assert.deepEqual(reportableDecisions([decisionWithSummary(sourceDecision)]).map((decision) => decision.id), [7]);
+  assert.deepEqual(reportableDecisions([decisionWithSummary({ ...sourceDecision, engagement_profile: undefined })]), []);
+  assert.match(appSource, /technicalEvidence\.claimValidity\.label/);
 });
 
 test("ui: confirm phase surfaces latest confirm run errors", () => {

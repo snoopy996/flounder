@@ -14,7 +14,7 @@ import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { enforceSubmissionReadiness, isPermittedSubmissionEvidenceLevel, isSubmissionReadyDecision, needsSubmissionReadinessWork, requiredBountyGates } from "../util/submission-readiness.js";
+import { decisionTechnicalClaimGates, enforceSubmissionReadiness, isPermittedSubmissionEvidenceLevel, isSubmissionReadyDecision, needsSubmissionReadinessWork, requiredBountyGates, submissionDecisionSummary } from "../util/submission-readiness.js";
 import { canonicalFindingKey } from "../util/finding-identity.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
 import type {
@@ -740,9 +740,10 @@ const EVIDENCE_LEVEL_RANK: Record<string, number> = {
   "source-only-local-confirmed": 4,
   "locally-reproduced": 4,
   "execution-reproduced": 4,
-  "local-fork-reproduced": 5,
-  "fork-reproduced": 5,
-  "real-target-reproduced": 6,
+  "local-integration-reproduced": 5,
+  "local-fork-reproduced": 6,
+  "fork-reproduced": 6,
+  "real-target-reproduced": 7,
 };
 
 const CONFIDENCE_RANK: Record<string, number> = {
@@ -779,28 +780,12 @@ function hasSourceOnlyReproductionCrutch(row: Pick<ConfirmRow, "reproEvidence" |
   ].some((pattern) => pattern.test(text));
 }
 
-function hasLocalForkReproduction(row: Pick<ConfirmRow, "reproEvidence" | "humanGates" | "corroboration" | "novelty" | "adjudication">): boolean {
-  const text = decisionEvidenceText(row);
-  return /\b(?:local |mainnet |polygon |ethereum |arbitrum |optimism |base |bsc |avalanche )?fork(?:ed)?\b/.test(text)
-    || /\bforked (?:live|mainnet|polygon|ethereum|arbitrum|optimism|base|bsc|avalanche)\b/.test(text);
-}
-
-function hasRealTargetReproduction(row: Pick<ConfirmRow, "reproEvidence" | "humanGates" | "corroboration" | "novelty" | "adjudication">): boolean {
-  const text = decisionEvidenceText(row);
-  return /\breal[- ]target\b/.test(text)
-    || /\breal target effect\b/.test(text)
-    || /\bactual deployed (?:artifact|contract|code|state)\b/.test(text)
-    || /\bcurrent deployment\b/.test(text);
-}
-
 function inferredDecisionEvidenceLevel(row: Pick<ConfirmRow, "reproduced" | "reproEvidence" | "humanGates" | "corroboration" | "novelty" | "adjudication">): string {
   if (row.reproduced === "no") return "not-reproduced";
   if (row.reproduced === "could-not-set-up") return "could-not-set-up";
   if (row.reproduced !== "yes") return "unknown";
   if (hasSourceOnlyReproductionCrutch(row)) return "source-only-local-confirmed";
-  if (hasLocalForkReproduction(row)) return "local-fork-reproduced";
-  if (hasRealTargetReproduction(row)) return "real-target-reproduced";
-  return "source-only-local-confirmed";
+  return "unknown";
 }
 
 function shouldDowngradeEvidence(stored: string, inferred: string): boolean {
@@ -819,35 +804,36 @@ function decisionEvidenceLevel(row: Pick<ConfirmRow, "reproduced" | "evidenceLev
   return inferred;
 }
 
-function isRealTargetEvidenceLevel(value?: string): boolean {
+function isExecutionBackedEvidenceLevel(value?: string): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
-  return normalized === "real-target-reproduced" || normalized === "fork-reproduced" || normalized === "local-fork-reproduced";
-}
-
-function hasUnsettledSubmissionGate(row: Pick<ConfirmRow, "humanGates" | "adjudication">): boolean {
-  const text = String(row.humanGates ?? "").toLowerCase();
-  return hasStructuredBlockingGate(row.adjudication)
-    || /\b(?:scope|venue|eligib|bounty|live|deployment|production|current|human gate|needs?|not established|not confirmed|unknown|unclear|unverified|pending|review)\b/.test(text);
+  return [
+    "source-only-local-confirmed",
+    "source-confirmed",
+    "source-executed",
+    "locally-reproduced",
+    "execution-reproduced",
+    "local-integration-reproduced",
+    "local-fork-reproduced",
+    "fork-reproduced",
+    "real-target-reproduced",
+  ].includes(normalized);
 }
 
 function inferredDecisionSubmissionConfidence(
-  row: Pick<ConfirmRow, "reproduced" | "recommendation" | "humanGates" | "adjudication">,
+  row: Pick<ConfirmRow, "reproduced" | "recommendation" | "humanGates" | "adjudication" | "engagementProfile" | "reproCommandId">,
   evidenceLevel: string,
 ): string {
   if (row.reproduced === "no" || row.recommendation === "drop") return "low";
   if (row.reproduced === "could-not-set-up") return "low";
   if (row.reproduced !== "yes") return "unknown";
-  const realTarget = isRealTargetEvidenceLevel(evidenceLevel);
-  if (row.recommendation === "submit-candidate") {
-    if (!realTarget) return "low";
-    return hasUnsettledSubmissionGate(row) ? "medium" : "high";
-  }
-  if (row.recommendation === "needs-human") return realTarget ? "medium" : "low";
-  return realTarget ? "medium" : "low";
+  const summary = submissionDecisionSummary({ ...row, evidenceLevel }, { requireImpactInventory: false });
+  if (summary.submission.status === "eligible-to-submit") return "high";
+  if (summary.submission.status === "needs-human" && summary.technicalEvidence.level !== "unknown") return "medium";
+  return "low";
 }
 
 function decisionSubmissionConfidence(
-  row: Pick<ConfirmRow, "reproduced" | "recommendation" | "submissionConfidence" | "humanGates" | "adjudication">,
+  row: Pick<ConfirmRow, "reproduced" | "recommendation" | "submissionConfidence" | "humanGates" | "adjudication" | "engagementProfile" | "reproCommandId">,
   evidenceLevel: string,
 ): string {
   const inferred = inferredDecisionSubmissionConfidence(row, evidenceLevel);
@@ -855,7 +841,7 @@ function decisionSubmissionConfidence(
   if (!explicit) return inferred;
   const explicitRank = CONFIDENCE_RANK[explicit] ?? 0;
   const inferredRank = CONFIDENCE_RANK[inferred] ?? 0;
-  if (explicitRank > inferredRank && (!isRealTargetEvidenceLevel(evidenceLevel) || hasUnsettledSubmissionGate(row))) return inferred;
+  if (explicitRank > inferredRank) return inferred;
   return explicit;
 }
 
@@ -869,25 +855,8 @@ function structuredText(value: unknown): string {
   }
 }
 
-function hasStructuredBlockingGate(value: unknown): boolean {
-  const root = typeof value === "string" ? jsonParseOrNull(value) : value;
-  if (!root || typeof root !== "object" || Array.isArray(root)) return false;
-  const obj = root as Record<string, unknown>;
-  const gateArrays = [obj.gates, obj.required_gates, obj.requiredGates].filter(Array.isArray) as unknown[][];
-  for (const gates of gateArrays) {
-    for (const gate of gates) {
-      if (!gate || typeof gate !== "object" || Array.isArray(gate)) continue;
-      const status = String((gate as Record<string, unknown>).status ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      if (!status) continue;
-      if (["pass", "passed", "yes", "ok", "satisfied", "not-required", "not-applicable", "in-scope", "eligible", "confirmed"].includes(status)) continue;
-      return true;
-    }
-  }
-  return false;
-}
-
-function decisionConfirmOutcome(row: Pick<ConfirmRow, "reproduced">, evidenceLevel: string): "reproduced" | "not-reproduced" | null {
-  if (row.reproduced === "yes" && isRealTargetEvidenceLevel(evidenceLevel)) return "reproduced";
+function decisionConfirmOutcome(row: Pick<ConfirmRow, "reproduced" | "reproCommandId">, evidenceLevel: string): "reproduced" | "not-reproduced" | null {
+  if (row.reproduced === "yes" && row.reproCommandId?.trim() && isExecutionBackedEvidenceLevel(evidenceLevel)) return "reproduced";
   if (row.reproduced === "no") return "not-reproduced";
   return null;
 }
@@ -901,6 +870,7 @@ function decisionEvidenceInput(row: {
   human_gates?: string | null;
   corroboration?: string | null;
   novelty?: string | null;
+  repro_command_id?: string | null;
   engagement_profile_json?: string | null;
   adjudication_json?: string | null;
 }): ConfirmRow {
@@ -914,6 +884,7 @@ function decisionEvidenceInput(row: {
     humanGates: row.human_gates ?? undefined,
     corroboration: row.corroboration ?? undefined,
     novelty: row.novelty ?? undefined,
+    reproCommandId: row.repro_command_id ?? undefined,
     engagementProfile: row.engagement_profile_json ? jsonParseOrNull(row.engagement_profile_json) : undefined,
     adjudication: row.adjudication_json ? jsonParseOrNull(row.adjudication_json) : undefined,
   };
@@ -941,7 +912,7 @@ function operatorAdjudicatedDecisionInput(
     evidence?.evidence_level,
     original.evidence_level,
     row.evidence_level,
-  ].map((value) => String(value ?? "").trim()).find((value) => isRealTargetEvidenceLevel(value));
+  ].map((value) => String(value ?? "").trim()).find((value) => isExecutionBackedEvidenceLevel(value));
   const confidence = [applied.submission_confidence, original.submission_confidence, row.submission_confidence]
     .map((value) => String(value ?? "").trim())
     .find((value) => value === "low" || value === "medium" || value === "high");
@@ -1129,7 +1100,7 @@ export class MetadataStore {
   private reconcileConfirmStatuses(): void {
     const rows = this.db
       .prepare(
-        `SELECT project_id, reproduced, members_json, evidence_level, repro_evidence, human_gates,
+        `SELECT project_id, reproduced, members_json, evidence_level, repro_evidence, repro_command_id, human_gates,
                 corroboration, novelty
            FROM confirm_decision
           WHERE reproduced IN ('yes','no') AND members_json IS NOT NULL`,
@@ -1140,6 +1111,7 @@ export class MetadataStore {
         members_json: string;
         evidence_level: string | null;
         repro_evidence: string | null;
+        repro_command_id: string | null;
         human_gates: string | null;
         corroboration: string | null;
         novelty: string | null;
@@ -1149,7 +1121,7 @@ export class MetadataStore {
       const members = jsonParseOrNull(row.members_json);
       if (!Array.isArray(members)) continue;
       const evidenceLevel = decisionEvidenceLevel(decisionEvidenceInput(row));
-      const outcome = decisionConfirmOutcome({ reproduced: row.reproduced ?? undefined }, evidenceLevel);
+      const outcome = decisionConfirmOutcome({ reproduced: row.reproduced ?? undefined, reproCommandId: row.repro_command_id ?? undefined }, evidenceLevel);
       if (!outcome) continue;
       for (const member of members) {
         if (typeof member !== "string") continue;
@@ -1291,7 +1263,7 @@ export class MetadataStore {
     const rows = this.db
       .prepare(
         `SELECT id, project_id, reproduced, recommendation, members_json, severity,
-                evidence_level, submission_confidence, repro_evidence, corroboration,
+                evidence_level, submission_confidence, repro_evidence, repro_command_id, corroboration,
                 novelty, human_gates, engagement_profile_json, adjudication_json,
                 operator_adjudication_json
            FROM confirm_decision`,
@@ -1306,6 +1278,7 @@ export class MetadataStore {
         evidence_level: string | null;
         submission_confidence: string | null;
         repro_evidence: string | null;
+        repro_command_id: string | null;
         corroboration: string | null;
         novelty: string | null;
         human_gates: string | null;
@@ -2970,8 +2943,15 @@ export class MetadataStore {
       const payoutRecord = payout && typeof payout === "object" && !Array.isArray(payout)
         ? payout as Record<string, unknown>
         : {};
+      const technicalGates = new Map(
+        [...decisionTechnicalClaimGates(target), ...decisionTechnicalClaimGates(evidence)]
+          .map((gate) => [gate.id, gate] as const),
+      );
       const finalAdjudication = {
-        gates: requiredGates.map((gate) => ({ id: gate, status: "pass", evidence: gateEvidenceById[gate]!.trim() })),
+        gates: [
+          ...requiredGates.map((gate) => ({ id: gate, status: "pass", evidence: gateEvidenceById[gate]!.trim() })),
+          ...technicalGates.values(),
+        ],
         scope_status: requiredGates.includes("scope") ? "pass" : "not-required",
         live_impact_status: requiredGates.includes("live_impact") ? "pass" : "not-required",
         known_issue_status: requiredGates.includes("known_issue") ? "pass" : "not-required",

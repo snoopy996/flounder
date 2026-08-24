@@ -9,6 +9,14 @@ import { loadScopeInventory, saveScopeInventory } from "../dist/agent/scope-stor
 import { projectHistoryDir } from "../dist/trace/history.js";
 import { DAEMON_PROTOCOL_VERSION } from "../dist/server/protocol.js";
 
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "The attacker reaches all preconditions with untrusted permissions." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed unauthorized effect." },
+    { id: "impact_bounds", status: "pass", evidence: "Recovery, revocation, timing, and reversibility controls are included in the impact." },
+  ];
+}
+
 // The whole workflow is a REST API an agent can self-learn (GET /api) and drive without
 // the UI. This pins the catalog + a project CRUD round-trip over real HTTP.
 
@@ -1346,14 +1354,41 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
       ], "differential");
       const confirmRun = store.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "pipeline-confirm-run") });
       store.upsertConfirmDecisions(created.id, confirmRun, [
-        { bug: "prior reproduced withdrawal proof", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced", members: ["kalreadyreproduced"] },
+        {
+          bug: "prior reproduced withdrawal proof",
+          reproduced: "yes",
+          recommendation: "submit-candidate",
+          evidenceLevel: "real-target-reproduced",
+          reproCommandId: "cmd-prior",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
+          members: ["kalreadyreproduced"],
+        },
         {
           bug: "gate-blocked reproduced proof",
           reproduced: "yes",
           recommendation: "needs-human",
           members: ["kgateblocked"],
+          evidenceLevel: "real-target-reproduced",
+          reproCommandId: "cmd-gate",
           reproEvidence: "purpose=confirm command cmd-gate reproduced the real target effect",
           humanGates: "Live funded exposure and payout tier are pending review.",
+          engagementProfile: {
+            policy_kind: "bug_bounty",
+            policy_sources: ["https://example.test/bounty/policy"],
+            evidence_requirement: "real_target",
+            required_gates: ["scope", "live_impact", "known_issue", "payout"],
+          },
+          adjudication: {
+            gates: [
+              { id: "scope", status: "pass", evidence: "The official asset list includes the target." },
+              { id: "live_impact", status: "unknown", evidence: "Live funded exposure is pending review." },
+              ...validTechnicalClaimGates(),
+            ],
+            scope_status: "pass",
+            live_impact_status: "unknown",
+            known_issue_status: "novel",
+            payout_estimate: { status: "unknown" },
+          },
         },
       ]);
       store.finishRun(confirmRun, "done");
@@ -1415,7 +1450,7 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
     assert.ok(!confirm.confirmKeys.includes("kalreadyreproduced"), "confirm worklist skips prior decided findings");
     assert.ok(confirm.confirmFindings.some((finding) => finding.id === "confirmed-bug" && finding.originId), "confirm worklist carries DB-backed finding seeds");
     assert.ok(!confirm.confirmFindings.some((finding) => finding.id === "kgateblocked"), "blocked confirmation stays visible in lifecycle evidence instead of draining again");
-    assert.deepEqual(confirm.confirmSettledRows.map((row) => row.bug), ["prior reproduced withdrawal proof"]);
+    assert.deepEqual(confirm.confirmSettledRows.map((row) => row.bug), ["prior reproduced withdrawal proof", "gate-blocked reproduced proof"]);
     assert.ok(confirm.confirmKeys.some((key) => /^origin:\d+:confirmed-bug$/.test(key)), "worklist carries origin selector for verify-artifact recovery");
 
     const detail = await json(await fetch(base + `/api/projects/${created.uuid}`));
@@ -1448,7 +1483,15 @@ test("api: current confirm decisions hide older rows superseded by newer member 
       store.finishRun(oldConfirm, "done");
       const newConfirm = store.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "new-confirm") });
       store.upsertConfirmDecisions(created.id, newConfirm, [
-        { bug: "new reproduced result", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced", members: ["kabc123"] },
+        {
+          bug: "new reproduced result",
+          reproduced: "yes",
+          recommendation: "submit-candidate",
+          evidenceLevel: "real-target-reproduced",
+          reproCommandId: "cmd-new",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
+          members: ["kabc123"],
+        },
       ]);
       store.finishRun(newConfirm, "done");
       const setupFailedConfirm = store.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "setup-failed-confirm") });
@@ -2307,6 +2350,8 @@ test("api: report launch queues only reproduced real-target findings that were n
           reproduced: "yes",
           recommendation: "submit-candidate",
           members: ["kready"],
+          evidenceLevel: "real-target-reproduced",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
           reproCommandId: "cmd1",
         },
@@ -2330,6 +2375,8 @@ test("api: report launch queues only reproduced real-target findings that were n
           reproduced: "yes",
           recommendation: "submit-candidate",
           members: ["kexisting"],
+          evidenceLevel: "real-target-reproduced",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd-existing reproduced the real target effect",
           reproCommandId: "cmd-existing",
           reportMarkdown: "# Existing report bug\n\nExisting formal report.",
@@ -2345,6 +2392,8 @@ test("api: report launch queues only reproduced real-target findings that were n
           reproduced: "yes",
           recommendation: "submit-candidate",
           members: ["kconflictlegacy"],
+          evidenceLevel: "real-target-reproduced",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd-conflict reproduced the real target effect",
           reproCommandId: "cmd-conflict",
         },
@@ -2378,6 +2427,9 @@ test("api: report launch queues only reproduced real-target findings that were n
     assert.equal(generatedDecisionReport.source, "generated");
     assert.match(generatedDecisionReport.markdown, /^# Ready bug/);
     assert.match(generatedDecisionReport.markdown, /## Summary/);
+    assert.match(generatedDecisionReport.markdown, /## Submission Decision/);
+    assert.match(generatedDecisionReport.markdown, /Program requirements: Program minimum met/);
+    assert.match(generatedDecisionReport.markdown, /Technical evidence: Deployed-target reproduction/);
     assert.match(generatedDecisionReport.markdown, /## Root Cause/);
     assert.match(generatedDecisionReport.markdown, /src\/Target\.sol:12/);
     assert.match(generatedDecisionReport.markdown, /A reproduced bug/);
@@ -2458,9 +2510,13 @@ test("api: report launch queues only reproduced real-target findings that were n
     } finally {
       resolutionStore.close();
     }
+    const recoveredDetail = await json(await fetch(base + `/api/projects/${created.uuid}`));
+    const recoveredDecision = recoveredDetail.confirmDecisions.find((decision) => decision.bug === "Evidence-conflicted bug");
+    assert.equal(recoveredDecision?.decision_summary?.submission?.status, "eligible-to-submit", JSON.stringify(recoveredDecision?.decision_summary));
     const conflictRecovered = await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [conflicted.id] });
-    assert.equal(conflictRecovered.status, 200);
-    assert.ok((await conflictRecovered.json()).jobId);
+    const conflictRecoveredBody = await conflictRecovered.json();
+    assert.equal(conflictRecovered.status, 200, JSON.stringify(conflictRecoveredBody));
+    assert.ok(conflictRecoveredBody.jobId);
   });
 });
 
@@ -2515,6 +2571,7 @@ test("api: operator adjudication requires correlated real-target evidence before
         reproCommandId: "cmd-fork",
         humanGates: "Known-issue review is pending.",
         engagementProfile: { policy_kind: "source_review", required_gates: ["scope"] },
+        adjudication: { gates: validTechnicalClaimGates() },
       }]);
       evidenceDecisionId = Number(store.listConfirmDecisions(created.id)[0].id);
       store.finishRun(evidenceRun, "done");
@@ -2537,6 +2594,7 @@ test("api: operator adjudication requires correlated real-target evidence before
         engagementProfile: {
           policy_kind: "bug_bounty",
           platform: "Example bounty",
+          policy_sources: ["https://example.test/bounty/policy"],
           required_gates: ["scope", "live_impact", "known_issue", "payout"],
         },
         adjudication: {
@@ -2545,6 +2603,7 @@ test("api: operator adjudication requires correlated real-target evidence before
             { id: "live_impact", status: "unknown" },
             { id: "known_issue", status: "needs-human" },
             { id: "payout", status: "unknown" },
+            ...validTechnicalClaimGates(),
           ],
           payout_estimate: { status: "unknown", eligible_min_usd: 500, eligible_max_usd: 1000 },
         },
@@ -2620,6 +2679,10 @@ test("api: operator adjudication requires correlated real-target evidence before
     assert.match((await crossProject.json()).error, /different project/);
 
     const decisions = await (await fetch(base + `/api/projects/${created.uuid}/confirm-decisions?includeStale=true`)).json();
+    const unresolvedTarget = decisions.confirmDecisions.find((row) => row.id === targetDecisionId);
+    assert.equal(unresolvedTarget.decision_summary.programCompliance.status, "unknown");
+    assert.equal(unresolvedTarget.decision_summary.technicalEvidence.label, "Source-level executable evidence");
+    assert.equal(unresolvedTarget.decision_summary.submission.status, "needs-human");
     const unrelatedDecisionId = decisions.confirmDecisions.find((row) => row.bug === "Unrelated same-project reproduction").id;
     const differentBug = await post(`/api/confirm-decisions/${targetDecisionId}/adjudicate`, {
       recommendation: "submit-candidate",
@@ -2652,6 +2715,9 @@ test("api: operator adjudication requires correlated real-target evidence before
     assert.equal(decision.adjudication.known_issue_status, "pass");
     assert.equal(decision.operator_adjudication.evidence_decision_id, evidenceDecisionId);
     assert.equal(decision.operator_adjudication.original.recommendation, "needs-human");
+    assert.equal(decision.decision_summary.programCompliance.status, "met");
+    assert.equal(decision.decision_summary.technicalEvidence.level, "local-fork-reproduced");
+    assert.equal(decision.decision_summary.submission.status, "eligible-to-submit");
 
     const report = await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [findingId] });
     assert.equal(report.status, 200);
@@ -3071,7 +3137,15 @@ test("api: project detail summarizes the latest prepare manifest and workspace q
       ]);
       const confirmRunId = confirmStore.startRun({ projectId: created.id, kind: "confirm", runDir: path.join(out, "prepared-target-confirm-test"), provider: "openai-codex", model: "gpt-5.5" });
       confirmStore.upsertConfirmDecisions(created.id, confirmRunId, [
-        { bug: "prior prepared source bug", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced", members: ["kalreadyreproduced"] },
+        {
+          bug: "prior prepared source bug",
+          reproduced: "yes",
+          recommendation: "submit-candidate",
+          evidenceLevel: "source-only-local-confirmed",
+          reproCommandId: "cmd-prepared-source",
+          engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" },
+          members: ["kalreadyreproduced"],
+        },
       ]);
       confirmStore.finishRun(confirmRunId, "done");
     } finally {
@@ -3187,6 +3261,9 @@ test("api: a focused retry can relaunch a reproduced finding whose Confirm phase
         reproduced: "yes",
         recommendation: "needs-human",
         members: ["kretryreproduced"],
+        evidenceLevel: "source-only-local-confirmed",
+        reproCommandId: "cmd-old-source-proof",
+        engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
         humanGates: "Deployment equivalence and local-fork impact remain to be checked.",
       }]);
       store.recordFindingPhaseAttempt(created.id, confirmRunId, {

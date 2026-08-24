@@ -318,6 +318,42 @@ export interface ConfirmDecision {
   adjudication_json?: string | null;
   engagement_profile?: Record<string, unknown> | unknown[] | null;
   adjudication?: Record<string, unknown> | unknown[] | null;
+  decision_summary?: {
+    schemaVersion: 1;
+    programCompliance: {
+      status: "met" | "not-met" | "unknown";
+      label: string;
+      requirements: Array<{ id: "scope" | "live-impact" | "evidence" | "policy-terms"; label: string; status: "met" | "not-met" | "unknown" | "not-required"; detail: string }>;
+      blockers: string[];
+    };
+    technicalEvidence: {
+      level: "unknown" | "reasoned" | "source-supported" | "source-executed" | "local-integration-reproduced" | "local-fork-reproduced" | "deployed-target-reproduced";
+      label: string;
+      boundary: string;
+      satisfiesProgramMinimum: boolean | null;
+      notDemonstrated: string[];
+      claimValidity: {
+        status: "met" | "not-met" | "unknown" | "not-required";
+        label: string;
+        requirements: Array<{
+          id: "attacker-reachability" | "end-to-end-effect" | "impact-bounds";
+          label: string;
+          status: "met" | "not-met" | "unknown" | "not-required";
+          detail: string;
+        }>;
+      };
+    };
+    submission: {
+      status: "eligible-to-submit" | "strengthen-first" | "needs-human" | "do-not-submit";
+      label: string;
+      rationale: string;
+    };
+    adjudicationRisk: {
+      status: "clear" | "uncertain" | "adverse" | "not-applicable";
+      label: string;
+      risks: string[];
+    };
+  } | null;
   merged_from_json?: string | null;
   repro_command_id?: string | null;
   decision_path?: string | null;

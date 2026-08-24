@@ -312,6 +312,8 @@ test("daemon: an explicit evidence-conflict retry re-enters Verify and clears af
         reproduced: "yes",
         recommendation: "submit-candidate",
         members: ["kconflictretry"],
+        evidenceLevel: "real-target-reproduced",
+        engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
         reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
         reproCommandId: "cmd1",
       }]);
@@ -608,7 +610,7 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
     // Daemon reports findings (with a status reason for the timeline) and a confirm decision.
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { findings: [{ findingKey: "f1", title: "unbound input", location: "src/x:10", status: "suspected" }], reason: "first sighting" });
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { findings: [{ findingKey: "f1", title: "unbound input", location: "src/x:10", status: "confirmed-differential" }], reason: "differential passed" });
-    await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { confirmDecisions: [{ bug: "unbound input", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced" }], decisionPath: "/tmp/acme-run-1/confirm_report.md" });
+    await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { confirmDecisions: [{ bug: "unbound input", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced", reproCommandId: "cmd-confirm", engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" } }], decisionPath: "/tmp/acme-run-1/confirm_report.md" });
 
     const findings = await j(await ui(base, "GET", projectPath + "/findings"));
     assert.equal(findings.findings.length, 1);

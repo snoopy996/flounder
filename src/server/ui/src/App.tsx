@@ -614,10 +614,10 @@ function nextAction(finding: FindingRow): string {
   if (tracking === "submitted") return "Watch vendor response";
   if (tracking === "accepted") return "Track fix";
   if (tracking === "fixed") return "Close";
-  if (finding.status.startsWith("confirmed") && finding.confirm_status === "reproduced" && !finding.has_report) return "Generate report";
-  if (finding.status.startsWith("confirmed") && finding.confirm_status === "reproduced") return "Prepare disclosure";
+  if (finding.status.startsWith("confirmed") && finding.confirm_status === "reproduced" && !finding.has_report) return "Review submission decision";
+  if (finding.status.startsWith("confirmed") && finding.confirm_status === "reproduced") return "Review disclosure decision";
   if (finding.status.startsWith("confirmed") && finding.confirm_status === "not-reproduced") return "Review reproduction";
-  if (finding.status.startsWith("confirmed")) return "Confirm real target";
+  if (finding.status.startsWith("confirmed")) return "Confirm required evidence";
   if (finding.status === "needs-evidence") return "Collect evidence";
   if (finding.status === "suspected") return "Triage";
   if (finding.status === "refuted" || finding.status === "discharged") return "Archive";
@@ -628,15 +628,15 @@ function findingWorkflow(finding: FindingRow): { label: string; detail: string; 
   const tracking = finding.tracking_status ?? "open";
   if (tracking === "ignored") return { label: "Ignored", detail: "Hidden from active workflow", className: "s-discharged" };
   if (tracking === "duplicate") return { label: "Duplicate", detail: duplicateOfLabel(finding) ?? "Linked duplicate", className: "s-discharged" };
-  if (hasUnresolvedEvidenceConflict(finding)) return { label: "Needs review", detail: "Local verification conflicts with real-target reproduction", className: "s-needs-evidence" };
+  if (hasUnresolvedEvidenceConflict(finding)) return { label: "Needs review", detail: "Local verification conflicts with confirm-stage evidence", className: "s-needs-evidence" };
   if (tracking === "accepted" || tracking === "fixed") return { label: tracking === "accepted" ? "Accepted" : "Fixed", detail: nextAction(finding), className: "s-confirmed-executable" };
   if (tracking === "submitted") return { label: "Submitted", detail: "Waiting for vendor response", className: "s-confirmed-source" };
   if (finding.status === "refuted" || finding.status === "discharged") return { label: "Closed", detail: nextAction(finding), className: "s-discharged" };
   if (finding.status === "needs-evidence") return { label: "Needs evidence", detail: "Collect external proof", className: "s-needs-evidence" };
-  if (finding.confirm_status === "not-reproduced" || finding.confirm_status === "not_reproduced") return { label: "Needs review", detail: "Real-target proof failed", className: "s-refuted" };
-  if (finding.confirm_status === "reproduced" && !finding.has_report) return { label: "Needs report", detail: "Package reproduced bug", className: "s-pending" };
-  if (finding.confirm_status === "reproduced") return { label: "Ready to disclose", detail: "Formal report exists", className: "s-confirmed-executable" };
-  if (isLocallyVerified(finding)) return { label: "Needs confirm", detail: "Reproduce on real target", className: "s-pending" };
+  if (finding.confirm_status === "not-reproduced" || finding.confirm_status === "not_reproduced") return { label: "Needs review", detail: "Confirm-stage proof failed", className: "s-refuted" };
+  if (finding.confirm_status === "reproduced" && !finding.has_report) return { label: "Evidence recorded", detail: "Review program requirements and submission advice", className: "s-pending" };
+  if (finding.confirm_status === "reproduced") return { label: "Decision available", detail: "Review the exact evidence boundary before disclosure", className: "s-confirmed-executable" };
+  if (isLocallyVerified(finding)) return { label: "Needs confirm", detail: "Validate the required evidence boundary", className: "s-pending" };
   if (finding.status === "confirmed-source" || finding.status === "suspected") return { label: "Needs verify", detail: "Run local execution check", className: "s-suspected" };
   return { label: "Review", detail: nextAction(finding), className: "s-discharged" };
 }
@@ -647,7 +647,7 @@ function isLocallyVerified(finding: FindingRow): boolean {
 
 function findingCheckBadges(finding: FindingRow): { label: string; className: string; title: string }[] {
   const verify = hasUnresolvedEvidenceConflict(finding)
-    ? { label: "Conflict", className: "s-needs-evidence", title: "Local verification conflicts with the real-target reproduction and requires human review." }
+    ? { label: "Conflict", className: "s-needs-evidence", title: "Local verification conflicts with confirm-stage evidence and requires human review." }
     : isLocallyVerified(finding)
     ? { label: "Verified", className: "s-confirmed-executable", title: "Local execution verification passed." }
     : finding.status === "refuted" || finding.status === "discharged"
@@ -656,12 +656,12 @@ function findingCheckBadges(finding: FindingRow): { label: string; className: st
         ? { label: "Needs evidence", className: "s-needs-evidence", title: "Local verification reviewed this finding, but external evidence is needed to settle it." }
       : { label: "Needs verify", className: "s-suspected", title: "This finding still needs local execution verification." };
   const confirm = finding.confirm_status === "reproduced"
-    ? { label: "Confirmed", className: "s-confirmed-executable", title: "Real-target confirmation reproduced this finding." }
+    ? { label: "Execution-backed", className: "s-confirmed-executable", title: "Confirm-stage execution reproduced this finding at its recorded evidence boundary. This label does not by itself mean the program minimum is met." }
     : finding.confirm_status === "not-reproduced" || finding.confirm_status === "not_reproduced"
-      ? { label: "Not confirmed", className: "s-refuted", title: "Real-target confirmation did not reproduce this finding." }
+      ? { label: "Not confirmed", className: "s-refuted", title: "Confirm-stage execution did not reproduce this finding." }
       : isLocallyVerified(finding)
-        ? { label: "Needs confirm", className: "s-pending", title: "This locally verified finding still needs real-target confirmation." }
-        : { label: "Not ready", className: "s-discharged", title: "Real-target confirmation starts after local verification." };
+        ? { label: "Needs confirm", className: "s-pending", title: "This locally verified finding still needs validation at the engagement's required evidence boundary." }
+        : { label: "Not ready", className: "s-discharged", title: "Confirm-stage validation starts after local verification." };
   return [verify, confirm];
 }
 
@@ -864,7 +864,7 @@ function pipelineRunActionDetail(detail: ProjectDetail, hasPipelineRun: boolean)
   if (!hasPipelineRun) {
     return contest.enabled
       ? `Contest pipeline: Prepare when needed, then map/dig ${plural(contest.batchScopes, "scope")} per round, verify locally, and generate source-only reports.`
-      : "Run the automatic pipeline: Prepare when needed, then map/dig, confirm reproduced impact, and generate reports.";
+      : "Run the automatic pipeline: Prepare when needed, then map/dig, validate the required evidence boundary, and generate reports.";
   }
   const requiresConfirmation = needsRealTargetConfirmation(detail);
   const verifyCount = rawPendingVerifyCount(detail.allFindings);
@@ -924,7 +924,7 @@ function verifyButtonTitle(count: number): string {
 
 function confirmButtonTitle(count: number, locallyVerified: number, launchLocked: boolean): string {
   if (launchLocked) return "A run is already active for this project.";
-  if (count > 0) return `Reproduce ${plural(count, "finding")} on the real target.`;
+  if (count > 0) return `Validate ${plural(count, "finding")} against the engagement's required evidence boundary.`;
   if (locallyVerified > 0) return "All locally confirmed findings already have real-target decisions.";
   return "Confirm becomes available after local verification produces an execution-confirmed finding.";
 }
@@ -3094,7 +3094,7 @@ function ProjectDetailView(props: {
           <Stat n={progress.audited} label="audited" onClick={() => openProjectSection("scopes")} />
           <Stat n={candidateStat} label={candidateLabel} onClick={() => { props.setFindingStatus(""); props.setFindingQuery(""); openProjectSection("overview", "project-top-candidates"); }} />
           <Stat n={displayedVerified} label={runningVerifyProgress ? "checked" : "verified"} good onClick={() => { props.setFindingStatus("execution-confirmed"); props.setFindingQuery(""); openProjectSection("findings", "project-findings"); }} />
-          <Stat n={reproduced} label="reproduced" onClick={() => openProjectSection("decisions", "project-real-target-decisions")} />
+          <Stat n={reproduced} label="execution-backed" onClick={() => openProjectSection("decisions", "project-real-target-decisions")} />
           <Stat n={reportStat} label={reportLabel} onClick={() => openProjectSection("decisions", "project-real-target-decisions")} />
         </div>
         <CoverageQualityStrip
@@ -3515,7 +3515,7 @@ function ProjectOverview({
             <QueueItem label="Scope coverage" value={scopeValue} detail={scopeDetail} />
             <QueueItem label="Synthesize" value={synthesisValue} detail={synthesisDetail} />
             <QueueItem label="Candidate verification" value={verifyValue} detail={verifyDetail} />
-            <QueueItem label="Real-target proof" value={plural(reproduced, "real-target reproduction")} detail={proofDetail} />
+            <QueueItem label="Evidence boundary" value={plural(reproduced, "execution-backed decision")} detail={proofDetail} />
             <QueueItem label="Run health" value={healthValue} detail={healthDetail} />
           </div>
         </Card>
@@ -3783,12 +3783,12 @@ function ProjectOverviewDecisions({
     : droppedReproductions
       ? `${plural(droppedReproductions, "reproduced decision")} dropped`
       : reproduced
-        ? `${plural(reproduced, "real-target reproduction")} not submission-ready`
+        ? `${plural(reproduced, "execution-backed decision")} not submission-ready`
         : "No submission-ready bugs";
   const detailParts = [
     plural(decisions.length, "decision"),
     submissionReady ? plural(submissionReady, "submission-ready bug") : "0 submission-ready",
-    reproduced ? plural(reproduced, "real-target reproduction") : "",
+    reproduced ? plural(reproduced, "execution-backed decision") : "",
     droppedReproductions ? `${plural(droppedReproductions, "reproduced decision")} dropped` : "",
     missingReports ? `${plural(missingReports, "formal report")} missing` : "",
     meta,
@@ -3810,7 +3810,7 @@ function ProjectOverviewDecisions({
             const evidenceConflict = decisionHasUnresolvedEvidenceConflict(decision, findings);
             const metaChips = evidenceConflict
               ? [
-                { label: "Needs human review", className: "label s-needs-evidence", title: "Local verification conflicts with the real-target reproduction." },
+                { label: "Needs human review", className: "label s-needs-evidence", title: "Local verification conflicts with confirm-stage evidence." },
                 ...decisionMetaChips(decision).filter((chip) => chip.title !== "Submit recommendation"),
               ]
               : decisionMetaChips(decision);
@@ -3909,13 +3909,13 @@ function ProjectActivity({ detail }: { detail: ProjectDetail }) {
 }
 
 function decisionLabel(decision: ConfirmDecision): string {
-  if (decision.reproduced === "yes") return "reproduced";
+  if (decision.reproduced === "yes") return decision.decision_summary?.technicalEvidence.label ?? "Evidence boundary unknown";
   if (decision.reproduced === "no") return "not reproduced";
   return decision.reproduced || "undecided";
 }
 
 function isSubmitCandidateDecision(decision: ConfirmDecision): boolean {
-  return decision.reproduced === "yes" && decision.recommendation === "submit-candidate";
+  return decision.decision_summary?.submission.status === "eligible-to-submit";
 }
 
 function droppedReproductionCount(decisions: ConfirmDecision[]): number {
@@ -3931,7 +3931,7 @@ function overviewDecisionPreview(decisions: ConfirmDecision[]): ConfirmDecision[
 }
 
 function recommendationLabel(decision: ConfirmDecision): string {
-  return decision.recommendation ? decision.recommendation.replace(/-/g, " ") : "no recommendation";
+  return decision.decision_summary?.submission.label ?? (decision.recommendation ? decision.recommendation.replace(/-/g, " ") : "no recommendation");
 }
 
 function decisionRecommendationLabel(decision: ConfirmDecision): string {
@@ -3940,17 +3940,18 @@ function decisionRecommendationLabel(decision: ConfirmDecision): string {
 }
 
 function decisionRecommendationClass(decision: ConfirmDecision): string {
-  const recommendation = badgeToken(decision.recommendation ?? "");
-  if (recommendation === "submit-candidate") return "decision-recommendation-submit";
-  if (recommendation === "drop") return "decision-recommendation-drop";
-  if (recommendation === "needs-human") return "decision-recommendation-needs-human";
+  const recommendation = badgeToken(decision.decision_summary?.submission.status ?? decision.recommendation ?? "");
+  if (recommendation === "eligible-to-submit" || recommendation === "submit-candidate") return "decision-recommendation-submit";
+  if (recommendation === "do-not-submit" || recommendation === "drop") return "decision-recommendation-drop";
+  if (recommendation === "needs-human" || recommendation === "strengthen-first") return "decision-recommendation-needs-human";
   return "decision-recommendation-neutral";
 }
 
 function decisionMetaLabel(decision: ConfirmDecision): string {
-  return [
-    decision.evidence_level ? decision.evidence_level.replace(/-/g, " ") : "",
-  ].filter(Boolean).join(" · ");
+  const evidence = decision.decision_summary?.technicalEvidence;
+  return evidence
+    ? [evidence.boundary, evidence.notDemonstrated.length ? `Not demonstrated: ${evidence.notDemonstrated.join(" ")}` : ""].filter(Boolean).join(" ")
+    : decision.evidence_level ? `Recorded evidence level: ${decision.evidence_level.replace(/-/g, " ")}. Exact boundary is unavailable.` : "Evidence boundary is unavailable.";
 }
 
 function badgeToken(value: string): string {
@@ -4086,6 +4087,8 @@ function adjudicationGate(adjudication: DecisionObject | undefined, needles: str
 }
 
 function decisionDropReason(decision: ConfirmDecision): string {
+  const summary = decision.decision_summary;
+  if (summary && summary.submission.status !== "eligible-to-submit") return summary.submission.rationale;
   if (decision.recommendation !== "drop") return "";
   const adjudication = decisionStructuredObject(decision, "adjudication", "adjudication_json");
   const gateDefs = [
@@ -4127,8 +4130,13 @@ function SeverityBadge({ value }: { value?: string | null }) {
 function decisionMetaChips(decision: ConfirmDecision): DecisionChip[] {
   const severity = decision.severity?.trim();
   const confidence = decision.submission_confidence?.trim();
+  const summary = decision.decision_summary;
   return [
-    decision.recommendation ? { label: decisionRecommendationLabel(decision), className: `label decision-recommendation ${decisionRecommendationClass(decision)}`, title: "Submit recommendation" } : null,
+    summary || decision.recommendation ? { label: decisionRecommendationLabel(decision), className: `label decision-recommendation ${decisionRecommendationClass(decision)}`, title: summary?.submission.rationale ?? "Submit recommendation" } : null,
+    summary ? { label: summary.programCompliance.label, className: `label decision-gate decision-gate-${summary.programCompliance.status === "met" ? "pass" : summary.programCompliance.status === "not-met" ? "fail" : "open"}`, title: summary.programCompliance.blockers.join(" ") || "Mandatory program requirements are met." } : null,
+    summary ? { label: summary.technicalEvidence.label, className: "label decision-evidence", title: `${summary.technicalEvidence.boundary}${summary.technicalEvidence.notDemonstrated.length ? ` Not demonstrated: ${summary.technicalEvidence.notDemonstrated.join(" ")}` : ""}` } : null,
+    summary ? { label: summary.technicalEvidence.claimValidity.label, className: `label decision-gate decision-gate-${summary.technicalEvidence.claimValidity.status === "met" ? "pass" : summary.technicalEvidence.claimValidity.status === "not-met" ? "fail" : "open"}`, title: summary.technicalEvidence.claimValidity.requirements.map((requirement) => `${requirement.label}: ${requirement.detail}`).join(" ") } : null,
+    summary ? { label: summary.adjudicationRisk.label, className: `label decision-gate decision-gate-${summary.adjudicationRisk.status === "adverse" ? "fail" : summary.adjudicationRisk.status === "uncertain" ? "open" : "pass"}`, title: summary.adjudicationRisk.risks.join(" ") || "No separate reward or duplicate risk was recorded." } : null,
     severity ? { label: badgeLabel(severity), className: `severity sev-${badgeToken(severity)}`, title: "Decision severity" } : null,
     confidence ? { label: `${badgeLabel(confidence)} confidence`, className: `label decision-confidence decision-confidence-${badgeToken(confidence)}`, title: "Submission confidence" } : null,
     ...decisionAdjudicationChips(decision),
@@ -4185,8 +4193,8 @@ function ConfirmDecisionsCard({
   if (!decisions.length) {
     return (
       <div id="project-real-target-decisions" className="section-anchor">
-        <Card title={<span>Real-target decisions <Counter>0</Counter></span>}>
-          <EmptyInline>No real-target decision has been produced yet.</EmptyInline>
+        <Card title={<span>Submission evidence decisions <Counter>0</Counter></span>}>
+          <EmptyInline>No submission evidence decision has been produced yet.</EmptyInline>
         </Card>
       </div>
     );
@@ -4194,14 +4202,14 @@ function ConfirmDecisionsCard({
   const orderedDecisions = sortConfirmDecisionsForSubmission(decisions);
   return (
     <div id="project-real-target-decisions" className="section-anchor">
-      <Card title={<span>Real-target decisions <Counter>{decisions.length}</Counter></span>}>
+      <Card title={<span>Submission evidence decisions <Counter>{decisions.length}</Counter></span>}>
         <div className="decision-list">
           {orderedDecisions.map((decision) => {
             const linkedFindings = decisionFindings(decision, findings);
             const evidenceConflict = decisionHasUnresolvedEvidenceConflict(decision, findings);
             const metaChips = evidenceConflict
               ? [
-                { label: "Needs human review", className: "label s-needs-evidence", title: "Local verification conflicts with the real-target reproduction." },
+                { label: "Needs human review", className: "label s-needs-evidence", title: "Local verification conflicts with confirm-stage evidence." },
                 ...decisionMetaChips(decision).filter((chip) => chip.title !== "Submit recommendation"),
               ]
               : decisionMetaChips(decision);
@@ -4265,7 +4273,7 @@ function RealTargetCallout({ decisions, findings, onOpen }: { decisions: Confirm
       <span className="dot" />
       <span>
         <strong>{headline}</strong>
-        <small>{plural(decisions.length, "decision")} recorded{reproduced ? ` · ${plural(reproduced, "real-target reproduction")}` : ""}{droppedReproductions ? ` · ${plural(droppedReproductions, "reproduced decision")} dropped` : ""}{meta ? ` · ${meta}` : ""}. Open decision reports.</small>
+        <small>{plural(decisions.length, "decision")} recorded{reproduced ? ` · ${plural(reproduced, "execution-backed decision")}` : ""}{droppedReproductions ? ` · ${plural(droppedReproductions, "reproduced decision")} dropped` : ""}{meta ? ` · ${meta}` : ""}. Open decision reports.</small>
       </span>
       <Icon name="arrowright" size={14} />
     </button>
@@ -4793,7 +4801,7 @@ function ProjectFindings(props: {
     {
       label: "Confirm",
       count: verifyRechecksConfirmed ? 0 : pendingConfirmFindings(allFindings, requiresConfirmation, props.detail.confirmDecisions).length,
-      detail: verifyRechecksConfirmed ? "Waiting for active Verify to refresh local results." : requiresConfirmation ? "Locally verified findings waiting for real-target reproduction." : "Not required for this source-only target.",
+      detail: verifyRechecksConfirmed ? "Waiting for active Verify to refresh local results." : requiresConfirmation ? "Locally verified findings waiting for confirm-stage evidence validation." : "Not required for this source-only target.",
     },
     {
       label: "Report",
@@ -5149,12 +5157,12 @@ function FindingLifecycleRail({ finding, onOpen }: { finding: FindingRow; onOpen
       label: "Local",
       state: evidenceConflict ? "blocked" : localSettled ? "done" : attemptState(verify),
       detail: evidenceConflict
-        ? finding.refutation_reason ?? "Local verification conflicts with real-target reproduction; human review is required"
+        ? finding.refutation_reason ?? "Local verification conflicts with confirm-stage evidence; human review is required"
         : finding.refutation_status === "blocked"
         ? `Independent review blocked: ${finding.refutation_reason ?? "no verdict"}`
         : verify?.blocker || (localSettled ? finding.status.replaceAll("-", " ") : "Waiting for executable evidence"),
     },
-    { label: "Target", state: finding.confirm_status ? "done" : attemptState(confirm), detail: confirm?.blocker || (finding.confirm_status ? `Real target: ${finding.confirm_status}` : "Real-target confirmation pending") },
+    { label: "Evidence", state: finding.confirm_status ? "done" : attemptState(confirm), detail: confirm?.blocker || (finding.confirm_status ? `Confirm result: ${finding.confirm_status}` : "Confirm-stage evidence pending") },
     { label: "Report", state: finding.has_report ? "done" : evidenceConflict ? "blocked" : attemptState(report), detail: evidenceConflict && !finding.has_report ? "Held until the evidence conflict is resolved" : report?.blocker || (finding.has_report ? "Formal report ready" : "Formal report pending") },
     { label: "Disclose", state: disclosureDone ? "done" : evidenceConflict ? "blocked" : "pending", detail: disclosureDone ? `Tracking: ${finding.tracking_status}` : evidenceConflict ? "Held for human evidence review" : "Not yet submitted" },
   ];
@@ -6482,7 +6490,7 @@ function RunModal({ detail, busy, onClose, onLaunch, onUpdateRunTarget, onError 
     { verb: "map", label: "Remap from scratch", detail: "Rebuild the scope inventory from scratch without digging. This replaces the current scope view; use Expand map to append coverage.", disabled: locked },
     { verb: "audit", label: "Dig pending scopes", detail: pendingScopes ? `Explicitly deep-audit pending mapped scopes without starting another full pipeline round.` : "Disabled until Map scopes creates pending scope inventory.", disabled: locked || pendingScopes === 0 },
     { verb: "verify", label: verifyButtonLabel(verifiable), detail: verifiable ? `Settle ${plural(verifiable, "unresolved candidate")} by local execution.` : "Disabled until dig or synthesis leaves an unresolved candidate.", disabled: locked || verifiable === 0 },
-    { verb: "confirm", label: "Confirm", detail: requiresConfirmation ? (confirmable ? `Reproduce ${plural(confirmable, "execution-confirmed finding")} against the real target.` : "Disabled until local execution confirms a finding.") : "Not required for this source-only target.", disabled: locked || confirmable === 0 },
+    { verb: "confirm", label: "Confirm", detail: requiresConfirmation ? (confirmable ? `Validate ${plural(confirmable, "execution-confirmed finding")} against the required evidence boundary.` : "Disabled until local execution confirms a finding.") : "Not required for this source-only target.", disabled: locked || confirmable === 0 },
     { verb: "report", label: missingReports ? `Generate reports (${missingReports})` : "Regenerate reports", detail: reportable ? `Write formal Markdown reports for ${plural(reportable, requiresConfirmation ? "real-target decision" : "locally confirmed finding")}.` : requiresConfirmation ? "Disabled until confirm reproduces at least one decision." : "Disabled until local execution confirms at least one finding.", disabled: locked || reportable === 0 },
   ];
   return (
@@ -6599,7 +6607,7 @@ function LaunchConfirmModal({ action, detail, busy, onCancel, onConfirm }: { act
                 ? `${plural(selectedExistingReports, "existing report")} will be regenerated.`
                 : `${plural(count, requiresConfirmation ? "real-target decision" : "locally confirmed finding")} will be packaged into formal reports.`
             : isConfirm
-              ? `${plural(count, "finding")} will be checked against the real target.`
+              ? `${plural(count, "finding")} will be checked against the engagement's required evidence boundary.`
               : `${plural(count, "unresolved candidate")} will be settled by local execution.`}
         </strong>
         <p>
@@ -6849,7 +6857,7 @@ function LifecycleEvidencePanel({
           );
         })}
       </div>
-      {evidenceConflict ? <div className="inline-note">Retry Verify to seek an agreeing local result, or retry Confirm to re-check the real target. Reporting stays held until the evidence agrees.</div> : null}
+      {evidenceConflict ? <div className="inline-note">Retry Verify to seek an agreeing local result, or retry Confirm to re-check the recorded evidence boundary. Reporting stays held until the evidence agrees.</div> : null}
       {retryMessage ? <div className="inline-note">{retryMessage}</div> : null}
       {finding.refutation_reason ? <details className="lifecycle-refutation"><summary>Independent review detail</summary><p>{finding.refutation_reason}</p></details> : null}
     </section>
@@ -6940,7 +6948,7 @@ function findingReportMarkdown(finding: FindingRow): string {
     `# ${finding.title ?? "Finding report"}`,
     "",
     `- Status: ${finding.status}`,
-    finding.confirm_status ? `- Real-target status: ${finding.confirm_status}` : "",
+    finding.confirm_status ? `- Confirm-stage status: ${finding.confirm_status}` : "",
     finding.location ? `- Location: \`${finding.location}\`` : "",
     finding.severity ? `- Severity: ${finding.severity}` : "",
     finding.confidence != null ? `- Confidence: ${Math.round(finding.confidence * 100)}%` : "",

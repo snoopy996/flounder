@@ -32,7 +32,7 @@ import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
 import { reconcileLegacyPreparedMaterialFingerprints } from "../util/prepared-material-fingerprint.js";
-import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionReadinessWork } from "../util/submission-readiness.js";
+import { isResumeSettledDecision, isSubmissionReadyDecision, needsConfirmEvidenceWork, needsSubmissionReadinessWork, submissionDecisionSummary, type SubmissionDecisionLike } from "../util/submission-readiness.js";
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
 import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
 import { cleanupLocalProjectStorage, inspectLocalProjectStorage, localDiskStorageStatus, type StorageProjectRecord } from "../storage/projects.js";
@@ -394,13 +394,13 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "GET", path: "/api/confirm-decisions/:id/report",
-    summary: "Read one decision's final submission report markdown. This is the real-target bug-level report; linked finding reports remain evidence summaries.",
+    summary: "Read one decision's final submission report markdown. It records the exact evidence boundary, program minimum, submission advice, and adjudication risk; linked finding reports remain evidence summaries.",
     params: { id: "confirm decision id" },
     handler: confirmDecisionReport,
   }),
   route({
     method: "POST", path: "/api/confirm-decisions/:id/adjudicate",
-    summary: "Record a constrained operator decision for Confirm submission gates. A submit-candidate requires same-project, same-material, same-bug real-target execution evidence and explicit evidence for every bounty gate.",
+    summary: "Record a constrained operator decision for Confirm submission gates. A submit-candidate requires same-project, same-material, same-bug execution evidence at the boundary required by the verified engagement policy.",
     params: { id: "confirm decision id" },
     body: {
       recommendation: "'submit-candidate' | 'drop'",
@@ -413,7 +413,7 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "GET", path: "/api/projects/:uuid/confirm-decisions",
-    summary: "List current-material confirm decisions (one per distinct bug). Filter ?reproduced=yes for bugs reproduced on the real target; pass ?includeStale=true to inspect decisions from older prepared material snapshots.",
+    summary: "List current-material confirm decisions (one per distinct bug). Filter ?reproduced=yes for execution-backed decisions, then inspect decision_summary for the exact evidence boundary; pass ?includeStale=true to inspect decisions from older prepared material snapshots.",
     params: { uuid: "project UUID" },
     query: { reproduced: "string? — e.g. 'yes' for confirmed bugs", includeStale: "boolean? — include decisions from older prepared material snapshots" },
     handler: confirmDecisionsList,
@@ -1164,7 +1164,7 @@ async function projectGet(c: Ctx): Promise<void> {
     const confirmDecisions = activePrepareRefresh
       ? []
       : currentConfirmDecisions(c.store.listConfirmDecisions(id).filter((row) => rowBelongsToCurrentMaterial(row, currentRunIds, materialBoundary)));
-    const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes" && isRealTargetDecisionEvidence(stringValue(row.evidence_level))).length;
+    const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes" && submissionDecisionSummary(row, { requireImpactInventory: false }).technicalEvidence.level !== "unknown").length;
     const requiresRealTargetConfirmation = projectRequiresRealTargetConfirmation(project, allRunsRaw);
     const mappedScopeIds = new Set(scopeView.scopes.map((scope) => stringValue(scope.scope_id)).filter(Boolean));
     sendJson(c.res, 200, {
@@ -2684,7 +2684,7 @@ async function runLaunch(c: Ctx): Promise<void> {
     } else if (!spec.inputRunDir && !(spec.inputRunDirs && spec.inputRunDirs.length > 0)) {
       const currentDecisions = currentConfirmDecisions(c.store.listConfirmDecisions(Number(project.id)).filter((row) => rowBelongsToCurrentMaterial(row, currentResultRunIds, materialBoundary)));
       const pending = confirmWorkRows(c.store, Number(project.id), currentResultRunIds, materialBoundary, currentDecisions);
-      if (pending.length === 0) return sendJson(c.res, 400, { error: "nothing to confirm — every audit-confirmed finding already has a real-target decision (use --fresh to redo)" });
+      if (pending.length === 0) return sendJson(c.res, 400, { error: "nothing to confirm — every audit-confirmed finding already has a confirm-stage evidence decision (use --fresh to redo)" });
       const context = c.store.confirmableContext(Number(project.id))
         .filter((p) => !findingTrackingBlocksProgress(c.store.getFinding(Number(p.id))))
         .filter((p) => !findingIndependentReviewBlocksProgress(p)
@@ -2957,14 +2957,14 @@ function confirmWorkRows(
   materialBoundary: Record<string, unknown> | undefined,
   currentDecisions: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  const settledKeys = confirmDecisionKeySet(currentDecisions.filter((row) => !needsSubmissionReadinessWork(row)));
+  const settledKeys = confirmDecisionKeySet(currentDecisions.filter((row) => !needsConfirmEvidenceWork(row)));
   const pending = store.pendingConfirmable(projectId)
     .filter((row) => !findingTrackingBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => !findingIndependentReviewBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
     .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary))
     .filter((row) => !findingRowCoveredByDecision(row as unknown as Record<string, unknown>, settledKeys));
-  const readinessKeys = new Set(currentDecisions.filter((row) => needsSubmissionReadinessWork(row)).flatMap(confirmDecisionMemberKeys));
+  const readinessKeys = new Set(currentDecisions.filter((row) => needsConfirmEvidenceWork(row)).flatMap(confirmDecisionMemberKeys));
   const readiness = readinessKeys.size === 0 ? [] : store.confirmableContext(projectId)
     .filter((row) => !findingTrackingBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => !findingIndependentReviewBlocksProgress(row))
@@ -2974,13 +2974,13 @@ function confirmWorkRows(
       const key = stringValue((row as Record<string, unknown>).finding_key).toLowerCase();
       return Boolean(key && readinessKeys.has(key));
     });
-  const conflictRetries = store.confirmableContext(projectId)
-    .filter((row) => row.refutation_status === "conflict")
+  const explicitRetries = store.confirmableContext(projectId)
     .filter((row) => !findingTrackingBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => store.hasFindingPhaseRetry(projectId, "finding", Number(row.id), "confirm"))
+    .filter((row) => !findingIndependentReviewBlocksProgress(row) || row.refutation_status === "conflict")
     .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
     .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
-  return uniqueRowsByFindingKey([...pending, ...readiness, ...conflictRetries]).filter((row) => {
+  return uniqueRowsByFindingKey([...pending, ...readiness, ...explicitRetries]).filter((row) => {
     const inputFingerprint = findingPhaseFingerprint(store, row, "confirm", materialBoundary);
     return store.phaseEligible(projectId, "finding", Number(row.id), "confirm", inputFingerprint);
   });
@@ -3173,7 +3173,6 @@ function decisionReportWorklist(
   const selectedCovered = new Set<number>();
   const decisions = currentConfirmDecisions(store.listConfirmDecisions(projectId).filter((row) => rowBelongsToCurrentMaterial(row, currentIds, materialBoundary)))
     .filter((decision) => isSubmissionReadyDecision(decision, { requireImpactInventory: false }))
-    .filter((decision) => isRealTargetDecisionEvidence(stringValue(decision.evidence_level)))
     .filter((decision) => decisionLinkedFindingRows(decision, findingsByKey)
       .every((finding) => !findingIndependentReviewBlocksProgress(finding)))
     .filter((decision) => selected || includeExistingReports || !decisionHasFormalReport(decision))
@@ -3667,17 +3666,22 @@ function confirmDecisionDisplayRow(row: Record<string, unknown>): Record<string,
   if (adjudication) out.adjudication = adjudication;
   const operatorAdjudication = safeParse(row.operator_adjudication_json);
   if (operatorAdjudication) out.operator_adjudication = operatorAdjudication;
+  out.decision_summary = submissionDecisionSummary(out, { requireImpactInventory: false });
   out.has_report = decisionHasFormalReport(row);
   return out;
 }
 
-function confirmDecisionRunHealth(rows: Array<{ reproduced?: unknown; recommendation?: unknown }>): { status: string; reasons: string[]; signals: Record<string, unknown> } | undefined {
+function confirmDecisionRunHealth(rows: object[]): { status: string; reasons: string[]; signals: Record<string, unknown> } | undefined {
   if (rows.length === 0) return undefined;
-  const couldNotSetUp = rows.filter((row) => row.reproduced === "could-not-set-up" && row.recommendation !== "drop").length;
-  const needsHuman = rows.filter((row) => row.recommendation === "needs-human").length;
+  const decisions = rows.map((row) => row as SubmissionDecisionLike);
+  const couldNotSetUp = decisions.filter((row) => row.reproduced === "could-not-set-up" && row.recommendation !== "drop").length;
+  const needsHuman = decisions.filter((row) => {
+    const status = submissionDecisionSummary(row, { requireImpactInventory: false }).submission.status;
+    return status === "needs-human" || status === "strengthen-first";
+  }).length;
   if (couldNotSetUp === 0 && needsHuman === 0) return undefined;
-  const reproducedYes = rows.filter((row) => row.reproduced === "yes").length;
-  const submitCandidates = rows.filter((row) => row.recommendation === "submit-candidate").length;
+  const reproducedYes = decisions.filter((row) => row.reproduced === "yes").length;
+  const submitCandidates = decisions.filter((row) => submissionDecisionSummary(row, { requireImpactInventory: false }).submission.status === "eligible-to-submit").length;
   return {
     status: couldNotSetUp > 0 ? "needs-resource" : "needs-human",
     reasons: couldNotSetUp > 0
@@ -3848,7 +3852,7 @@ function renderFindingReportMarkdown(row: Record<string, unknown>, decisions: Ar
     "",
     `- Project: ${stringValue(row.project_name) || "unknown"}`,
     `- Status: ${stringValue(row.status) || "unknown"}`,
-    stringValue(row.confirm_status) ? `- Real-target status: ${stringValue(row.confirm_status)}` : "",
+    stringValue(row.confirm_status) ? `- Confirm status: ${stringValue(row.confirm_status)}` : "",
     primaryDecision ? `- Submit recommendation: ${stringValue(primaryDecision.recommendation) || "unknown"}` : "",
     stringValue(row.location) ? `- Location: \`${stringValue(row.location)}\`` : "",
     stringValue(row.severity) ? `- Severity: ${stringValue(row.severity)}` : "",
@@ -3864,7 +3868,7 @@ function renderFindingReportMarkdown(row: Record<string, unknown>, decisions: Ar
   if (exploit) lines.push("## Impact / Exploit", "", exploit, "");
   if (fix) lines.push("## Suggested Fix", "", fix, "");
   if (primaryDecision) {
-    lines.push("## Real Target Decision", "");
+    lines.push("## Confirm Decision", "");
     lines.push(`- Reproduced: ${stringValue(primaryDecision.reproduced) || "unknown"}`);
     lines.push(`- Recommendation: ${stringValue(primaryDecision.recommendation) || "unknown"}`);
     const reproEvidence = stringValue(primaryDecision.repro_evidence);
@@ -3929,6 +3933,7 @@ function renderDecisionReportMarkdown(decision: Record<string, unknown>, linkedF
   const humanGates = stringValue(decision.human_gates);
   const engagementProfile = safeParse(decision.engagement_profile_json);
   const adjudication = safeParse(decision.adjudication_json);
+  const decisionSummary = submissionDecisionSummary(decision, { requireImpactInventory: false });
   const locations = uniqueTextValues(linkedFindings, "location");
   const descriptions = uniqueTextValues(linkedFindings, "description", 4);
   const sourceEvidence = uniqueTextValues(linkedFindings, "evidence", 4);
@@ -3940,15 +3945,24 @@ function renderDecisionReportMarkdown(decision: Record<string, unknown>, linkedF
     "",
   ];
 
-  const confirmationNoun = isRealTargetDecisionEvidence(evidenceLevel) ? "real-target confirmation run" : "confirmation run";
+  const confirmationNoun = decisionSummary.technicalEvidence.label.toLowerCase();
   const summary = descriptions[0]
     || (evidence ? evidence.split(/\n\s*\n/)[0] : "")
-    || `A ${confirmationNoun} evaluated "${title}" and recorded reproduction status "${reproduced}" with recommendation "${recommendation}".`;
+    || `The confirm phase evaluated "${title}" and recorded ${confirmationNoun}.`;
   pushReportSection(lines, "Summary", summary);
+  pushReportBullets(lines, "Submission Decision", [
+    `Program requirements: ${decisionSummary.programCompliance.label}`,
+    `Technical evidence: ${decisionSummary.technicalEvidence.label}`,
+    `Submission advice: ${decisionSummary.submission.label} — ${decisionSummary.submission.rationale}`,
+    `Reward / adjudication: ${decisionSummary.adjudicationRisk.label}`,
+    ...decisionSummary.adjudicationRisk.risks,
+  ]);
   pushReportBullets(lines, "Evidence Basis", [
     `Reproduction status: ${reproduced}`,
-    `Submit recommendation: ${recommendation}`,
-    evidenceLevel ? `Evidence level: ${evidenceLevel}` : "",
+    `Recorded recommendation: ${recommendation}`,
+    `Evidence boundary: ${decisionSummary.technicalEvidence.boundary}`,
+    ...decisionSummary.technicalEvidence.notDemonstrated.map((item) => `Not demonstrated: ${item}`),
+    evidenceLevel ? `Raw evidence level: ${evidenceLevel}` : "",
     commandId ? `Local reproduction command: \`${commandId}\`` : "",
     locations.length ? `Source locations reviewed: ${locations.map((entry) => `\`${entry}\``).join(", ")}` : "",
   ]);
@@ -3960,6 +3974,7 @@ function renderDecisionReportMarkdown(decision: Record<string, unknown>, linkedF
   const engagementNotes = [
     engagementProfile ? `Engagement profile: ${jsonOneLine(engagementProfile)}` : "",
     adjudication ? `Eligibility / payout adjudication: ${jsonOneLine(adjudication)}` : "",
+    ...decisionSummary.programCompliance.blockers.map((item) => `Mandatory requirement unresolved: ${item}`),
   ].filter(Boolean);
   if (engagementNotes.length > 0) pushReportBullets(lines, "Engagement and Eligibility", engagementNotes);
   pushReportBullets(lines, "Affected Component", locations.map((entry) => `\`${entry}\``));
@@ -5726,7 +5741,7 @@ function projectSnapshots(store: MetadataStore, options: ProjectListOptions = {}
     const confirmDecisions = activePrepareRefresh
       ? []
       : currentConfirmDecisions(store.listConfirmDecisions(id).filter((row) => rowBelongsToCurrentMaterial(row, currentRunIds, materialBoundary)));
-    const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes" && isRealTargetDecisionEvidence(stringValue(row.evidence_level))).length;
+    const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes" && submissionDecisionSummary(row, { requireImpactInventory: false }).technicalEvidence.level !== "unknown").length;
     const auditConfirmedFindings = countAuditConfirmedFindings(findings);
     const verifyPendingFindings = verifyWorklist(store, id, currentRunIds, materialBoundary).length;
     const requiresRealTargetConfirmation = projectRequiresRealTargetConfirmation(project, allRuns);

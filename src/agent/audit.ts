@@ -375,7 +375,11 @@ export async function runAudit(
         const exploitRun = verifySession.commandRuns.find((run) => run.id === produced.commandRunId);
         if (!exploitRun) continue;
         const result = await runDifferentialConfirmation({ workspace: verifyWorkspace, finding: produced, exploitRun, baselineFiles: verifySession.baselineFiles, cfg: verifyCfg, logger, ...(verifySession.buildCacheDir ? { cacheDir: verifySession.buildCacheDir } : {}) });
-        if (result.confirmed) produced.confirmationStatus = "confirmed-differential";
+        if (result.patchedCommandRun) verifySession.commandRuns.push(result.patchedCommandRun);
+        if (result.confirmed) {
+          produced.confirmationStatus = "confirmed-differential";
+          if (result.patchedCommandId) produced.patchedCommandRunId = result.patchedCommandId;
+        }
       }
       recorder.findings(verifySession.findings, logger.runDir, `verify ${idx + 1}/${toVerify.length}`); // persist this verdict live (flips the original when originId is set)
       if (!missingVerdict) {
@@ -385,7 +389,10 @@ export async function runAudit(
       recorder.runScopes(verifyDone, toVerify.length); // verdict count, independent of completion order
       await logger.event("audit_verify_done", { index: idx + 1, of: toVerify.length, claim: claimLabel, produced: verifySession.findings.length, stoppedReason: phase.stoppedReason });
       const commandIdPrefix = `${verifyLabel}:`;
-      for (const produced of verifySession.findings) if (produced.commandRunId) produced.commandRunId = `${commandIdPrefix}${produced.commandRunId}`;
+      for (const produced of verifySession.findings) {
+        if (produced.commandRunId) produced.commandRunId = `${commandIdPrefix}${produced.commandRunId}`;
+        if (produced.patchedCommandRunId) produced.patchedCommandRunId = `${commandIdPrefix}${produced.patchedCommandRunId}`;
+      }
       const scratchFiles = [...verifySession.scratchFiles.entries()].map(([scratchPath, content]) => [`${verifyLabel}/${scratchPath}`, content] as [string, string]);
       await compactCompletedAuditWorkspace(verifyWorkspace, verifySession, logger, "verify", verifyLabel);
       return {
@@ -682,7 +689,11 @@ export async function runAudit(
             const exploitRun = digSession.commandRuns.find((run) => run.id === finding.commandRunId);
             if (!exploitRun) continue;
             const dr = await runDifferentialConfirmation({ workspace: ws, finding, exploitRun, baselineFiles: digSession.baselineFiles, cfg: digCfg, logger, ...(digSession.buildCacheDir ? { cacheDir: digSession.buildCacheDir } : {}) });
-            if (dr.confirmed) finding.confirmationStatus = "confirmed-differential";
+            if (dr.patchedCommandRun) digSession.commandRuns.push(dr.patchedCommandRun);
+            if (dr.confirmed) {
+              finding.confirmationStatus = "confirmed-differential";
+              if (dr.patchedCommandId) finding.patchedCommandRunId = dr.patchedCommandId;
+            }
           }
           // Each isolated dig session numbers its command runs cmd1.. independently, so
           // they collide across concurrent scopes. Namespace by scope id and rewrite
@@ -692,6 +703,7 @@ export async function runAudit(
           const scopedRuns = digSession.commandRuns.map((run) => ({ ...run, id: `${scope.id}:${run.id}` }));
           for (const finding of unioned) {
             if (finding.commandRunId) finding.commandRunId = `${scope.id}:${finding.commandRunId}`;
+            if (finding.patchedCommandRunId) finding.patchedCommandRunId = `${scope.id}:${finding.patchedCommandRunId}`;
           }
           const scopedScratchFiles = [...digSession.scratchFiles.entries()].map(([scratchPath, content]) => [`dig-${scopeWorkspaceKey(scope.id)}/${scratchPath}`, content] as [string, string]);
           const completed = coverageCompleted(outcomes);
@@ -912,8 +924,12 @@ export async function runAudit(
       if (!exploitRun) continue;
       options.onActivity?.({ kind: "step", tool: `differential ${finding.id}` }); // surface the post-dig stage in Live Activity
       const result = await runDifferentialConfirmation({ workspace: session.workspace, finding, exploitRun, baselineFiles: session.baselineFiles, cfg, logger, ...(session.buildCacheDir ? { cacheDir: session.buildCacheDir } : {}) });
+      if (result.patchedCommandRun) session.commandRuns.push(result.patchedCommandRun);
       differentials.push(result);
-      if (result.confirmed) finding.confirmationStatus = "confirmed-differential";
+      if (result.confirmed) {
+        finding.confirmationStatus = "confirmed-differential";
+        if (result.patchedCommandId) finding.patchedCommandRunId = result.patchedCommandId;
+      }
     }
     if (differentials.length > 0) await logger.artifact("audit_differential.json", differentials);
     recorder.findings(session.findings, logger.runDir, "differential"); // push status upgrades (confirmed-differential) to the UI live
@@ -1653,6 +1669,7 @@ function toRankedFinding(finding: AgentFinding): RankedFinding {
     fix: finding.fix,
     confirmationStatus: finding.confirmationStatus,
     ...(finding.commandRunId ? { commandRunId: finding.commandRunId } : {}),
+    ...(finding.patchedCommandRunId ? { patchedCommandRunId: finding.patchedCommandRunId } : {}),
     ...(finding.patchedSuccessPatterns ? { patchedSuccessPatterns: finding.patchedSuccessPatterns } : {}),
     ...(isExecutionConfirmedFinding(finding) ? { reproductionStatus: "confirmed-executable" as const } : {}),
     ...(finding.disputed ? { disputed: true } : {}),
