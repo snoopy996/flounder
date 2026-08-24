@@ -44,6 +44,8 @@ export interface AgentFinding {
   confidence: number;
   confirmationStatus: ConfirmationStatus;
   commandRunId?: string;
+  /** Framework-owned patched rerun that justifies confirmed-differential. */
+  patchedCommandRunId?: string;
   /** Optional machine-applicable fix for differential (fail-after-fix) confirmation. */
   fixPatch?: FixPatch;
   /** Patterns the cited test prints once the exploit is blocked by the applied fix. */

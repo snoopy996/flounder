@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assertCompleteConfirmDecisionCoverage, assertConfirmCompletion, enforceBountySubmitReadiness, loadSettledFromPriorConfirm } from "../dist/agent/confirm.js";
+import { assertCompleteConfirmDecisionCoverage, assertConfirmCompletion, enforceBountySubmitReadiness, enforceConfirmExecutionProvenance, loadSettledFromPriorConfirm } from "../dist/agent/confirm.js";
 import { publicPath } from "../dist/util/paths.js";
 
 // `flounder confirm` auto-resumes a prior interrupted confirm of the same input run: it finds
@@ -32,11 +32,11 @@ test("confirm resume: loads SETTLED rows from the latest prior confirm of the sa
   const inputX = "/some/input-run-X";
   const inputY = "/some/input-run-Y";
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputX, [
-    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "" },
+    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-a-old", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" } },
     { bug: "Bug B", reproduced: "could-not-set-up" },
   ]);
   await mkConfirmRun(out, "tgt-confirm-20260102T000000Z", inputX, [
-    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "" },
+    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-a", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" } },
     { bug: "Bug B", reproduced: "no" },
   ]);
   await mkConfirmRun(out, "tgt-confirm-20260103T000000Z", inputY, [{ bug: "Bug Z", reproduced: "yes" }]); // different input → ignored
@@ -87,7 +87,7 @@ test("confirm resume: aggregate input carries settled rows from prior subset con
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputA, [{ bug: "Bug A", reproduced: "yes", recommendation: "drop", members: ["ka"] }]);
   await mkAggregateConfirmRun(out, "tgt-confirm-20260102T000000Z", [inputA, inputB], [
     { bug: "Bug A newer", reproduced: "no", members: ["ka"] },
-    { bug: "Bug B", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", members: ["kb"] },
+    { bug: "Bug B", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-b", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" }, members: ["kb"] },
   ]);
   await mkAggregateConfirmRun(out, "tgt-confirm-20260103T000000Z", [inputA, inputC], [{ bug: "Bug C", reproduced: "yes", recommendation: "drop", members: ["kc"] }]);
 
@@ -133,6 +133,39 @@ test("confirm completion preserves the provider session error ahead of decision 
   );
 });
 
+test("confirm execution evidence must bind to a recorded passing target-linked command", () => {
+  const base = {
+    bug: "Command provenance",
+    reproduced: "yes",
+    recommendation: "submit-candidate",
+    evidenceLevel: "source-only-local-confirmed",
+    reproCommandId: "cmd-good",
+    humanGates: "",
+  };
+  const passing = {
+    id: "cmd-good",
+    purpose: "confirm",
+    passed: true,
+    targetLinked: true,
+    timedOut: false,
+    exitCode: 0,
+    expectedExitCode: 0,
+    missing: [],
+    matched: ["EXPLOIT_REPRODUCED"],
+  };
+
+  assert.equal(enforceConfirmExecutionProvenance([base], [passing])[0].recommendation, "submit-candidate");
+
+  const [invented] = enforceConfirmExecutionProvenance([{ ...base, reproCommandId: "cmd-invented" }], [passing]);
+  assert.equal(invented.recommendation, "needs-human");
+  assert.equal(invented.evidenceLevel, undefined);
+  assert.equal(invented.reproCommandId, undefined);
+  assert.match(invented.humanGates, /could not bind.*purpose=confirm/i);
+
+  const [carried] = enforceConfirmExecutionProvenance([base], [], [{ bug: base.bug }]);
+  assert.equal(carried.recommendation, "submit-candidate", "a previously settled row keeps its already-validated provenance on resume");
+});
+
 test("confirm bounty submit readiness requires impact inventory and closed gates", () => {
   const base = {
     bug: "Pool drain",
@@ -140,11 +173,18 @@ test("confirm bounty submit readiness requires impact inventory and closed gates
     reproduced: "yes",
     recommendation: "submit-candidate",
     humanGates: "",
+    evidenceLevel: "local-fork-reproduced",
+    reproCommandId: "cmd-pool",
     engagementProfile: {
       policy_kind: "bug_bounty",
+      policy_sources: ["https://example.test/bounty/policy"],
       required_gates: ["scope", "live_impact", "known_issue", "payout"],
     },
     adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official asset list includes the pool." },
+        { id: "live_impact", status: "pass", evidence: "The deployment is live and covered by the impact inventory." },
+      ],
       scope_status: "pass",
       live_impact_status: "pass",
       known_issue_status: "novel",
@@ -161,12 +201,13 @@ test("confirm bounty submit readiness requires impact inventory and closed gates
       ...base,
       adjudication: {
         ...base.adjudication,
+        gates: base.adjudication.gates.map((gate) => gate.id === "live_impact" ? { ...gate, status: "unknown", evidence: "Live impact still needs review." } : gate),
         live_impact_status: "unknown",
       },
     },
   ], { impactInventory: { items: [{ bug: "Pool drain", members: ["kpool"], status: "funded" }] } });
   assert.equal(openLiveGate[0].recommendation, "needs-human");
-  assert.match(openLiveGate[0].humanGates, /live_impact gate/);
+  assert.match(openLiveGate[0].humanGates, /Required live impact/);
 
   const ready = enforceBountySubmitReadiness([base], {
     impactInventory: {
@@ -192,12 +233,15 @@ test("pre-mainnet bounty can use the program's source-only submission gates", ()
       recommendation: "submit-candidate",
       humanGates: "",
       evidenceLevel: "source-only-local-confirmed",
+      reproCommandId: "cmd-source",
       engagementProfile: {
         policy_kind: "bug_bounty",
+        policy_sources: ["https://example.test/bounty/pre-mainnet-policy"],
         evidence_requirement: "source_only",
         required_gates: ["scope", "known_issue", "payout"],
       },
       adjudication: {
+        gates: [{ id: "scope", status: "pass", evidence: "The official source path is listed in scope." }],
         scope_status: "pass",
         live_impact_status: "not_required",
         known_issue_status: "novel",
@@ -224,7 +268,7 @@ test("pre-mainnet bounty can use the program's source-only submission gates", ()
     },
   ]);
   assert.equal(missingPolicyProof[0].recommendation, "needs-human");
-  assert.match(missingPolicyProof[0].humanGates, /not permitted by the engagement's evidence requirement/);
+  assert.match(missingPolicyProof[0].humanGates, /official policy source|does not establish whether source executed satisfies its evidence minimum/);
 });
 
 test("configured bounty engagement cannot be downgraded to source review", () => {
@@ -235,8 +279,14 @@ test("configured bounty engagement cannot be downgraded to source review", () =>
       reproduced: "yes",
       recommendation: "submit-candidate",
       humanGates: "",
+      evidenceLevel: "local-fork-reproduced",
+      reproCommandId: "cmd-configured",
       engagementProfile: { policy_kind: "source_review", selected_by: "venue lookup failed" },
       adjudication: {
+        gates: [
+          { id: "scope", status: "pass", evidence: "The configured venue asset list includes the target." },
+          { id: "live_impact", status: "pass", evidence: "The configured venue requires and records live impact." },
+        ],
         scope_status: "pass",
         live_impact_status: "pass",
         known_issue_status: "pass",

@@ -318,6 +318,7 @@ function renderFindingDisclosure(targetName: string, finding: AgentFinding): str
     fix: finding.fix,
     confirmationStatus: finding.confirmationStatus,
     commandRunId: finding.commandRunId,
+    patchedCommandRunId: finding.patchedCommandRunId,
     patchedSuccessPatterns: finding.patchedSuccessPatterns,
     disputed: finding.disputed,
     refutationReason: finding.refutation?.reason,

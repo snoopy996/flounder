@@ -858,12 +858,14 @@ test("store: confirm decisions persist decision reports without overwriting link
       members: ["kabc123"],
       reproEvidence: "purpose=confirm command cmd_1 reproduced the real target effect",
       reproCommandId: "cmd_1",
+      evidenceLevel: "real-target-reproduced",
       novelty: "novel",
       humanGates: "venue scope still needs human review",
       engagementProfile: {
         policy_kind: "bug_bounty",
         platform: "custom bounty portal",
         selected_by: "Official policy page was supplied with the target.",
+        policy_sources: ["https://example.test/bounty/policy"],
       },
       adjudication: {
         gates: [
@@ -917,7 +919,8 @@ test("store: structured adjudication gates keep bounty confidence conservative",
       reproEvidence: "purpose=confirm command cmd_2 reproduced the real target effect on a local fork of the current deployment",
       reproCommandId: "cmd_2",
       novelty: "novel",
-      engagementProfile: { policy_kind: "bug_bounty", confidence: "medium" },
+      evidenceLevel: "local-fork-reproduced",
+      engagementProfile: { policy_kind: "bug_bounty", confidence: "medium", policy_sources: ["https://example.test/bounty/policy"] },
       adjudication: {
         gates: [
           { id: "scope", status: "pass", evidence: "Listed asset." },
@@ -964,7 +967,7 @@ test("store: source-level confirm evidence is not promoted to real-target submis
   assert.equal(decision.evidence_level, "source-only-local-confirmed");
   assert.equal(decision.submission_confidence, "low");
   assert.equal(decision.recommendation, "needs-human");
-  assert.match(decision.human_gates, /evidence level is source_only_local_confirmed|source-only-local-confirmed/);
+  assert.match(decision.human_gates, /Program scope or venue eligibility is not established/);
   const [finding] = db.listFindings(projectId);
   assert.equal(finding.confirm_status, null);
   db.close();
@@ -992,6 +995,7 @@ test("store: operator adjudication honors a verified source-only bounty policy",
     humanGates: "Known-issue review remains pending.",
     engagementProfile: {
       policy_kind: "bug_bounty",
+      policy_sources: ["https://example.test/bounty/pre-mainnet-policy"],
       evidence_requirement: "source_only",
       required_gates: ["scope", "known_issue", "payout"],
     },
@@ -1048,7 +1052,7 @@ test("store: startup preserves operator-adjudicated fork evidence when safety no
       reproEvidence: "cmd-fork reproduced the deployed contract effect on a fixed local fork",
       reproCommandId: "cmd-fork",
       humanGates: "Known-issue and payout review remain pending.",
-      engagementProfile: { policy_kind: "bug_bounty", required_gates: ["scope", "live_impact", "known_issue", "payout"] },
+      engagementProfile: { policy_kind: "bug_bounty", policy_sources: ["https://example.test/bounty/policy"], required_gates: ["scope", "live_impact", "known_issue", "payout"] },
     }]);
     db.finishRun(confirmRun, "done");
     const decisionId = Number(db.listConfirmDecisions(projectId)[0].id);
@@ -1118,7 +1122,7 @@ test("store: ambiguous reproduced decisions do not default to real-target eviden
   ]);
 
   const [decision] = db.listConfirmDecisions(projectId);
-  assert.equal(decision.evidence_level, "source-only-local-confirmed");
+  assert.equal(decision.evidence_level, "unknown");
   assert.equal(decision.submission_confidence, "low");
   assert.equal(decision.recommendation, "needs-human");
   const [finding] = db.listFindings(projectId);

@@ -2307,6 +2307,8 @@ test("api: report launch queues only reproduced real-target findings that were n
           reproduced: "yes",
           recommendation: "submit-candidate",
           members: ["kready"],
+          evidenceLevel: "real-target-reproduced",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
           reproCommandId: "cmd1",
         },
@@ -2330,6 +2332,8 @@ test("api: report launch queues only reproduced real-target findings that were n
           reproduced: "yes",
           recommendation: "submit-candidate",
           members: ["kexisting"],
+          evidenceLevel: "real-target-reproduced",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd-existing reproduced the real target effect",
           reproCommandId: "cmd-existing",
           reportMarkdown: "# Existing report bug\n\nExisting formal report.",
@@ -2345,6 +2349,8 @@ test("api: report launch queues only reproduced real-target findings that were n
           reproduced: "yes",
           recommendation: "submit-candidate",
           members: ["kconflictlegacy"],
+          evidenceLevel: "real-target-reproduced",
+          engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd-conflict reproduced the real target effect",
           reproCommandId: "cmd-conflict",
         },
@@ -2378,6 +2384,9 @@ test("api: report launch queues only reproduced real-target findings that were n
     assert.equal(generatedDecisionReport.source, "generated");
     assert.match(generatedDecisionReport.markdown, /^# Ready bug/);
     assert.match(generatedDecisionReport.markdown, /## Summary/);
+    assert.match(generatedDecisionReport.markdown, /## Submission Decision/);
+    assert.match(generatedDecisionReport.markdown, /Program requirements: Program minimum met/);
+    assert.match(generatedDecisionReport.markdown, /Technical evidence: Deployed-target reproduction/);
     assert.match(generatedDecisionReport.markdown, /## Root Cause/);
     assert.match(generatedDecisionReport.markdown, /src\/Target\.sol:12/);
     assert.match(generatedDecisionReport.markdown, /A reproduced bug/);
@@ -2537,6 +2546,7 @@ test("api: operator adjudication requires correlated real-target evidence before
         engagementProfile: {
           policy_kind: "bug_bounty",
           platform: "Example bounty",
+          policy_sources: ["https://example.test/bounty/policy"],
           required_gates: ["scope", "live_impact", "known_issue", "payout"],
         },
         adjudication: {
@@ -2620,6 +2630,10 @@ test("api: operator adjudication requires correlated real-target evidence before
     assert.match((await crossProject.json()).error, /different project/);
 
     const decisions = await (await fetch(base + `/api/projects/${created.uuid}/confirm-decisions?includeStale=true`)).json();
+    const unresolvedTarget = decisions.confirmDecisions.find((row) => row.id === targetDecisionId);
+    assert.equal(unresolvedTarget.decision_summary.programCompliance.status, "unknown");
+    assert.equal(unresolvedTarget.decision_summary.technicalEvidence.label, "Source-level executable evidence");
+    assert.equal(unresolvedTarget.decision_summary.submission.status, "needs-human");
     const unrelatedDecisionId = decisions.confirmDecisions.find((row) => row.bug === "Unrelated same-project reproduction").id;
     const differentBug = await post(`/api/confirm-decisions/${targetDecisionId}/adjudicate`, {
       recommendation: "submit-candidate",
@@ -2652,6 +2666,9 @@ test("api: operator adjudication requires correlated real-target evidence before
     assert.equal(decision.adjudication.known_issue_status, "pass");
     assert.equal(decision.operator_adjudication.evidence_decision_id, evidenceDecisionId);
     assert.equal(decision.operator_adjudication.original.recommendation, "needs-human");
+    assert.equal(decision.decision_summary.programCompliance.status, "met");
+    assert.equal(decision.decision_summary.technicalEvidence.level, "local-fork-reproduced");
+    assert.equal(decision.decision_summary.submission.status, "eligible-to-submit");
 
     const report = await post(`/api/projects/${created.uuid}/runs`, { verb: "report", findingIds: [findingId] });
     assert.equal(report.status, 200);

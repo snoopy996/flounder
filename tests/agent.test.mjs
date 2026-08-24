@@ -905,6 +905,9 @@ test("prompt contract keeps attacker-faithful PoC rule on legacy and pi-session 
   assert.ok(reportPrompt.includes("Finding # labels"), "formal reports should not expose internal finding ids");
 
   assert.ok(AUDIT_CONFIRM_SYSTEM.includes("Do NOT write report_*.md files in CONFIRM mode"), "confirm should not generate formal reports");
+  assert.ok(AUDIT_CONFIRM_SYSTEM.includes("mandatory program compliance"), "confirm should keep program compliance separate from evidence and reward uncertainty");
+  assert.ok(AUDIT_CONFIRM_SYSTEM.includes("unknown private duplicate or award amount is adjudication risk"), "unsettled reward adjudication should not masquerade as a failed program minimum");
+  assert.ok(AUDIT_CONFIRM_SYSTEM.includes('"evidence_level"'), "confirm rows should declare their exact technical evidence boundary");
   assert.ok(!AUDIT_CONFIRM_SYSTEM.includes("Formal submission reports"), "formal reports belong to the Report phase, not Confirm");
   assert.ok(!AUDIT_CONFIRM_SYSTEM.includes("## Evidence Basis"), "confirm should not embed the formal report template");
   const engagement = { kind: "bug-bounty", venue: "Example venue", contestUrl: "https://example.invalid/bug-bounty/acme/information/" };
@@ -2030,7 +2033,10 @@ test("differential confirmation: a real fix blocks the exploit; a no-op fix does
     const baselineFiles = new Set(["vuln.mjs"]);
     const exploitRun = {
       id: "cmd1",
+      purpose: "confirm",
       passed: true,
+      targetLinked: true,
+      targetLinkReason: "native test imports target source",
       command: "node exploit.test.mjs",
       commandSpec: { program: "node", args: ["exploit.test.mjs"], expectedExitCode: 0, timeoutMs: 30000 },
       successPatterns: ["EXPLOIT OK"],
@@ -2052,6 +2058,10 @@ test("differential confirmation: a real fix blocks the exploit; a no-op fix does
     const real = await runDifferentialConfirmation({ workspace, finding: realFix, exploitRun, baselineFiles, cfg, logger });
     assert.equal(real.confirmed, true, real.reason);
     assert.equal(real.exploitStillReproduces, false);
+    assert.equal(real.baselineCommandId, "cmd1");
+    assert.equal(real.patchedCommandId, "cmd1:patched");
+    assert.equal(real.patchedCommandRun?.passed, true);
+    assert.deepEqual(real.patchedCommandRun?.successPatterns, ["EXPLOIT BLOCKED"]);
     // Source restored to baseline after the differential.
     assert.equal(await readFile(path.join(dir, "vuln.mjs"), "utf8"), "export function check(x) { return true; }\n");
 
@@ -2064,6 +2074,18 @@ test("differential confirmation: a real fix blocks the exploit; a no-op fix does
     const noop = await runDifferentialConfirmation({ workspace, finding: noopFix, exploitRun, baselineFiles, cfg, logger });
     assert.equal(noop.confirmed, false);
     assert.equal(noop.exploitStillReproduces, true);
+
+    const invalidBaseline = await runDifferentialConfirmation({
+      workspace,
+      finding: realFix,
+      exploitRun: { ...exploitRun, passed: false, targetLinked: false },
+      baselineFiles,
+      cfg,
+      logger,
+    });
+    assert.equal(invalidBaseline.confirmed, false);
+    assert.equal(invalidBaseline.patchedCommandId, null);
+    assert.match(invalidBaseline.reason, /baseline command is not a target-linked, passing purpose=confirm/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2092,6 +2114,7 @@ test("disclosure report only labels patch-blocking patterns after differential c
     failureMode: "autonomous",
     confirmationStatus: "confirmed-executable",
     commandRunId: "cmd1",
+    patchedCommandRunId: "cmd1:patched",
     patchedSuccessPatterns: ["EXPLOIT BLOCKED"],
   };
   const executableOnly = renderDisclosure("target", baseFinding);
@@ -2101,6 +2124,7 @@ test("disclosure report only labels patch-blocking patterns after differential c
 
   const differential = renderDisclosure("target", { ...baseFinding, confirmationStatus: "confirmed-differential" });
   assert.match(differential, /Patch-blocking success patterns/);
+  assert.match(differential, /Patched rerun command: `cmd1:patched`/);
   assert.match(differential, /EXPLOIT BLOCKED/);
 });
 

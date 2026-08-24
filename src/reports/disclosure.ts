@@ -69,6 +69,7 @@ function localReproductionMarkdown(finding: RankedFinding): string {
   const lines = ["Local executable evidence:"];
   if (finding.commandRunId) lines.push(`- Confirmation command: \`${finding.commandRunId}\``);
   if (finding.confirmationStatus === "confirmed-differential" && finding.patchedSuccessPatterns?.length) {
+    if (finding.patchedCommandRunId) lines.push(`- Patched rerun command: \`${finding.patchedCommandRunId}\``);
     lines.push("- Patch-blocking success patterns:");
     for (const pattern of finding.patchedSuccessPatterns) lines.push(`  - \`${pattern}\``);
   }

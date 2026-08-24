@@ -8,7 +8,7 @@ import { writeLastRunPointer } from "../trace/last-run.js";
 import { RunLogger } from "../trace/logger.js";
 import type { Doc } from "../types.js";
 import { publicPath } from "../util/paths.js";
-import { enforceSubmissionReadiness, isResumeSettledDecision } from "../util/submission-readiness.js";
+import { enforceSubmissionReadiness, isResumeSettledDecision, submissionDecisionSummary } from "../util/submission-readiness.js";
 import { consolidateByFixEquivalence, type FixEquivEdge, type FixEquivItem } from "./consolidate.js";
 import { RunRecorder, type RunTrackerFactory } from "../db/record.js";
 import { findingContentKey } from "../util/finding-key.js";
@@ -238,6 +238,7 @@ export async function runConfirm(
     const present = new Set(rows.map((row) => row.bug.trim().toLowerCase()));
     for (const row of settled) if (!present.has(row.bug.trim().toLowerCase())) rows.push(row);
   }
+  rows = enforceConfirmExecutionProvenance(rows, session.commandRuns, settled);
   let equivalence: { clusters: string[][]; edges: FixEquivEdge[]; skipped?: boolean } = { clusters: rows.map((_, idx) => [String(idx)]), edges: [] };
   if (rows.length > 1 && session.workspace && session.baselineFiles) {
     const items: FixEquivItem[] = rows.map((row, idx) => {
@@ -702,146 +703,45 @@ type ConfirmDecisionLike = {
   humanGates?: string;
   engagementProfile?: unknown;
   adjudication?: unknown;
+  evidenceLevel?: string;
+  reproCommandId?: string;
 };
 
 export function enforceBountySubmitReadiness<T extends ConfirmDecisionLike>(rows: T[], options: { impactInventory?: unknown; configuredEngagement?: unknown } = {}): T[] {
   return enforceSubmissionReadiness(rows, { impactInventory: options.impactInventory, configuredEngagement: options.configuredEngagement, requireImpactInventory: true });
 }
 
-function bountySubmitBlocker(row: ConfirmDecisionLike, impactInventory: unknown): string | undefined {
-  if (!isBountyLikePolicy(row.engagementProfile, row.adjudication)) return undefined;
-  if (row.reproduced !== "yes") return "the row is not reproduced on the real target";
-  if (!impactInventoryCoversRow(row, impactInventory)) return `${IMPACT_INVENTORY_FILE} has no entry covering this reproduced bounty-like row`;
-  for (const gate of ["scope", "live_impact", "known_issue", "payout"] as const) {
-    const status = bountyGateStatus(row.adjudication, gate);
-    if (!isPassingBountyGateStatus(status, gate)) return `${gate} gate is ${status ? JSON.stringify(status) : "missing"}`;
-  }
-  return undefined;
-}
-
-function isBountyLikePolicy(engagementProfile: unknown, adjudication: unknown): boolean {
-  const profile = asRecord(engagementProfile);
-  const adjudicationRecord = asRecord(adjudication);
-  const policyKind = normalizedWord(stringValue(profile?.policy_kind ?? profile?.policyKind ?? profile?.kind));
-  if (policyKind.includes("bug_bounty") || policyKind.includes("bounty") || policyKind.includes("contest")) return true;
-  const requiredRaw = profile?.required_gates ?? profile?.requiredGates;
-  const requiredGates = Array.isArray(requiredRaw) ? requiredRaw.map((entry) => normalizedWord(stringValue(entry))) : [];
-  const adjudicationHasPayout = Boolean(adjudicationRecord && ("payout_estimate" in adjudicationRecord || "payoutEstimate" in adjudicationRecord));
-  if (policyKind === "custom" && (requiredGates.some((gate) => gate.includes("payout") || gate.includes("reward")) || adjudicationHasPayout)) return true;
-  return requiredGates.some((gate) => gate.includes("payout") || gate.includes("reward")) && adjudicationHasPayout;
-}
-
-function bountyGateStatus(adjudication: unknown, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
-  const record = asRecord(adjudication);
-  if (!record) return undefined;
-  const direct = directGateStatus(record, gate);
-  if (direct) return direct;
-  const gates = Array.isArray(record.gates) ? record.gates.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : [];
-  const needles = gateNeedles(gate);
-  for (const entry of gates) {
-    const id = normalizedWord(stringValue(entry.id ?? entry.key ?? entry.name ?? entry.gate));
-    if (needles.some((needle) => id.includes(needle))) {
-      const status = stringValue(entry.status ?? entry.result ?? entry.state);
-      if (status) return status;
-    }
-  }
-  return undefined;
-}
-
-function directGateStatus(record: Record<string, unknown>, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
-  const keys: Record<typeof gate, string[]> = {
-    scope: ["scope_status", "scopeStatus", "asset_status", "assetStatus", "eligibility_status", "eligibilityStatus"],
-    live_impact: ["live_impact_status", "liveImpactStatus", "funds_status", "fundsStatus", "exposure_status", "exposureStatus"],
-    known_issue: ["known_issue_status", "knownIssueStatus", "novelty_status", "noveltyStatus", "duplicate_status", "duplicateStatus"],
-    payout: ["payout_status", "payoutStatus", "reward_status", "rewardStatus"],
-  };
-  for (const key of keys[gate]) {
-    const status = stringValue(record[key]);
-    if (status) return status;
-  }
-  if (gate === "payout") {
-    const payout = asRecord(record.payout_estimate ?? record.payoutEstimate ?? record.reward_estimate ?? record.rewardEstimate);
-    const status = stringValue(payout?.status);
-    if (status) return status;
-  }
-  return undefined;
-}
-
-function gateNeedles(gate: "scope" | "live_impact" | "known_issue" | "payout"): string[] {
-  switch (gate) {
-    case "scope": return ["scope", "venue", "eligib", "asset"];
-    case "live_impact": return ["live", "impact", "fund", "exposure", "deployment"];
-    case "known_issue": return ["known", "novel", "duplicate", "disclos"];
-    case "payout": return ["payout", "reward", "collectible", "bounty"];
-  }
-}
-
-function isPassingBountyGateStatus(status: string | undefined, gate: "scope" | "live_impact" | "known_issue" | "payout"): boolean {
-  const normalized = normalizedWord(status);
-  if (!normalized) return false;
-  if (isNegativeGateStatus(normalized)) return false;
-  if (matchesStatus(normalized, ["pass", "passed", "satisfied", "confirmed", "established", "eligible", "ok", "yes"])) return true;
-  if (gate === "scope" && matchesStatus(normalized, ["in_scope", "eligible"])) return true;
-  if (gate === "live_impact" && matchesStatus(normalized, ["funded", "live", "live_funded", "affected_live_deployment"])) return true;
-  if (gate === "known_issue" && matchesStatus(normalized, ["novel", "not_duplicate", "not_disclosed", "no_known_issue", "not_known"])) return true;
-  if (gate === "payout" && matchesStatus(normalized, ["estimated", "collectible"])) return true;
-  return false;
-}
-
-function isNegativeGateStatus(normalized: string): boolean {
-  return matchesStatus(normalized, [
-    "fail",
-    "failed",
-    "unknown",
-    "needs_human",
-    "blocked",
-    "missing",
-    "unsettled",
-    "not_applicable",
-    "unfunded",
-    "not_funded",
-    "not_live",
-    "no_live",
-    "no_funds",
-    "not_novel",
-    "not_estimated",
-    "already_disclosed",
-    "duplicate",
-    "disclosed",
-  ]);
-}
-
-function matchesStatus(normalized: string, tokens: string[]): boolean {
-  return tokens.some((token) => normalized === token || normalized.startsWith(`${token}_`));
-}
-
-function impactInventoryCoversRow(row: ConfirmDecisionLike, impactInventory: unknown): boolean {
-  const inventory = asRecord(impactInventory);
-  const inventoryItems = inventory?.items;
-  const itemsRaw = Array.isArray(inventoryItems)
-    ? inventoryItems
-    : Array.isArray(impactInventory)
-      ? impactInventory
-      : [];
-  if (itemsRaw.length === 0) return false;
-  const rowMembers = new Set((row.members ?? []).map((member) => normalizedWord(member)).filter(Boolean));
-  const rowBug = normalizedWord(row.bug);
-  for (const raw of itemsRaw) {
-    const item = asRecord(raw);
-    if (!item) continue;
-    const bug = normalizedWord(stringValue(item.bug ?? item.title));
-    if (bug && rowBug && bug === rowBug) return true;
-    const members = Array.isArray(item.members) ? item.members.map((member) => normalizedWord(stringValue(member))).filter(Boolean) : [];
-    if (members.some((member) => rowMembers.has(member))) return true;
-  }
-  return false;
-}
-
-function appendHumanGate(existing: string | undefined, note: string): string {
-  const trimmed = existing?.trim();
-  if (!trimmed) return note;
-  if (trimmed.includes(note)) return trimmed;
-  return `${trimmed} ${note}`;
+export function enforceConfirmExecutionProvenance<T extends ConfirmDecisionLike>(
+  rows: T[],
+  commandRuns: CommandRunRecord[],
+  previouslySettled: Array<Pick<ConfirmDecisionLike, "bug">> = [],
+): T[] {
+  const settled = new Set(previouslySettled.map((row) => row.bug.trim().toLowerCase()).filter(Boolean));
+  const runs = new Map(commandRuns.map((run) => [run.id, run]));
+  return rows.map((row) => {
+    if (row.reproduced !== "yes" || settled.has(row.bug.trim().toLowerCase())) return row;
+    const run = row.reproCommandId ? runs.get(row.reproCommandId) : undefined;
+    const valid = Boolean(
+      run
+      && run.passed
+      && run.purpose === "confirm"
+      && run.targetLinked === true
+      && !run.timedOut
+      && run.exitCode === run.expectedExitCode
+      && run.missing.length === 0
+      && run.matched.length > 0,
+    );
+    if (valid) return row;
+    const note = `Framework could not bind the claimed execution evidence to a target-linked, passing purpose=confirm command${row.reproCommandId ? ` (${row.reproCommandId})` : ""}.`;
+    const existing = row.humanGates?.trim();
+    return {
+      ...row,
+      recommendation: "needs-human",
+      evidenceLevel: undefined,
+      reproCommandId: undefined,
+      humanGates: existing ? `${existing} ${note}` : note,
+    } as T;
+  });
 }
 
 function normalizeDecisionRow(raw: Record<string, unknown>): ConfirmDecisionRow {
@@ -1045,9 +945,14 @@ function renderConfirmReport(input: {
   out.push(`- Provider / model: ${input.provider} / ${input.model}`);
   out.push(`- Input run (frozen): ${input.inputRunDir}`);
   out.push(`- Prior confirmed findings: ${input.priorFindings} → distinct bugs after consolidation: ${input.rows.length}`);
-  const repro = input.rows.filter((row) => row.reproduced === "yes").length;
-  const candidates = input.rows.filter((row) => row.recommendation === "submit-candidate").length;
-  out.push(`- Reproduced on real target: ${repro} / ${input.rows.length}; submit candidates: ${candidates}`);
+  const summaries = input.rows.map((row) => submissionDecisionSummary(row, {
+    impactInventory: input.impactInventory,
+    requireImpactInventory: true,
+  }));
+  const executionBacked = summaries.filter((summary) => summary.technicalEvidence.level !== "unknown" && summary.technicalEvidence.level !== "reasoned" && summary.technicalEvidence.level !== "source-supported").length;
+  const requirementsMet = summaries.filter((summary) => summary.programCompliance.status === "met").length;
+  const candidates = summaries.filter((summary) => summary.submission.status === "eligible-to-submit").length;
+  out.push(`- Execution-backed decisions: ${executionBacked} / ${input.rows.length}; program minimum met: ${requirementsMet}; eligible to submit: ${candidates}`);
   out.push("");
   out.push("## Provenance (frozen before any network access)", "");
   if (input.provenance.frozenFiles.length === 0) {
@@ -1057,15 +962,15 @@ function renderConfirmReport(input: {
     for (const file of input.provenance.frozenFiles) out.push(`- \`${file.path}\` — sha256 \`${file.sha256}\` (${file.bytes} bytes)`);
     out.push("");
   }
-  const bountyLikeRows = input.rows.filter((row) => isBountyLikePolicy(row.engagementProfile, row.adjudication));
+  const impactRequiredRows = summaries.filter((summary) => summary.programCompliance.requirements.some((requirement) => requirement.id === "live-impact" && requirement.status !== "not-required"));
   if (input.impactInventory) {
     out.push("## Impact / Exposure Inventory", "");
     out.push(`- Artifact: \`${IMPACT_INVENTORY_FILE}\``);
     out.push(`- Summary: ${formatStructuredSummary(input.impactInventory)}`);
     out.push("");
-  } else if (bountyLikeRows.length > 0) {
+  } else if (impactRequiredRows.length > 0) {
     out.push("## Impact / Exposure Inventory", "");
-    out.push(`_${IMPACT_INVENTORY_FILE} was not written; bounty-like reproduced rows cannot be treated as submit-ready until live exposure is established or explicitly ruled out._`, "");
+    out.push(`_${IMPACT_INVENTORY_FILE} was not written for an engagement whose mandatory terms require live-impact evidence._`, "");
   }
   out.push("## Decision sheet", "");
   if (input.rows.length === 0) {
@@ -1073,8 +978,14 @@ function renderConfirmReport(input: {
     return out.join("\n");
   }
   for (const [idx, row] of input.rows.entries()) {
-    const badge = row.reproduced === "yes" ? "✅ reproduced" : row.reproduced === "no" ? "❌ not reproduced" : row.reproduced === "could-not-set-up" ? "⚠ could not set up" : "? unknown";
-    out.push(`### ${idx + 1}. ${row.bug} — ${badge} — recommendation: ${row.recommendation}`);
+    const summary = summaries[idx]!;
+    const badge = row.reproduced === "yes" ? `✅ ${summary.technicalEvidence.label}` : row.reproduced === "no" ? "❌ not reproduced" : row.reproduced === "could-not-set-up" ? "⚠ could not set up" : "? unknown";
+    out.push(`### ${idx + 1}. ${row.bug} — ${badge}`);
+    out.push(`- Program requirements: ${summary.programCompliance.label}`);
+    out.push(`- Evidence boundary: ${summary.technicalEvidence.boundary}`);
+    if (summary.technicalEvidence.notDemonstrated.length > 0) out.push(`- Not demonstrated: ${summary.technicalEvidence.notDemonstrated.join(" ")}`);
+    out.push(`- Submission advice: ${summary.submission.label} — ${summary.submission.rationale}`);
+    out.push(`- Reward / adjudication: ${summary.adjudicationRisk.label}${summary.adjudicationRisk.risks.length ? ` — ${summary.adjudicationRisk.risks.join(" ")}` : ""}`);
     if (row.mergedFrom && row.mergedFrom.length > 1) out.push(`- Consolidated by fix-equivalence (a single fix neutralized all of these): ${row.mergedFrom.join(" / ")}`);
     if (row.members.length > 0) out.push(`- Merged prior findings: ${row.members.join(", ")}`);
     if (row.distinctFix) out.push(`- Distinct fix: ${row.distinctFix}`);

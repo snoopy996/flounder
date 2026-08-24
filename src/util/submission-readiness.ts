@@ -7,6 +7,7 @@ export type SubmissionDecisionLike = {
   engagementProfile?: unknown;
   adjudication?: unknown;
   evidenceLevel?: string | null | undefined;
+  reproCommandId?: string | null | undefined;
 };
 
 export type BountyGate = "scope" | "live_impact" | "known_issue" | "payout";
@@ -21,6 +22,204 @@ export interface SubmissionReadinessOptions {
   configuredEngagement?: unknown;
 }
 
+export type ProgramRequirementStatus = "met" | "not-met" | "unknown" | "not-required";
+export type ProgramComplianceStatus = "met" | "not-met" | "unknown";
+export type TechnicalEvidenceLevel =
+  | "unknown"
+  | "reasoned"
+  | "source-supported"
+  | "source-executed"
+  | "local-integration-reproduced"
+  | "local-fork-reproduced"
+  | "deployed-target-reproduced";
+export type SubmissionDisposition = "eligible-to-submit" | "strengthen-first" | "needs-human" | "do-not-submit";
+export type AdjudicationRiskStatus = "clear" | "uncertain" | "adverse" | "not-applicable";
+
+export interface SubmissionDecisionSummary {
+  schemaVersion: 1;
+  programCompliance: {
+    status: ProgramComplianceStatus;
+    label: string;
+    requirements: Array<{
+      id: "scope" | "live-impact" | "evidence" | "policy-terms";
+      label: string;
+      status: ProgramRequirementStatus;
+      detail: string;
+    }>;
+    blockers: string[];
+  };
+  technicalEvidence: {
+    level: TechnicalEvidenceLevel;
+    label: string;
+    boundary: string;
+    satisfiesProgramMinimum: boolean | null;
+    notDemonstrated: string[];
+  };
+  submission: {
+    status: SubmissionDisposition;
+    label: string;
+    rationale: string;
+  };
+  adjudicationRisk: {
+    status: AdjudicationRiskStatus;
+    label: string;
+    risks: string[];
+  };
+}
+
+/**
+ * Product-owned interpretation of a confirm row. Program compliance, technical
+ * evidence, disclosure advice, and reward/adjudication uncertainty are
+ * intentionally independent dimensions: a private duplicate or unknown award
+ * is not evidence that a program's minimum submission requirements failed.
+ */
+export function submissionDecisionSummary(
+  row: SubmissionDecisionLike,
+  options: SubmissionReadinessOptions = {},
+): SubmissionDecisionSummary {
+  const bountyLike = isBountyLikePolicy(row) || configuredBountyProfile(options.configuredEngagement) !== undefined;
+  const profile = asRecord(decisionEngagementProfile(row));
+  const policyKind = normalizedWord(profile?.policy_kind ?? profile?.policyKind ?? profile?.kind);
+  const policySources = stringList(profile?.policy_sources ?? profile?.policySources);
+  const policyClassified = Boolean(policyKind && policyKind !== "unknown") || configuredBountyProfile(options.configuredEngagement) !== undefined;
+  const policyDeclared = policyClassified && (!bountyLike || policySources.length > 0);
+  const requiredGates = requiredBountyGates(row);
+  const evidence = technicalEvidenceSummary(row, bountyLike);
+  const requirements: SubmissionDecisionSummary["programCompliance"]["requirements"] = [];
+
+  if (bountyLike) {
+    let scopeStatus = classifyProgramGate(bountyGateStatus(decisionAdjudication(row), "scope"), "scope");
+    let detail = programGateDetail("scope", scopeStatus);
+    if (scopeStatus === "not-required") {
+      scopeStatus = "unknown";
+      detail = "A bounty or contest requires an in-scope asset, but the decision records scope as not required.";
+    } else if (scopeStatus === "met" && !bountyGateEvidence(decisionAdjudication(row), "scope")) {
+      scopeStatus = "unknown";
+      detail = "Scope is marked as passing, but no supporting program or asset evidence is recorded.";
+    }
+    requirements.push({
+      id: "scope",
+      label: "Program scope",
+      status: scopeStatus,
+      detail,
+    });
+  } else {
+    requirements.push({ id: "scope", label: "Program scope", status: "not-required", detail: "No bounty or contest scope gate is configured." });
+  }
+
+  const liveRequired = bountyLike && requiredGates.includes("live_impact");
+  if (liveRequired) {
+    let liveStatus = classifyProgramGate(bountyGateStatus(decisionAdjudication(row), "live_impact"), "live_impact");
+    let detail = programGateDetail("live_impact", liveStatus);
+    if (liveStatus === "not-required") {
+      liveStatus = "unknown";
+      detail = "The engagement requires live-impact evidence, but the decision records it as not required.";
+    } else if (liveStatus === "met" && !bountyGateEvidence(decisionAdjudication(row), "live_impact")) {
+      liveStatus = "unknown";
+      detail = "Live impact is marked as passing, but no supporting evidence is recorded.";
+    } else if (liveStatus === "met" && options.requireImpactInventory !== false && !impactInventoryCoversRow(row, options.impactInventory)) {
+      liveStatus = "unknown";
+      detail = "impact_inventory.json has no entry covering this decision.";
+    }
+    requirements.push({ id: "live-impact", label: "Required live impact", status: liveStatus, detail });
+  } else {
+    requirements.push({ id: "live-impact", label: "Required live impact", status: "not-required", detail: "The engagement does not require live-deployment impact evidence." });
+  }
+
+  const evidenceRequirement = evidenceRequirementStatus(row, bountyLike, evidence.level);
+  requirements.push({
+    id: "evidence",
+    label: "Required evidence",
+    status: evidenceRequirement.status,
+    detail: evidenceRequirement.detail,
+  });
+
+  const policyGate = !policyDeclared
+    ? policyClassified && bountyLike
+      ? "The engagement is classified, but no official policy source is recorded for its mandatory terms."
+      : "The engagement policy and its mandatory terms were not classified."
+    : programHumanGate(row, liveRequired);
+  requirements.push({
+    id: "policy-terms",
+    label: "Other mandatory terms",
+    status: policyGate ? "unknown" : "met",
+    detail: policyGate ?? "No unresolved scope, venue, embargo, or mandatory-policy term was recorded.",
+  });
+
+  evidence.satisfiesProgramMinimum = evidenceRequirement.status === "met"
+    ? true
+    : evidenceRequirement.status === "not-met"
+      ? false
+      : null;
+  const blockers = requirements
+    .filter((requirement) => requirement.status === "not-met" || requirement.status === "unknown")
+    .map((requirement) => `${requirement.label}: ${requirement.detail}`);
+  const nonEvidenceRequirements = requirements.filter((requirement) => requirement.id !== "evidence");
+  const complianceStatus: ProgramComplianceStatus = nonEvidenceRequirements.some((requirement) => requirement.status === "not-met")
+    ? "not-met"
+    : nonEvidenceRequirements.some((requirement) => requirement.status === "unknown")
+      ? "unknown"
+      : evidenceRequirement.status === "not-met"
+        ? "not-met"
+        : evidenceRequirement.status === "unknown"
+          ? "unknown"
+          : "met";
+  const complianceLabel = complianceStatus === "met"
+    ? "Program minimum met"
+    : complianceStatus === "not-met"
+      ? "Program minimum not met"
+      : "Program minimum unresolved";
+
+  const adjudicationRisk = adjudicationRiskSummary(row, bountyLike);
+  const reproduced = decisionReproduced(row);
+  const rawRecommendation = decisionRecommendation(row);
+  let submissionStatus: SubmissionDisposition;
+  let submissionRationale: string;
+  if (reproduced === "no" || reproduced === "could-not-set-up" || rawRecommendation === "drop") {
+    submissionStatus = "do-not-submit";
+    submissionRationale = reproduced === "no"
+      ? "The claim was not reproduced."
+      : reproduced === "could-not-set-up"
+        ? "The required reproduction could not be set up."
+        : "The decision explicitly recommends dropping this candidate.";
+  } else if (requirements.some((requirement) => requirement.id !== "evidence" && requirement.status === "not-met")) {
+    submissionStatus = "do-not-submit";
+    submissionRationale = blockers[0] ?? "A mandatory program requirement failed.";
+  } else if (requirements.some((requirement) => requirement.id !== "evidence" && requirement.status === "unknown")) {
+    submissionStatus = "needs-human";
+    submissionRationale = blockers.find((blocker) => !blocker.startsWith("Required evidence:"))
+      ?? "A mandatory program requirement remains unresolved.";
+  } else if (evidenceRequirement.status === "not-met") {
+    submissionStatus = "strengthen-first";
+    submissionRationale = evidenceRequirement.detail;
+  } else if (complianceStatus === "unknown") {
+    submissionStatus = "needs-human";
+    submissionRationale = blockers[0] ?? "A mandatory program requirement remains unresolved.";
+  } else if (adjudicationRisk.status === "adverse") {
+    submissionStatus = "do-not-submit";
+    submissionRationale = adjudicationRisk.risks[0] ?? "Known adjudication evidence is adverse.";
+  } else {
+    submissionStatus = "eligible-to-submit";
+    submissionRationale = adjudicationRisk.status === "uncertain"
+      ? "Mandatory program requirements are met; reward or duplicate adjudication remains uncertain."
+      : "Mandatory program requirements and the configured evidence minimum are met.";
+  }
+  const submissionLabel: Record<SubmissionDisposition, string> = {
+    "eligible-to-submit": "Eligible to submit",
+    "strengthen-first": "Strengthen evidence first",
+    "needs-human": "Mandatory review needed",
+    "do-not-submit": "Do not submit",
+  };
+
+  return {
+    schemaVersion: 1,
+    programCompliance: { status: complianceStatus, label: complianceLabel, requirements, blockers },
+    technicalEvidence: evidence,
+    submission: { status: submissionStatus, label: submissionLabel[submissionStatus], rationale: submissionRationale },
+    adjudicationRisk,
+  };
+}
+
 export function enforceSubmissionReadiness<T extends object>(
   rows: T[],
   options: SubmissionReadinessOptions = {},
@@ -28,6 +227,10 @@ export function enforceSubmissionReadiness<T extends object>(
   return rows.map((inputRow) => {
     const row = applyConfiguredEngagement(inputRow, options.configuredEngagement);
     const decision = row as SubmissionDecisionLike;
+    const summary = submissionDecisionSummary(decision, options);
+    if (decisionRecommendation(decision) === "needs-human" && summary.submission.status === "eligible-to-submit") {
+      return { ...row, recommendation: "submit-candidate" } as T;
+    }
     if (decisionRecommendation(decision) !== "submit-candidate") return row;
     const blocker = submissionReadinessBlocker(decision, options);
     if (!blocker) return row;
@@ -37,20 +240,17 @@ export function enforceSubmissionReadiness<T extends object>(
 }
 
 export function isSubmissionReadyDecision(row: object, options: SubmissionReadinessOptions = {}): boolean {
-  const decision = row as SubmissionDecisionLike;
-  return decisionReproduced(decision) === "yes"
-    && decisionRecommendation(decision) === "submit-candidate"
-    && !submissionReadinessBlocker(decision, { ...options, requireImpactInventory: options.requireImpactInventory ?? false });
+  return submissionDecisionSummary(row as SubmissionDecisionLike, {
+    ...options,
+    requireImpactInventory: options.requireImpactInventory ?? false,
+  }).submission.status === "eligible-to-submit";
 }
 
 export function needsSubmissionReadinessWork(row: object): boolean {
   const decision = row as SubmissionDecisionLike;
   if (decisionReproduced(decision) !== "yes") return false;
   if (decisionRecommendation(decision) === "drop") return false;
-  if (isSubmissionReadyDecision(decision)) return false;
-  return decisionRecommendation(decision) === "submit-candidate"
-    || hasOpenSubmissionGate(decision)
-    || isBountyLikePolicy(decision);
+  return submissionDecisionSummary(decision, { requireImpactInventory: false }).submission.status !== "eligible-to-submit";
 }
 
 export function isResumeSettledDecision(row: object): boolean {
@@ -61,27 +261,12 @@ export function isResumeSettledDecision(row: object): boolean {
 }
 
 export function submissionReadinessBlocker(row: SubmissionDecisionLike, options: SubmissionReadinessOptions = {}): string | undefined {
-  if (decisionReproduced(row) !== "yes") return "the row is not reproduced on the real target";
-  const requiredGates = requiredBountyGates(row);
-  const evidenceLevel = normalizedWord(decisionEvidenceLevel(row));
-  if (evidenceLevel && !isPermittedSubmissionEvidenceLevel(row, evidenceLevel)) return `evidence level is ${evidenceLevel}, not permitted by the engagement's evidence requirement`;
-  if (!isBountyLikePolicy(row) && !configuredBountyProfile(options.configuredEngagement)) {
-    return hasOpenSubmissionGate(row) ? "submission gates remain unsettled in human_gates or adjudication" : undefined;
-  }
-  const adjudication = decisionAdjudication(row);
-  if (options.requireImpactInventory !== false && requiredGates.includes("live_impact") && !impactInventoryCoversRow(row, options.impactInventory)) {
-    return "impact_inventory.json has no entry covering this reproduced bounty-like row";
-  }
-  for (const gate of requiredGates) {
-    const status = bountyGateStatus(adjudication, gate);
-    if (!isPassingBountyGateStatus(status, gate)) return `${gate} gate is ${status ? JSON.stringify(status) : "missing"}`;
-  }
-  if (hasUnsettledHumanGateText(decisionHumanGates(row))) return "submission gates remain unsettled in human_gates";
-  return undefined;
+  const summary = submissionDecisionSummary(row, options);
+  return summary.submission.status === "eligible-to-submit" ? undefined : summary.submission.rationale;
 }
 
 export function hasOpenSubmissionGate(row: SubmissionDecisionLike): boolean {
-  return hasStructuredBlockingGate(decisionAdjudication(row)) || hasUnsettledHumanGateText(decisionHumanGates(row));
+  return submissionDecisionSummary(row, { requireImpactInventory: false }).submission.status !== "eligible-to-submit";
 }
 
 export function isBountyLikePolicy(row: SubmissionDecisionLike): boolean {
@@ -121,10 +306,188 @@ function isSourceOnlyEvidenceLevel(value: string): boolean {
   return value === "source_only_local_confirmed" || value === "source_confirmed";
 }
 
+const TECHNICAL_EVIDENCE_RANK: Record<TechnicalEvidenceLevel, number> = {
+  unknown: 0,
+  reasoned: 1,
+  "source-supported": 2,
+  "source-executed": 3,
+  "local-integration-reproduced": 4,
+  "local-fork-reproduced": 5,
+  "deployed-target-reproduced": 6,
+};
+
+function canonicalTechnicalEvidence(value: string): TechnicalEvidenceLevel {
+  const normalized = normalizedWord(value);
+  if (["reasoned", "suspected", "hypothesis"].includes(normalized)) return "reasoned";
+  if (["source_supported", "confirmed_source", "source_reviewed"].includes(normalized)) return "source-supported";
+  if (["source_only_local_confirmed", "source_confirmed", "source_executed", "locally_reproduced", "execution_reproduced"].includes(normalized)) return "source-executed";
+  if (["local_integration_reproduced", "integration_reproduced", "end_to_end_local_reproduced"].includes(normalized)) return "local-integration-reproduced";
+  if (["local_fork_reproduced", "fork_reproduced"].includes(normalized)) return "local-fork-reproduced";
+  if (["real_target_reproduced", "deployed_target_reproduced"].includes(normalized)) return "deployed-target-reproduced";
+  return "unknown";
+}
+
+function technicalEvidenceSummary(
+  row: SubmissionDecisionLike,
+  bountyLike: boolean,
+): SubmissionDecisionSummary["technicalEvidence"] {
+  const claimedLevel = canonicalTechnicalEvidence(decisionEvidenceLevel(row));
+  const missingExecutionProvenance = TECHNICAL_EVIDENCE_RANK[claimedLevel] >= TECHNICAL_EVIDENCE_RANK["source-executed"]
+    && !decisionReproCommandId(row);
+  const level = missingExecutionProvenance ? "unknown" : claimedLevel;
+  const metadata: Record<TechnicalEvidenceLevel, { label: string; boundary: string }> = {
+    unknown: {
+      label: "Evidence boundary unknown",
+      boundary: "The decision does not record which target boundary was executed.",
+    },
+    reasoned: {
+      label: "Reasoned hypothesis",
+      boundary: "The mechanism is reasoned about but has not been demonstrated by execution.",
+    },
+    "source-supported": {
+      label: "Source-supported evidence",
+      boundary: "The mechanism is grounded in source, but no executable reproduction is recorded.",
+    },
+    "source-executed": {
+      label: "Source-level executable evidence",
+      boundary: "Executed against published or pinned source in a local harness; this does not claim end-to-end integration or local-fork reproduction.",
+    },
+    "local-integration-reproduced": {
+      label: "Local integration reproduction",
+      boundary: "Reproduced through the relevant local components end to end; no local-fork reproduction is claimed.",
+    },
+    "local-fork-reproduced": {
+      label: "Local-fork reproduction",
+      boundary: "Reproduced against deployment state on a local fork; no transaction was broadcast to a live network.",
+    },
+    "deployed-target-reproduced": {
+      label: "Deployed-target reproduction",
+      boundary: "Reproduced against the authorized real-target ground truth without treating a live-system write as required evidence.",
+    },
+  };
+  const rank = TECHNICAL_EVIDENCE_RANK[level];
+  const notDemonstrated = level === "unknown"
+    ? [missingExecutionProvenance
+      ? "An execution level was claimed, but no passing confirmation command ID was recorded."
+      : "No executable evidence boundary was recorded."]
+    : rank < TECHNICAL_EVIDENCE_RANK["source-executed"]
+      ? ["Source-level executable reproduction was not recorded.", "End-to-end local integration was not recorded.", "Local-fork reproduction was not recorded.", "Deployed-target reproduction was not recorded."]
+      : rank < TECHNICAL_EVIDENCE_RANK["local-integration-reproduced"]
+        ? ["End-to-end local integration was not recorded.", "Local-fork reproduction was not recorded.", "Deployed-target reproduction was not recorded."]
+        : rank < TECHNICAL_EVIDENCE_RANK["local-fork-reproduced"]
+          ? ["Local-fork reproduction was not recorded.", "Deployed-target reproduction was not recorded."]
+          : rank < TECHNICAL_EVIDENCE_RANK["deployed-target-reproduced"]
+            ? ["Deployed-target reproduction was not recorded."]
+            : [];
+  return {
+    level,
+    label: metadata[level].label,
+    boundary: metadata[level].boundary,
+    satisfiesProgramMinimum: bountyLike ? null : rank >= TECHNICAL_EVIDENCE_RANK["source-executed"],
+    notDemonstrated,
+  };
+}
+
+function evidenceRequirementStatus(
+  row: SubmissionDecisionLike,
+  bountyLike: boolean,
+  level: TechnicalEvidenceLevel,
+): { status: Exclude<ProgramRequirementStatus, "not-required">; detail: string } {
+  const rank = TECHNICAL_EVIDENCE_RANK[level];
+  const profile = asRecord(decisionEngagementProfile(row));
+  const requirement = normalizedWord(profile?.evidence_requirement ?? profile?.evidenceRequirement);
+  const reproduced = decisionReproduced(row);
+  if (reproduced !== "yes") return { status: "not-met", detail: `The decision is ${reproduced || "not reproduced"}.` };
+
+  let minimum: TechnicalEvidenceLevel | undefined;
+  if (matchesStatus(requirement, ["source_only", "published_source", "pre_mainnet_source"])) minimum = "source-executed";
+  else if (matchesStatus(requirement, ["local_integration", "integration", "end_to_end_local"])) minimum = "local-integration-reproduced";
+  else if (matchesStatus(requirement, ["real_target", "local_fork", "fork", "deployed_target", "live_deployment"])) minimum = "local-fork-reproduced";
+  else if (!bountyLike) minimum = "source-executed";
+  else if (rank >= TECHNICAL_EVIDENCE_RANK["local-fork-reproduced"]) minimum = "local-fork-reproduced";
+
+  if (!minimum) {
+    return {
+      status: "unknown",
+      detail: `The engagement does not establish whether ${technicalEvidenceLabel(level)} satisfies its evidence minimum.`,
+    };
+  }
+  if (rank >= TECHNICAL_EVIDENCE_RANK[minimum]) {
+    return { status: "met", detail: `${technicalEvidenceLabel(level)} satisfies the configured ${technicalEvidenceLabel(minimum)} minimum.` };
+  }
+  return {
+    status: "not-met",
+    detail: `${technicalEvidenceLabel(level)} does not satisfy the configured ${technicalEvidenceLabel(minimum)} minimum.`,
+  };
+}
+
+function technicalEvidenceLabel(level: TechnicalEvidenceLevel): string {
+  return level.replace(/-/g, " ");
+}
+
+function classifyProgramGate(status: string | undefined, gate: "scope" | "live_impact"): ProgramRequirementStatus {
+  const normalized = normalizedWord(status);
+  if (!normalized || matchesStatus(normalized, ["unknown", "needs_human", "missing", "unsettled", "pending", "unclear", "unverified"])) return "unknown";
+  if (matchesStatus(normalized, ["not_required", "not_applicable"])) return "not-required";
+  if (isPassingBountyGateStatus(status, gate)) return "met";
+  if (matchesStatus(normalized, ["fail", "failed", "out_of_scope", "ineligible", "unfunded", "not_funded", "not_live", "no_live", "no_funds"])) return "not-met";
+  return "unknown";
+}
+
+function programGateDetail(gate: "scope" | "live_impact", status: ProgramRequirementStatus): string {
+  if (status === "met") return gate === "scope" ? "The affected asset or component is recorded as in scope." : "The required live-impact gate is established.";
+  if (status === "not-met") return gate === "scope" ? "The affected asset or component is recorded as out of scope or ineligible." : "The required live-impact gate failed.";
+  if (status === "not-required") return "The engagement records this gate as not required.";
+  return gate === "scope" ? "Program scope or venue eligibility is not established." : "Required live-deployment impact is not established.";
+}
+
+function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): string | undefined {
+  const text = decisionHumanGates(row).trim();
+  if (!hasUnsettledHumanGateText(text)) return undefined;
+  const normalized = text.toLowerCase();
+  const programTerms = /\b(?:scope|venue|eligib|embargo|submission window|deadline|policy terms?|contest rules?|mandatory requirement)\b/.test(normalized);
+  const liveTerms = /\b(?:live|funded|funds|deployment|production|current version|affected version)\b/.test(normalized);
+  const adjudicationOnly = /\b(?:known issue|known_issue|novelty|duplicate|payout|reward|bounty amount|collectible)\b/.test(normalized)
+    && !programTerms
+    && !(liveRequired && liveTerms);
+  if (adjudicationOnly) return undefined;
+  if (programTerms || (liveRequired && liveTerms)) return text;
+  return "An unresolved human gate was recorded without enough structure to prove that all mandatory program terms are met.";
+}
+
+function adjudicationRiskSummary(row: SubmissionDecisionLike, bountyLike: boolean): SubmissionDecisionSummary["adjudicationRisk"] {
+  if (!bountyLike) return { status: "not-applicable", label: "No bounty adjudication configured", risks: [] };
+  const adjudication = decisionAdjudication(row);
+  const knownStatus = normalizedWord(bountyGateStatus(adjudication, "known_issue"));
+  const payoutStatus = normalizedWord(bountyGateStatus(adjudication, "payout"));
+  const risks: string[] = [];
+  let adverse = false;
+  if (matchesStatus(knownStatus, ["already_disclosed", "duplicate", "disclosed", "not_novel", "known_issue"])) {
+    adverse = true;
+    risks.push("The candidate is recorded as a known issue, duplicate, or prior disclosure.");
+  } else if (!knownStatus || !isPassingBountyGateStatus(knownStatus, "known_issue")) {
+    risks.push("Public novelty and private-duplicate adjudication remain uncertain.");
+  }
+  if (!payoutStatus || !isPassingBountyGateStatus(payoutStatus, "payout")) {
+    risks.push("Award eligibility or amount remains uncertain and is not guaranteed by technical confirmation.");
+  } else {
+    risks.push("Any award remains subject to venue adjudication; an estimate is not a guarantee.");
+  }
+  const status: AdjudicationRiskStatus = adverse ? "adverse" : risks.some((risk) => risk.includes("uncertain")) ? "uncertain" : "clear";
+  const label = status === "adverse" ? "Adjudication evidence adverse" : status === "uncertain" ? "Reward/adjudication uncertain" : "No known adjudication blocker";
+  return { status, label, risks };
+}
+
 export function isPermittedSubmissionEvidenceLevel(row: SubmissionDecisionLike, value: string): boolean {
   const normalized = normalizedWord(value);
-  return isRealTargetEvidenceLevel(normalized)
-    || (allowsSourceOnlyEvidence(row, requiredBountyGates(row)) && isSourceOnlyEvidenceLevel(normalized));
+  if (isRealTargetEvidenceLevel(normalized)) return true;
+  const level = canonicalTechnicalEvidence(value);
+  const profile = asRecord(decisionEngagementProfile(row));
+  const requirement = normalizedWord(profile?.evidence_requirement ?? profile?.evidenceRequirement);
+  if (matchesStatus(requirement, ["local_integration", "integration", "end_to_end_local"])) {
+    return TECHNICAL_EVIDENCE_RANK[level] >= TECHNICAL_EVIDENCE_RANK["local-integration-reproduced"];
+  }
+  return allowsSourceOnlyEvidence(row, requiredBountyGates(row)) && isSourceOnlyEvidenceLevel(normalized);
 }
 
 function allowsSourceOnlyEvidence(row: SubmissionDecisionLike, requiredGates: BountyGate[]): boolean {
@@ -144,7 +507,7 @@ export function requiredBountyGates(row: SubmissionDecisionLike): BountyGate[] {
   const baseline = matchesStatus(requirement, ["source_only", "published_source", "pre_mainnet_source"])
     ? SOURCE_ONLY_BOUNTY_GATES
     : DEFAULT_BOUNTY_GATES;
-  return [...new Set([...baseline, ...declared])];
+  return [...new Set(declared.length > 0 ? declared : baseline)];
 }
 
 function canonicalBountyGate(value: string): BountyGate | undefined {
@@ -157,6 +520,10 @@ function canonicalBountyGate(value: string): BountyGate | undefined {
 
 function decisionHumanGates(row: SubmissionDecisionLike): string {
   return stringField(row, ["humanGates", "human_gates"]);
+}
+
+function decisionReproCommandId(row: SubmissionDecisionLike): string {
+  return stringField(row, ["reproCommandId", "repro_command_id"]);
 }
 
 function decisionEngagementProfile(row: SubmissionDecisionLike): unknown {
@@ -196,53 +563,9 @@ function hasUnsettledHumanGateText(value: string): boolean {
   return /\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not established|not confirmed|unknown|unclear|unverified|pending|review|cannot be settled|must)\b/.test(text);
 }
 
-function hasStructuredBlockingGate(value: unknown): boolean {
-  const root = typeof value === "string" ? jsonParseOrNull(value) : value;
-  if (!root || typeof root !== "object" || Array.isArray(root)) return false;
-  const obj = root as Record<string, unknown>;
-  for (const key of ["scope_status", "scopeStatus", "live_impact_status", "liveImpactStatus", "known_issue_status", "knownIssueStatus", "payout_status", "payoutStatus", "reward_status", "rewardStatus"]) {
-    const status = stringValue(obj[key]);
-    if (status && !isPassingGenericStatus(status)) return true;
-  }
-  const payout = asRecord(obj.payout_estimate ?? obj.payoutEstimate ?? obj.reward_estimate ?? obj.rewardEstimate);
-  const payoutStatus = stringValue(payout?.status);
-  if (payoutStatus && !isPassingBountyGateStatus(payoutStatus, "payout")) return true;
-  const gateArrays = [obj.gates, obj.required_gates, obj.requiredGates].filter(Array.isArray) as unknown[][];
-  for (const gates of gateArrays) {
-    for (const gate of gates) {
-      if (!gate || typeof gate !== "object" || Array.isArray(gate)) continue;
-      const status = stringValue((gate as Record<string, unknown>).status);
-      if (!status) continue;
-      if (!isPassingGenericStatus(status)) return true;
-    }
-  }
-  return false;
-}
-
-function isPassingGenericStatus(status: string): boolean {
-  const normalized = normalizedWord(status);
-  return Boolean(normalized) && !isNegativeGateStatus(normalized) && matchesStatus(normalized, [
-    "pass",
-    "passed",
-    "yes",
-    "ok",
-    "satisfied",
-    "confirmed",
-    "established",
-    "not_required",
-    "not_applicable",
-    "in_scope",
-    "eligible",
-    "novel",
-    "estimated",
-  ]);
-}
-
 function bountyGateStatus(adjudication: unknown, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
   const record = asRecord(adjudication);
   if (!record) return undefined;
-  const direct = directGateStatus(record, gate);
-  if (direct) return direct;
   const gates = Array.isArray(record.gates) ? record.gates.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : [];
   const needles = gateNeedles(gate);
   for (const entry of gates) {
@@ -251,6 +574,20 @@ function bountyGateStatus(adjudication: unknown, gate: "scope" | "live_impact" |
       const status = stringValue(entry.status ?? entry.result ?? entry.state);
       if (status) return status;
     }
+  }
+  return directGateStatus(record, gate);
+}
+
+function bountyGateEvidence(adjudication: unknown, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
+  const record = asRecord(adjudication);
+  if (!record) return undefined;
+  const gates = Array.isArray(record.gates) ? record.gates.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : [];
+  const needles = gateNeedles(gate);
+  for (const entry of gates) {
+    const id = normalizedWord(stringValue(entry.id ?? entry.key ?? entry.name ?? entry.gate));
+    if (!needles.some((needle) => id.includes(needle))) continue;
+    const evidence = stringValue(entry.evidence ?? entry.basis ?? entry.source ?? entry.reason);
+    if (evidence) return evidence;
   }
   return undefined;
 }
@@ -401,6 +738,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : value === undefined || value === null ? "" : String(value).trim();
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(stringValue).filter(Boolean);
 }
 
 function normalizedWord(value: unknown): string {
