@@ -32,7 +32,7 @@ import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
 import { reconcileLegacyPreparedMaterialFingerprints } from "../util/prepared-material-fingerprint.js";
-import { isResumeSettledDecision, isSubmissionReadyDecision, needsSubmissionReadinessWork, submissionDecisionSummary, type SubmissionDecisionLike } from "../util/submission-readiness.js";
+import { isResumeSettledDecision, isSubmissionReadyDecision, needsConfirmEvidenceWork, needsSubmissionReadinessWork, submissionDecisionSummary, type SubmissionDecisionLike } from "../util/submission-readiness.js";
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
 import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
 import { cleanupLocalProjectStorage, inspectLocalProjectStorage, localDiskStorageStatus, type StorageProjectRecord } from "../storage/projects.js";
@@ -2957,14 +2957,14 @@ function confirmWorkRows(
   materialBoundary: Record<string, unknown> | undefined,
   currentDecisions: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  const settledKeys = confirmDecisionKeySet(currentDecisions.filter((row) => !needsSubmissionReadinessWork(row)));
+  const settledKeys = confirmDecisionKeySet(currentDecisions.filter((row) => !needsConfirmEvidenceWork(row)));
   const pending = store.pendingConfirmable(projectId)
     .filter((row) => !findingTrackingBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => !findingIndependentReviewBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
     .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary))
     .filter((row) => !findingRowCoveredByDecision(row as unknown as Record<string, unknown>, settledKeys));
-  const readinessKeys = new Set(currentDecisions.filter((row) => needsSubmissionReadinessWork(row)).flatMap(confirmDecisionMemberKeys));
+  const readinessKeys = new Set(currentDecisions.filter((row) => needsConfirmEvidenceWork(row)).flatMap(confirmDecisionMemberKeys));
   const readiness = readinessKeys.size === 0 ? [] : store.confirmableContext(projectId)
     .filter((row) => !findingTrackingBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => !findingIndependentReviewBlocksProgress(row))
@@ -2974,13 +2974,13 @@ function confirmWorkRows(
       const key = stringValue((row as Record<string, unknown>).finding_key).toLowerCase();
       return Boolean(key && readinessKeys.has(key));
     });
-  const conflictRetries = store.confirmableContext(projectId)
-    .filter((row) => row.refutation_status === "conflict")
+  const explicitRetries = store.confirmableContext(projectId)
     .filter((row) => !findingTrackingBlocksProgress(store.getFinding(Number(row.id))))
     .filter((row) => store.hasFindingPhaseRetry(projectId, "finding", Number(row.id), "confirm"))
+    .filter((row) => !findingIndependentReviewBlocksProgress(row) || row.refutation_status === "conflict")
     .filter((row) => confirmableRunDir(row as unknown as Record<string, unknown>))
     .filter((row) => rowBelongsToCurrentMaterial(row as unknown as Record<string, unknown>, currentResultRunIds, materialBoundary));
-  return uniqueRowsByFindingKey([...pending, ...readiness, ...conflictRetries]).filter((row) => {
+  return uniqueRowsByFindingKey([...pending, ...readiness, ...explicitRetries]).filter((row) => {
     const inputFingerprint = findingPhaseFingerprint(store, row, "confirm", materialBoundary);
     return store.phaseEligible(projectId, "finding", Number(row.id), "confirm", inputFingerprint);
   });

@@ -31,6 +31,14 @@ function decisionWithSummary(decision) {
   };
 }
 
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "All preconditions are attacker reachable." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed effect." },
+    { id: "impact_bounds", status: "pass", evidence: "Recovery and reversibility controls are included in the impact." },
+  ];
+}
+
 test("ui: queued work stays distinct from running work", () => {
   assert.equal(projectBadgeStatus({ uuid: "queued", name: "Queued", activeRuns: 0, queuedRuns: 1 }), "queued");
   assert.equal(projectBadgeStatus({ uuid: "running", name: "Running", activeRuns: 1, queuedRuns: 2 }), "running");
@@ -331,7 +339,10 @@ test("ui: policy-authorized pre-mainnet source decisions are reportable", () => 
       required_gates: ["scope", "known_issue", "payout"],
     },
     adjudication: {
-      gates: [{ id: "scope", status: "pass", evidence: "The official source path is in scope." }],
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official source path is in scope." },
+        ...validTechnicalClaimGates(),
+      ],
       scope_status: "pass",
       live_impact_status: "not_required",
       known_issue_status: "novel",
@@ -341,6 +352,7 @@ test("ui: policy-authorized pre-mainnet source decisions are reportable", () => 
 
   assert.deepEqual(reportableDecisions([decisionWithSummary(sourceDecision)]).map((decision) => decision.id), [7]);
   assert.deepEqual(reportableDecisions([decisionWithSummary({ ...sourceDecision, engagement_profile: undefined })]), []);
+  assert.match(appSource, /technicalEvidence\.claimValidity\.label/);
 });
 
 test("ui: confirm phase surfaces latest confirm run errors", () => {

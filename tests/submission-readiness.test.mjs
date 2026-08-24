@@ -5,6 +5,14 @@ import {
   submissionDecisionSummary,
 } from "../dist/util/submission-readiness.js";
 
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "The test reaches every precondition using only the untrusted caller's permissions." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed unauthorized state transition." },
+    { id: "impact_bounds", status: "pass", evidence: "Existing recovery and revocation controls were exercised and do not erase the stated impact." },
+  ];
+}
+
 function sourceOnlyContest(overrides = {}) {
   return {
     bug: "Authorization bypass",
@@ -20,7 +28,10 @@ function sourceOnlyContest(overrides = {}) {
       required_gates: ["scope", "known_issue", "payout"],
     },
     adjudication: {
-      gates: [{ id: "scope", status: "pass", evidence: "The official asset list includes the affected component." }],
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official asset list includes the affected component." },
+        ...validTechnicalClaimGates(),
+      ],
       scope_status: "pass",
       live_impact_status: "not-required",
       known_issue_status: "needs-human",
@@ -36,6 +47,7 @@ test("submission decision separates program compliance from evidence and reward 
   assert.equal(summary.programCompliance.status, "met");
   assert.equal(summary.technicalEvidence.level, "source-executed");
   assert.equal(summary.technicalEvidence.satisfiesProgramMinimum, true);
+  assert.equal(summary.technicalEvidence.claimValidity.status, "met");
   assert.deepEqual(summary.technicalEvidence.notDemonstrated, [
     "End-to-end local integration was not recorded.",
     "Local-fork reproduction was not recorded.",
@@ -63,6 +75,7 @@ test("source execution cannot satisfy a program that requires a local fork", () 
       gates: [
         { id: "scope", status: "pass", evidence: "The official asset list includes the target." },
         { id: "live_impact", status: "pass", evidence: "The affected deployment is recorded in the impact inventory." },
+        ...validTechnicalClaimGates(),
       ],
       scope_status: "pass",
       live_impact_status: "pass",
@@ -111,6 +124,7 @@ test("a failed mandatory scope gate wins over an independently weak evidence lev
       gates: [
         { id: "scope", status: "fail", evidence: "The official asset list excludes this component." },
         { id: "live_impact", status: "pass", evidence: "A deployment is listed." },
+        ...validTechnicalClaimGates(),
       ],
       scope_status: "fail",
       live_impact_status: "pass",
@@ -169,7 +183,10 @@ test("an explicit known duplicate is adverse without changing the technical evid
     recommendation: "submit-candidate",
     humanGates: "",
     adjudication: {
-      gates: [{ id: "scope", status: "pass", evidence: "The official asset list includes the affected component." }],
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official asset list includes the affected component." },
+        ...validTechnicalClaimGates(),
+      ],
       scope_status: "pass",
       live_impact_status: "not-required",
       known_issue_status: "already-disclosed",
@@ -181,4 +198,39 @@ test("an explicit known duplicate is adverse without changing the technical evid
   assert.equal(summary.technicalEvidence.label, "Source-level executable evidence");
   assert.equal(summary.adjudicationRisk.status, "adverse");
   assert.equal(summary.submission.status, "do-not-submit");
+});
+
+test("bounty submission requires attacker reachability, an end-to-end effect, and bounded impact", () => {
+  const missing = submissionDecisionSummary(sourceOnlyContest({
+    adjudication: {
+      gates: [{ id: "scope", status: "pass", evidence: "The official asset list includes the component." }],
+      scope_status: "pass",
+      live_impact_status: "not-required",
+      known_issue_status: "novel",
+      payout_estimate: { status: "estimated" },
+    },
+    humanGates: "",
+  }), { requireImpactInventory: false });
+  assert.equal(missing.technicalEvidence.claimValidity.status, "unknown");
+  assert.equal(missing.submission.status, "strengthen-first");
+  assert.match(missing.submission.rationale, /real attacker/i);
+
+  const intermediateOnly = submissionDecisionSummary(sourceOnlyContest({
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official asset list includes the component." },
+        { id: "attacker_reachability", status: "pass", evidence: "The preconditions are attacker reachable." },
+        { id: "end_to_end_effect", status: "fail", evidence: "The PoC only encoded an intermediate call and did not commit the claimed effect." },
+        { id: "impact_bounds", status: "unknown", evidence: "Recovery controls were not evaluated." },
+      ],
+      scope_status: "pass",
+      live_impact_status: "not-required",
+      known_issue_status: "novel",
+      payout_estimate: { status: "estimated" },
+    },
+    humanGates: "",
+  }), { requireImpactInventory: false });
+  assert.equal(intermediateOnly.technicalEvidence.claimValidity.status, "not-met");
+  assert.equal(intermediateOnly.submission.status, "do-not-submit");
+  assert.match(intermediateOnly.submission.rationale, /intermediate call/i);
 });

@@ -332,6 +332,16 @@ export interface ConfirmDecision {
       boundary: string;
       satisfiesProgramMinimum: boolean | null;
       notDemonstrated: string[];
+      claimValidity: {
+        status: "met" | "not-met" | "unknown" | "not-required";
+        label: string;
+        requirements: Array<{
+          id: "attacker-reachability" | "end-to-end-effect" | "impact-bounds";
+          label: string;
+          status: "met" | "not-met" | "unknown" | "not-required";
+          detail: string;
+        }>;
+      };
     };
     submission: {
       status: "eligible-to-submit" | "strengthen-first" | "needs-human" | "do-not-submit";

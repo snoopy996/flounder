@@ -11,6 +11,8 @@ export type SubmissionDecisionLike = {
 };
 
 export type BountyGate = "scope" | "live_impact" | "known_issue" | "payout";
+export type TechnicalClaimGate = "attacker_reachability" | "end_to_end_effect" | "impact_bounds";
+type DecisionGate = BountyGate | TechnicalClaimGate;
 const DEFAULT_BOUNTY_GATES: BountyGate[] = ["scope", "live_impact", "known_issue", "payout"];
 const SOURCE_ONLY_BOUNTY_GATES: BountyGate[] = ["scope", "known_issue", "payout"];
 
@@ -54,6 +56,16 @@ export interface SubmissionDecisionSummary {
     boundary: string;
     satisfiesProgramMinimum: boolean | null;
     notDemonstrated: string[];
+    claimValidity: {
+      status: ProgramComplianceStatus | "not-required";
+      label: string;
+      requirements: Array<{
+        id: "attacker-reachability" | "end-to-end-effect" | "impact-bounds";
+        label: string;
+        status: ProgramRequirementStatus;
+        detail: string;
+      }>;
+    };
   };
   submission: {
     status: SubmissionDisposition;
@@ -171,6 +183,7 @@ export function submissionDecisionSummary(
       : "Program minimum unresolved";
 
   const adjudicationRisk = adjudicationRiskSummary(row, bountyLike);
+  const claimValidity = evidence.claimValidity;
   const reproduced = decisionReproduced(row);
   const rawRecommendation = decisionRecommendation(row);
   let submissionStatus: SubmissionDisposition;
@@ -189,6 +202,14 @@ export function submissionDecisionSummary(
     submissionStatus = "needs-human";
     submissionRationale = blockers.find((blocker) => !blocker.startsWith("Required evidence:"))
       ?? "A mandatory program requirement remains unresolved.";
+  } else if (claimValidity.status === "not-met") {
+    submissionStatus = "do-not-submit";
+    submissionRationale = claimValidity.requirements.find((requirement) => requirement.status === "not-met")?.detail
+      ?? "The claimed exploit did not clear the technical-validity bar.";
+  } else if (claimValidity.status === "unknown") {
+    submissionStatus = "strengthen-first";
+    submissionRationale = claimValidity.requirements.find((requirement) => requirement.status === "unknown")?.detail
+      ?? "The claimed exploit still has unresolved technical-validity evidence.";
   } else if (evidenceRequirement.status === "not-met") {
     submissionStatus = "strengthen-first";
     submissionRationale = evidenceRequirement.detail;
@@ -257,7 +278,21 @@ export function isResumeSettledDecision(row: object): boolean {
   const decision = row as SubmissionDecisionLike;
   if (decisionReproduced(decision) === "no") return true;
   if (decisionRecommendation(decision) === "drop") return true;
-  return isSubmissionReadyDecision(decision);
+  return decisionReproduced(decision) === "yes" && !needsConfirmEvidenceWork(decision);
+}
+
+/**
+ * Whether Confirm must run again to improve technical evidence. Program-policy,
+ * payout, and duplicate gates belong to adjudication and must not silently
+ * re-run an already-settled exploit PoC. A focused retry may still reopen it.
+ */
+export function needsConfirmEvidenceWork(row: object): boolean {
+  const decision = row as SubmissionDecisionLike;
+  if (decisionReproduced(decision) !== "yes" || decisionRecommendation(decision) === "drop") return false;
+  const summary = submissionDecisionSummary(decision, { requireImpactInventory: false });
+  if (["unknown", "reasoned", "source-supported"].includes(summary.technicalEvidence.level)) return true;
+  if (summary.technicalEvidence.satisfiesProgramMinimum === false) return true;
+  return summary.technicalEvidence.claimValidity.status === "unknown";
 }
 
 export function submissionReadinessBlocker(row: SubmissionDecisionLike, options: SubmissionReadinessOptions = {}): string | undefined {
@@ -366,7 +401,7 @@ function technicalEvidenceSummary(
     },
   };
   const rank = TECHNICAL_EVIDENCE_RANK[level];
-  const notDemonstrated = level === "unknown"
+  const boundaryGaps = level === "unknown"
     ? [missingExecutionProvenance
       ? "An execution level was claimed, but no passing confirmation command ID was recorded."
       : "No executable evidence boundary was recorded."]
@@ -379,13 +414,83 @@ function technicalEvidenceSummary(
           : rank < TECHNICAL_EVIDENCE_RANK["deployed-target-reproduced"]
             ? ["Deployed-target reproduction was not recorded."]
             : [];
+  const claimValidity = technicalClaimValiditySummary(row, bountyLike);
+  const validityGaps = claimValidity.requirements
+    .filter((requirement) => requirement.status === "unknown" || requirement.status === "not-met")
+    .map((requirement) => `${requirement.label}: ${requirement.detail}`);
   return {
     level,
     label: metadata[level].label,
     boundary: metadata[level].boundary,
     satisfiesProgramMinimum: bountyLike ? null : rank >= TECHNICAL_EVIDENCE_RANK["source-executed"],
-    notDemonstrated,
+    notDemonstrated: [...boundaryGaps, ...validityGaps],
+    claimValidity,
   };
+}
+
+function technicalClaimValiditySummary(
+  row: SubmissionDecisionLike,
+  bountyLike: boolean,
+): SubmissionDecisionSummary["technicalEvidence"]["claimValidity"] {
+  const definitions = [
+    {
+      gate: "attacker_reachability" as const,
+      id: "attacker-reachability" as const,
+      label: "Attacker-reachable preconditions",
+      unknown: "The decision does not establish that a real attacker can cause or reliably exploit every required precondition.",
+    },
+    {
+      gate: "end_to_end_effect" as const,
+      id: "end-to-end-effect" as const,
+      label: "End-to-end security effect",
+      unknown: "The passing PoC is not shown to commit the claimed unauthorized effect end to end; an intermediate value or calldata alone is insufficient.",
+    },
+    {
+      gate: "impact_bounds" as const,
+      id: "impact-bounds" as const,
+      label: "Impact and recovery bounds",
+      unknown: "The decision does not account for existing authorization, recovery, revocation, timing, and reversibility controls when stating impact.",
+    },
+  ];
+  if (!bountyLike) {
+    return {
+      status: "not-required",
+      label: "Bounty claim gates not required",
+      requirements: definitions.map(({ id, label }) => ({ id, label, status: "not-required", detail: "No bounty or contest submission is being recommended." })),
+    };
+  }
+  const adjudication = decisionAdjudication(row);
+  const requirements = definitions.map(({ gate, id, label, unknown }) => {
+    let status = classifyTechnicalClaimGate(bountyGateStatus(adjudication, gate));
+    const evidence = bountyGateEvidence(adjudication, gate);
+    let detail = evidence || unknown;
+    if (status === "met" && !evidence) {
+      status = "unknown";
+      detail = `${label} is marked as passing, but no supporting evidence is recorded.`;
+    } else if (status === "not-met" && !evidence) {
+      detail = `${label} failed, but the decision did not record why.`;
+    }
+    return { id, label, status, detail };
+  });
+  const status = requirements.some((requirement) => requirement.status === "not-met")
+    ? "not-met"
+    : requirements.some((requirement) => requirement.status !== "met")
+      ? "unknown"
+      : "met";
+  const label = status === "met"
+    ? "Technical claim validated"
+    : status === "not-met"
+      ? "Technical claim invalidated"
+      : "Technical claim validation incomplete";
+  return { status, label, requirements };
+}
+
+function classifyTechnicalClaimGate(status: string | undefined): Exclude<ProgramRequirementStatus, "not-required"> {
+  const normalized = normalizedWord(status);
+  if (!normalized || matchesStatus(normalized, ["unknown", "needs_human", "missing", "unsettled", "pending", "unclear", "unverified", "not_required", "not_applicable"])) return "unknown";
+  if (isPassingBountyGateStatus(status, "attacker_reachability")) return "met";
+  if (matchesStatus(normalized, ["fail", "failed", "not_reachable", "not_observed", "not_demonstrated", "invalid", "refuted", "mitigated"])) return "not-met";
+  return "unknown";
 }
 
 function evidenceRequirementStatus(
@@ -563,14 +668,14 @@ function hasUnsettledHumanGateText(value: string): boolean {
   return /\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not established|not confirmed|unknown|unclear|unverified|pending|review|cannot be settled|must)\b/.test(text);
 }
 
-function bountyGateStatus(adjudication: unknown, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
+function bountyGateStatus(adjudication: unknown, gate: DecisionGate): string | undefined {
   const record = asRecord(adjudication);
   if (!record) return undefined;
   const gates = Array.isArray(record.gates) ? record.gates.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : [];
   const needles = gateNeedles(gate);
   for (const entry of gates) {
     const id = normalizedWord(stringValue(entry.id ?? entry.key ?? entry.name ?? entry.gate));
-    if (needles.some((needle) => id.includes(needle))) {
+    if (gateIdMatches(id, gate, needles)) {
       const status = stringValue(entry.status ?? entry.result ?? entry.state);
       if (status) return status;
     }
@@ -578,26 +683,29 @@ function bountyGateStatus(adjudication: unknown, gate: "scope" | "live_impact" |
   return directGateStatus(record, gate);
 }
 
-function bountyGateEvidence(adjudication: unknown, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
+function bountyGateEvidence(adjudication: unknown, gate: DecisionGate): string | undefined {
   const record = asRecord(adjudication);
   if (!record) return undefined;
   const gates = Array.isArray(record.gates) ? record.gates.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : [];
   const needles = gateNeedles(gate);
   for (const entry of gates) {
     const id = normalizedWord(stringValue(entry.id ?? entry.key ?? entry.name ?? entry.gate));
-    if (!needles.some((needle) => id.includes(needle))) continue;
+    if (!gateIdMatches(id, gate, needles)) continue;
     const evidence = stringValue(entry.evidence ?? entry.basis ?? entry.source ?? entry.reason);
     if (evidence) return evidence;
   }
   return undefined;
 }
 
-function directGateStatus(record: Record<string, unknown>, gate: "scope" | "live_impact" | "known_issue" | "payout"): string | undefined {
+function directGateStatus(record: Record<string, unknown>, gate: DecisionGate): string | undefined {
   const keys: Record<typeof gate, string[]> = {
     scope: ["scope_status", "scopeStatus", "asset_status", "assetStatus", "eligibility_status", "eligibilityStatus"],
     live_impact: ["live_impact_status", "liveImpactStatus", "funds_status", "fundsStatus", "exposure_status", "exposureStatus"],
     known_issue: ["known_issue_status", "knownIssueStatus", "novelty_status", "noveltyStatus", "duplicate_status", "duplicateStatus"],
     payout: ["payout_status", "payoutStatus", "reward_status", "rewardStatus"],
+    attacker_reachability: ["attacker_reachability_status", "attackerReachabilityStatus", "attacker_control_status", "attackerControlStatus"],
+    end_to_end_effect: ["end_to_end_effect_status", "endToEndEffectStatus", "effect_status", "effectStatus"],
+    impact_bounds: ["impact_bounds_status", "impactBoundsStatus", "mitigation_review_status", "mitigationReviewStatus"],
   };
   for (const key of keys[gate]) {
     const status = stringValue(record[key]);
@@ -611,16 +719,32 @@ function directGateStatus(record: Record<string, unknown>, gate: "scope" | "live
   return undefined;
 }
 
-function gateNeedles(gate: "scope" | "live_impact" | "known_issue" | "payout"): string[] {
+function gateNeedles(gate: DecisionGate): string[] {
   switch (gate) {
     case "scope": return ["scope", "venue", "eligib", "asset"];
     case "live_impact": return ["live", "impact", "fund", "exposure", "deployment"];
     case "known_issue": return ["known", "novel", "duplicate", "disclos"];
     case "payout": return ["payout", "reward", "collectible", "bounty"];
+    case "attacker_reachability": return ["attacker_reachability", "attacker_control", "reachable_precondition"];
+    case "end_to_end_effect": return ["end_to_end_effect", "observable_effect", "effect_execution"];
+    case "impact_bounds": return ["impact_bounds", "mitigation_review", "recovery_bounds"];
   }
 }
 
-function isPassingBountyGateStatus(status: string | undefined, gate: "scope" | "live_impact" | "known_issue" | "payout"): boolean {
+function gateIdMatches(id: string, gate: DecisionGate, needles: string[]): boolean {
+  const technical = canonicalTechnicalClaimGate(id);
+  if (technical) return technical === gate;
+  return needles.some((needle) => id === needle || id.startsWith(`${needle}_`) || id.endsWith(`_${needle}`));
+}
+
+function canonicalTechnicalClaimGate(value: string): TechnicalClaimGate | undefined {
+  if (["attacker_reachability", "attacker_control", "reachable_precondition", "reachable_preconditions"].includes(value)) return "attacker_reachability";
+  if (["end_to_end_effect", "observable_effect", "effect_execution", "security_effect"].includes(value)) return "end_to_end_effect";
+  if (["impact_bounds", "mitigation_review", "recovery_bounds", "reversibility_review"].includes(value)) return "impact_bounds";
+  return undefined;
+}
+
+function isPassingBountyGateStatus(status: string | undefined, gate: DecisionGate): boolean {
   const normalized = normalizedWord(status);
   if (!normalized) return false;
   if (isNegativeGateStatus(normalized)) return false;

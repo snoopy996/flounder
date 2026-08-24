@@ -1263,7 +1263,7 @@ export class MetadataStore {
     const rows = this.db
       .prepare(
         `SELECT id, project_id, reproduced, recommendation, members_json, severity,
-                evidence_level, submission_confidence, repro_evidence, corroboration,
+                evidence_level, submission_confidence, repro_evidence, repro_command_id, corroboration,
                 novelty, human_gates, engagement_profile_json, adjudication_json,
                 operator_adjudication_json
            FROM confirm_decision`,
@@ -1278,6 +1278,7 @@ export class MetadataStore {
         evidence_level: string | null;
         submission_confidence: string | null;
         repro_evidence: string | null;
+        repro_command_id: string | null;
         corroboration: string | null;
         novelty: string | null;
         human_gates: string | null;

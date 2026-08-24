@@ -6,6 +6,14 @@ import path from "node:path";
 import { assertCompleteConfirmDecisionCoverage, assertConfirmCompletion, enforceBountySubmitReadiness, enforceConfirmExecutionProvenance, loadSettledFromPriorConfirm } from "../dist/agent/confirm.js";
 import { publicPath } from "../dist/util/paths.js";
 
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "The attacker reaches all preconditions with untrusted permissions." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed unauthorized effect." },
+    { id: "impact_bounds", status: "pass", evidence: "Recovery, revocation, timing, and reversibility controls were included in the impact statement." },
+  ];
+}
+
 // `flounder confirm` auto-resumes a prior interrupted confirm of the same input run: it finds
 // the latest prior confirm dir (matched by frozen provenance) and carries only rows that
 // are final for the pipeline forward. Reproduced rows with open submission gates must be
@@ -46,7 +54,7 @@ test("confirm resume: loads SETTLED rows from the latest prior confirm of the sa
   assert.equal(settled.every((r) => r.reproduced === "yes" || r.reproduced === "no"), true);
 });
 
-test("confirm resume: reproduced needs-human rows are not settled and remain retry work", async () => {
+test("confirm resume: technically incomplete reproduced rows remain retry work", async () => {
   const out = await mkdtemp(path.join(os.tmpdir(), "flounder-confirm-resume-gates-"));
   const inputX = "/some/input-run-X";
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputX, [
@@ -63,6 +71,39 @@ test("confirm resume: reproduced needs-human rows are not settled and remain ret
 
   const settled = await loadSettledFromPriorConfirm(out, "tgt", inputX, path.join(out, "tgt-confirm-cur"));
   assert.deepEqual(settled.map((r) => r.bug).sort(), ["Dropped bug", "Not reproduced bug"]);
+});
+
+test("confirm resume: policy-only human gates do not rerun settled exploit evidence", async () => {
+  const out = await mkdtemp(path.join(os.tmpdir(), "flounder-confirm-resume-policy-gates-"));
+  const inputX = "/some/input-run-X";
+  await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputX, [{
+    bug: "Technically settled bug",
+    reproduced: "yes",
+    recommendation: "needs-human",
+    evidenceLevel: "local-fork-reproduced",
+    reproCommandId: "cmd-settled",
+    humanGates: "Live exposure and payout adjudication remain pending.",
+    engagementProfile: {
+      policy_kind: "bug_bounty",
+      policy_sources: ["https://example.test/bounty/policy"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "live_impact", "known_issue", "payout"],
+    },
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The official list includes the target." },
+        { id: "live_impact", status: "unknown", evidence: "Live exposure is still under review." },
+        ...validTechnicalClaimGates(),
+      ],
+      scope_status: "pass",
+      live_impact_status: "unknown",
+      known_issue_status: "novel",
+      payout_estimate: { status: "unknown" },
+    },
+  }]);
+
+  const settled = await loadSettledFromPriorConfirm(out, "tgt", inputX, path.join(out, "tgt-confirm-cur"));
+  assert.deepEqual(settled.map((row) => row.bug), ["Technically settled bug"]);
 });
 
 test("confirm resume: no prior confirm → empty (fresh start)", async () => {
@@ -184,6 +225,7 @@ test("confirm bounty submit readiness requires impact inventory and closed gates
       gates: [
         { id: "scope", status: "pass", evidence: "The official asset list includes the pool." },
         { id: "live_impact", status: "pass", evidence: "The deployment is live and covered by the impact inventory." },
+        ...validTechnicalClaimGates(),
       ],
       scope_status: "pass",
       live_impact_status: "pass",
@@ -241,7 +283,10 @@ test("pre-mainnet bounty can use the program's source-only submission gates", ()
         required_gates: ["scope", "known_issue", "payout"],
       },
       adjudication: {
-        gates: [{ id: "scope", status: "pass", evidence: "The official source path is listed in scope." }],
+        gates: [
+          { id: "scope", status: "pass", evidence: "The official source path is listed in scope." },
+          ...validTechnicalClaimGates(),
+        ],
         scope_status: "pass",
         live_impact_status: "not_required",
         known_issue_status: "novel",
@@ -286,6 +331,7 @@ test("configured bounty engagement cannot be downgraded to source review", () =>
         gates: [
           { id: "scope", status: "pass", evidence: "The configured venue asset list includes the target." },
           { id: "live_impact", status: "pass", evidence: "The configured venue requires and records live impact." },
+          ...validTechnicalClaimGates(),
         ],
         scope_status: "pass",
         live_impact_status: "pass",

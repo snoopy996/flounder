@@ -312,6 +312,8 @@ test("daemon: an explicit evidence-conflict retry re-enters Verify and clears af
         reproduced: "yes",
         recommendation: "submit-candidate",
         members: ["kconflictretry"],
+        evidenceLevel: "real-target-reproduced",
+        engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
         reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
         reproCommandId: "cmd1",
       }]);

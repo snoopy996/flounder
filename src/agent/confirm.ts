@@ -983,6 +983,10 @@ function renderConfirmReport(input: {
     out.push(`### ${idx + 1}. ${row.bug} — ${badge}`);
     out.push(`- Program requirements: ${summary.programCompliance.label}`);
     out.push(`- Evidence boundary: ${summary.technicalEvidence.boundary}`);
+    out.push(`- Technical claim: ${summary.technicalEvidence.claimValidity.label}`);
+    for (const requirement of summary.technicalEvidence.claimValidity.requirements.filter((entry) => entry.status !== "met" && entry.status !== "not-required")) {
+      out.push(`  - ${requirement.label}: ${requirement.status} — ${requirement.detail}`);
+    }
     if (summary.technicalEvidence.notDemonstrated.length > 0) out.push(`- Not demonstrated: ${summary.technicalEvidence.notDemonstrated.join(" ")}`);
     out.push(`- Submission advice: ${summary.submission.label} — ${summary.submission.rationale}`);
     out.push(`- Reward / adjudication: ${summary.adjudicationRisk.label}${summary.adjudicationRisk.risks.length ? ` — ${summary.adjudicationRisk.risks.join(" ")}` : ""}`);
