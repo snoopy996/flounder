@@ -1145,6 +1145,11 @@ test("store: startup keeps command provenance when restoring a private-audit tec
         payout_estimate: { status: "not-applicable" },
       },
     }]);
+    db.recordRunHealth(confirmRun, {
+      status: "needs-human",
+      reasons: ["The private disclosure contact remains unresolved."],
+      signals: { needsHuman: 1 },
+    });
     db.finishRun(confirmRun, "done");
     const decisionId = Number(db.listConfirmDecisions(projectId)[0].id);
     db.close();
@@ -1164,6 +1169,7 @@ test("store: startup keeps command provenance when restoring a private-audit tec
     assert.equal(restored.evidence_level, "local-fork-reproduced");
     assert.equal(restored.repro_command_id, "cmd-private-fork");
     assert.equal(restored.human_gates, handlingNote);
+    assert.equal(db.getRun(confirmRun).health_status, null);
     db.close();
   } finally {
     await rm(dir, { recursive: true, force: true });

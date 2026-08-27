@@ -1340,6 +1340,21 @@ export class MetadataStore {
         row.id,
       );
     }
+    this.db.prepare(
+      `UPDATE run
+          SET health_status = NULL,
+              health_reasons_json = NULL,
+              health_signals_json = NULL
+        WHERE kind = 'confirm'
+          AND status = 'done'
+          AND health_status = 'needs-human'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM confirm_decision
+             WHERE confirm_decision.run_id = run.id
+               AND confirm_decision.recommendation = 'needs-human'
+          )`,
+    ).run();
   }
 
   private reconcileFindingReportRunIds(): void {
