@@ -62,6 +62,38 @@ test("submission decision separates program compliance from evidence and reward 
   assert.match(normalized.humanGates, /Private duplicate and payout/);
 });
 
+test("private disclosure handling notes do not erase a local-fork technical verdict", () => {
+  const row = {
+    bug: "Shared backing can become undercollateralized",
+    reproduced: "yes",
+    recommendation: "needs-human",
+    evidenceLevel: "local-fork-reproduced",
+    reproCommandId: "cmd-fork-1",
+    humanGates: "No mandatory submission gate remains under the supplied private-audit engagement. Maintainers must still confirm the private security contact/embargo and whether this is an internal known issue or private duplicate; those facts affect handling, not the demonstrated technical minimum.",
+    engagementProfile: {
+      policy_kind: "private_audit",
+      policy_sources: ["SECURITY.md"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "private disclosure channel"],
+    },
+    adjudication: {
+      gates: [{ id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." }],
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+  };
+
+  const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
+  assert.equal(summary.technicalEvidence.level, "local-fork-reproduced");
+  assert.equal(summary.programCompliance.status, "met");
+  assert.equal(summary.submission.status, "eligible-to-submit");
+
+  const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
+  assert.equal(normalized.recommendation, "submit-candidate");
+  assert.match(normalized.humanGates, /private security contact\/embargo/i);
+});
+
 test("source execution cannot satisfy a program that requires a local fork", () => {
   const row = sourceOnlyContest({
     recommendation: "submit-candidate",

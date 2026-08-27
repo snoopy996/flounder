@@ -1109,6 +1109,67 @@ test("store: startup preserves operator-adjudicated fork evidence when safety no
   }
 });
 
+test("store: startup keeps command provenance when restoring a private-audit technical verdict", async () => {
+  const { dir, dbPath } = await tempDbPath();
+  try {
+    let db = MetadataStore.openForOutput(dir);
+    const projectId = db.upsertProject({ name: "private-audit-reproduced" });
+    const auditRun = db.startRun({ projectId, kind: "audit", runDir: path.join(dir, "audit"), materialFingerprint: "sha256:private-audit" });
+    db.upsertFindings(projectId, auditRun, [{
+      findingKey: "kprivatefork",
+      title: "Private-audit fork reproduction",
+      status: "confirmed-differential",
+    }]);
+    db.finishRun(auditRun, "done");
+    const confirmRun = db.startRun({ projectId, kind: "confirm", runDir: path.join(dir, "confirm"), materialFingerprint: "sha256:private-audit" });
+    const handlingNote = "No mandatory submission gate remains under the supplied private-audit engagement. Maintainers must still confirm the private security contact/embargo and private duplicate status; those facts affect handling, not the demonstrated technical minimum.";
+    db.upsertConfirmDecisions(projectId, confirmRun, [{
+      bug: "Private-audit fork reproduction",
+      reproduced: "yes",
+      recommendation: "needs-human",
+      members: ["kprivatefork"],
+      evidenceLevel: "local-fork-reproduced",
+      reproEvidence: "The deployed effect reproduced on a fixed local fork.",
+      reproCommandId: "cmd-private-fork",
+      humanGates: handlingNote,
+      engagementProfile: {
+        policy_kind: "private_audit",
+        policy_sources: ["SECURITY.md"],
+        evidence_requirement: "real_target",
+        required_gates: ["scope", "private disclosure channel"],
+      },
+      adjudication: {
+        gates: [{ id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." }],
+        scope_status: "pass",
+        known_issue_status: "unknown",
+        payout_estimate: { status: "not-applicable" },
+      },
+    }]);
+    db.finishRun(confirmRun, "done");
+    const decisionId = Number(db.listConfirmDecisions(projectId)[0].id);
+    db.close();
+
+    const legacy = new DatabaseSync(dbPath);
+    legacy.prepare(
+      `UPDATE confirm_decision
+          SET recommendation = 'needs-human',
+              human_gates = human_gates || ' Framework blocked submit-candidate: execution provenance was not restored'
+        WHERE id = ?`,
+    ).run(decisionId);
+    legacy.close();
+
+    db = MetadataStore.openForOutput(dir);
+    const restored = db.getConfirmDecision(decisionId);
+    assert.equal(restored.recommendation, "submit-candidate");
+    assert.equal(restored.evidence_level, "local-fork-reproduced");
+    assert.equal(restored.repro_command_id, "cmd-private-fork");
+    assert.equal(restored.human_gates, handlingNote);
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("store: ambiguous reproduced decisions do not default to real-target evidence", async () => {
   const db = await tempDb();
   const projectId = db.upsertProject({ name: "p" });

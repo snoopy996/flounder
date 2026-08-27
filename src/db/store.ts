@@ -928,6 +928,15 @@ function operatorAdjudicatedDecisionInput(
   };
 }
 
+function withoutStaleFrameworkSubmissionBlocker(value: string | null | undefined): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const marker = "Framework blocked submit-candidate:";
+  const markerIndex = text.indexOf(marker);
+  const cleaned = (markerIndex >= 0 ? text.slice(0, markerIndex) : text).trim();
+  return cleaned || null;
+}
+
 const CANONICAL_STATUS_RANK: Record<string, number> = {
   discharged: 0,
   refuted: 1,
@@ -1320,7 +1329,7 @@ export class MetadataStore {
       const enforced = enforceSubmissionReadiness([input], { requireImpactInventory: false })[0] ?? input;
       const evidenceLevel = decisionEvidenceLevel(enforced);
       const humanGates = enforced.recommendation === "submit-candidate"
-        ? null
+        ? withoutStaleFrameworkSubmissionBlocker(enforced.humanGates ?? row.human_gates)
         : enforced.humanGates ?? row.human_gates;
       update.run(
         enforced.recommendation ?? row.recommendation,

@@ -558,6 +558,9 @@ function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): s
   const text = decisionHumanGates(row).trim();
   if (!hasUnsettledHumanGateText(text)) return undefined;
   const normalized = text.toLowerCase();
+  const explicitlyHandlingOnly = /\bno mandatory (?:submission|program|policy) (?:gate|gates|blocker|blockers) remain(?:s|ing)?\b/.test(normalized)
+    && /\b(?:handling|disclosure|contact|duplicate|embargo)\b/.test(normalized);
+  if (explicitlyHandlingOnly) return undefined;
   const programTerms = /\b(?:scope|venue|eligib|embargo|submission window|deadline|policy terms?|contest rules?|mandatory requirement)\b/.test(normalized);
   const liveTerms = /\b(?:live|funded|funds|deployment|production|current version|affected version)\b/.test(normalized);
   const adjudicationOnly = /\b(?:known issue|known_issue|novelty|duplicate|payout|reward|bounty amount|collectible)\b/.test(normalized)
