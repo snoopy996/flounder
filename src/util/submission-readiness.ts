@@ -317,6 +317,7 @@ export function isBountyLikePolicy(row: SubmissionDecisionLike): boolean {
   const adjudication = asRecord(decisionAdjudication(row));
   const policyKind = normalizedWord(stringValue(profile?.policy_kind ?? profile?.policyKind ?? profile?.kind));
   if (policyKind.includes("bug_bounty") || policyKind.includes("bounty") || policyKind.includes("contest")) return true;
+  if (["private_audit", "incident", "source_review"].includes(policyKind)) return false;
   const requiredRaw = profile?.required_gates ?? profile?.requiredGates;
   const requiredGates = Array.isArray(requiredRaw) ? requiredRaw.map((entry) => normalizedWord(stringValue(entry))) : [];
   const adjudicationHasPayout = Boolean(adjudication && ("payout_estimate" in adjudication || "payoutEstimate" in adjudication || "reward_estimate" in adjudication || "rewardEstimate" in adjudication));
@@ -558,6 +559,12 @@ function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): s
   const text = decisionHumanGates(row).trim();
   if (!hasUnsettledHumanGateText(text)) return undefined;
   const normalized = text.toLowerCase();
+  const profile = asRecord(decisionEngagementProfile(row));
+  const policyKind = normalizedWord(profile?.policy_kind ?? profile?.policyKind ?? profile?.kind);
+  const privateReview = ["private_audit", "incident", "source_review"].includes(policyKind);
+  const disclosureHandling = /\b(?:private|confidential|contact|embargo|duplicate|known issue|disclosure)\b/.test(normalized);
+  const technicalAuthorization = /\b(?:scope|authoriz|permission to audit|target identity|source integrity)\b/.test(normalized);
+  if (privateReview && disclosureHandling && !technicalAuthorization) return undefined;
   const explicitlyHandlingOnly = /\bno mandatory (?:submission|program|policy) (?:gate|gates|blocker|blockers) remain(?:s|ing)?\b/.test(normalized)
     && /\b(?:handling|disclosure|contact|duplicate|embargo)\b/.test(normalized);
   if (explicitlyHandlingOnly) return undefined;

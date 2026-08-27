@@ -69,7 +69,7 @@ test("private disclosure handling notes do not erase a local-fork technical verd
     recommendation: "needs-human",
     evidenceLevel: "local-fork-reproduced",
     reproCommandId: "cmd-fork-1",
-    humanGates: "No mandatory submission gate remains under the supplied private-audit engagement. Maintainers must still confirm the private security contact/embargo and whether this is an internal known issue or private duplicate; those facts affect handling, not the demonstrated technical minimum.",
+    humanGates: "The team must confirm that this is not already known or privately reported and provide its preferred confidential contact/embargo process. This duplicate uncertainty is separate from technical reproduction. No public bounty or award terms were found, so no payout gate applies.",
     engagementProfile: {
       policy_kind: "private_audit",
       policy_sources: ["SECURITY.md"],
@@ -91,7 +91,7 @@ test("private disclosure handling notes do not erase a local-fork technical verd
 
   const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
   assert.equal(normalized.recommendation, "submit-candidate");
-  assert.match(normalized.humanGates, /private security contact\/embargo/i);
+  assert.match(normalized.humanGates, /confidential contact\/embargo/i);
 });
 
 test("source execution cannot satisfy a program that requires a local fork", () => {

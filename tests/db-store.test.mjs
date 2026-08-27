@@ -1122,7 +1122,7 @@ test("store: startup keeps command provenance when restoring a private-audit tec
     }]);
     db.finishRun(auditRun, "done");
     const confirmRun = db.startRun({ projectId, kind: "confirm", runDir: path.join(dir, "confirm"), materialFingerprint: "sha256:private-audit" });
-    const handlingNote = "No mandatory submission gate remains under the supplied private-audit engagement. Maintainers must still confirm the private security contact/embargo and private duplicate status; those facts affect handling, not the demonstrated technical minimum.";
+    const handlingNote = "The team must confirm that this is not already known or privately reported and provide its preferred confidential contact/embargo process. This duplicate uncertainty is separate from technical reproduction. No public bounty or award terms were found, so no payout gate applies.";
     db.upsertConfirmDecisions(projectId, confirmRun, [{
       bug: "Private-audit fork reproduction",
       reproduced: "yes",
