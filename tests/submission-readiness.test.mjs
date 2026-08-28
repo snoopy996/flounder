@@ -158,13 +158,23 @@ test("private review preserves unresolved technical gates across common wording"
     "The proof of concept status is TBD.",
     "Technical confirmation is inconclusive.",
     "Verification remains incomplete.",
+    "Proof of concept status is undecided.",
+    "Technical confirmation remains outstanding.",
+    "Exploit verification is awaiting completion.",
+    "Reproduction has yet to be performed.",
+    "The PoC has not passed verification.",
+    "Permission to audit is awaiting approval.",
+    "Source integrity remains undetermined.",
+    "No mandatory program gates remain; proof of concept status is undecided.",
   ];
 
   for (const humanGates of unresolvedGates) {
-    const summary = submissionDecisionSummary(privateAuditDecision(humanGates), { requireImpactInventory: false });
+    const row = privateAuditDecision(humanGates);
+    const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
     assert.equal(summary.programCompliance.status, "unknown", humanGates);
     assert.equal(summary.submission.status, "needs-human", humanGates);
-    assert.match(summary.submission.rationale, new RegExp(humanGates.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
+    assert.equal(normalized.recommendation, "needs-human", humanGates);
   }
 });
 
@@ -174,7 +184,7 @@ test("private review does not turn resolved technical statements into open gates
     "Verification is complete.",
     "Authorization was confirmed.",
     "Execution evidence is sufficient.",
-    "The authorized disclosure contact remains pending.",
+    "The authorized disclosure contact remains pending; no mandatory program gates remain.",
   ];
 
   for (const humanGates of resolvedNotes) {

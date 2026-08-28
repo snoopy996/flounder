@@ -1326,7 +1326,11 @@ export class MetadataStore {
       const members = parseJsonArray(row.members_json).filter((member): member is string => typeof member === "string");
       const linked = linkedFindingMetadata(findingsByProject.get(row.project_id), members);
       const input = operatorAdjudicatedDecisionInput(row as Record<string, unknown>, decisionsById);
-      const enforced = enforceSubmissionReadiness([input], { requireImpactInventory: false })[0] ?? input;
+      const reconciledInput = {
+        ...input,
+        humanGates: withoutStaleFrameworkSubmissionBlocker(input.humanGates) ?? undefined,
+      };
+      const enforced = enforceSubmissionReadiness([reconciledInput], { requireImpactInventory: false })[0] ?? reconciledInput;
       const evidenceLevel = decisionEvidenceLevel(enforced);
       const humanGates = enforced.recommendation === "submit-candidate"
         ? withoutStaleFrameworkSubmissionBlocker(enforced.humanGates ?? row.human_gates)

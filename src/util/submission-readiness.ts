@@ -28,6 +28,7 @@ const UNRESOLVED_GATE_STATE = String.raw`(?:pending|missing|unknown|unclear|unve
 const TECHNICAL_GATE_UNCERTAINTY = new RegExp(
   `\\b${TECHNICAL_GATE_SUBJECT}\\b.{0,48}\\b${UNRESOLVED_GATE_STATE}\\b|\\b${UNRESOLVED_GATE_STATE}\\b.{0,48}\\b${TECHNICAL_GATE_SUBJECT}\\b`,
 );
+const TECHNICAL_GATE_MENTION = new RegExp(`\\b${TECHNICAL_GATE_SUBJECT}\\b`);
 
 export interface SubmissionReadinessOptions {
   impactInventory?: unknown;
@@ -562,7 +563,7 @@ function programGateDetail(gate: "scope" | "live_impact", status: ProgramRequire
 
 function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): string | undefined {
   const text = decisionHumanGates(row).trim();
-  if (!hasUnsettledHumanGateText(text)) return undefined;
+  if (isExplicitlyClosedHumanGateText(text)) return undefined;
   const normalized = text.toLowerCase();
   const profile = asRecord(decisionEngagementProfile(row));
   const policyKind = normalizedWord(profile?.policy_kind ?? profile?.policyKind ?? profile?.kind);
@@ -571,11 +572,21 @@ function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): s
   const technicalUncertainty = TECHNICAL_GATE_UNCERTAINTY.test(normalized);
   const mandatoryProgramTerms = /\b(?:mandatory|required)\b.{0,32}\b(?:embargo|submission window|deadline|scope|venue|eligibility|policy terms?|contest rules?|program requirements?)\b/.test(normalized)
     || /\b(?:embargo|submission window|deadline|scope|venue|eligibility|policy terms?|contest rules?|program requirements?)\b.{0,48}\b(?:pending|missing|unknown|unclear|unverified|unconfirmed|not established|required|mandatory)\b/.test(normalized);
-  const explicitlyHandlingOnly = /\bno mandatory (?:submission|program|policy)(?: or (?:submission|program|policy))* (?:gate|gates|blocker|blockers) remain(?:s|ing)?\b/.test(normalized)
-    && /\b(?:handling|disclosure|contact|duplicate|embargo)\b/.test(normalized)
-    && !technicalUncertainty;
-  if (explicitlyHandlingOnly) return undefined;
-  if (privateReview && disclosureHandling && !technicalUncertainty && !mandatoryProgramTerms) return undefined;
+  const handlingOnlyPattern = /\bno mandatory (?:submission|program|policy)(?: or (?:submission|program|policy))* (?:gate|gates|blocker|blockers) remain(?:s|ing)?\b/;
+  const handlingOnlyRemainder = normalized.replace(handlingOnlyPattern, "");
+  const explicitlyHandlingOnly = handlingOnlyPattern.test(normalized)
+    && disclosureHandling
+    && !/\b(?:mandatory|required)\b/.test(handlingOnlyRemainder)
+    && !TECHNICAL_GATE_MENTION.test(handlingOnlyRemainder);
+  const separatedTechnicalPattern = /\b(?:this|the)?\s*(?:duplicate|disclosure|contact|embargo|handling|adjudication)?\s*(?:uncertainty|process|issue|note)?\s*(?:is|remains)?\s*(?:separate|independent) from (?:the )?technical (?:reproduction|verification|evidence|verdict|confirmation)\b/;
+  const separatedTechnicalRemainder = normalized.replace(separatedTechnicalPattern, "");
+  const explicitlySeparateDisclosureHandling = privateReview
+    && disclosureHandling
+    && separatedTechnicalPattern.test(normalized)
+    && !mandatoryProgramTerms
+    && !TECHNICAL_GATE_MENTION.test(separatedTechnicalRemainder);
+  const explicitlyResolvedTechnicalGate = /^(?:the )?(?:exploit reproduction|verification|authorization|execution evidence)\s+(?:is|was|has been)?\s*(?:complete|completed successfully|confirmed|sufficient|settled|resolved)\.?$/.test(normalized);
+  if (explicitlyHandlingOnly || explicitlySeparateDisclosureHandling || explicitlyResolvedTechnicalGate) return undefined;
   if (technicalUncertainty) return text;
   if (mandatoryProgramTerms) return text;
   const programTerms = /\b(?:scope|venue|eligib|embargo|submission window|deadline|policy terms?|contest rules?|mandatory requirement)\b/.test(normalized);
@@ -699,12 +710,10 @@ function structuredField(row: SubmissionDecisionLike, keys: string[]): unknown {
   return undefined;
 }
 
-function hasUnsettledHumanGateText(value: string): boolean {
+function isExplicitlyClosedHumanGateText(value: string): boolean {
   const text = value.trim().toLowerCase();
-  if (!text) return false;
-  if (/^(?:none|n\/a|not applicable|no remaining gates?|no human gates?)\.?$/.test(text)) return false;
-  if (/\b(?:no|none)\b.{0,32}\b(?:remaining|open|unsettled|human)\b.{0,24}\b(?:gate|gates|blocker|blockers)\b/.test(text)) return false;
-  return /\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not (?:yet )?(?:been )?(?:established|confirmed|verified|reproduced|executed|run)|unknown|unclear|unverified|unconfirmed|incomplete|inconclusive|tbd|to be determined|pending|missing|failed|review|cannot|must)\b/.test(text);
+  if (!text) return true;
+  return /^(?:none|n\/a|not applicable|no remaining gates?|no human gates?)\.?$/.test(text);
 }
 
 function bountyGateStatus(adjudication: unknown, gate: DecisionGate): string | undefined {
