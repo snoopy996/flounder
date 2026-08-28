@@ -41,6 +41,29 @@ function sourceOnlyContest(overrides = {}) {
   };
 }
 
+function privateAuditDecision(humanGates, overrides = {}) {
+  return sourceOnlyContest({
+    evidenceLevel: "local-fork-reproduced",
+    humanGates,
+    engagementProfile: {
+      policy_kind: "private_audit",
+      policy_sources: ["SECURITY.md"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "private disclosure channel"],
+    },
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The affected component is in the authorized audit scope." },
+        ...validTechnicalClaimGates(),
+      ],
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+    ...overrides,
+  });
+}
+
 test("submission decision separates program compliance from evidence and reward uncertainty", () => {
   const summary = submissionDecisionSummary(sourceOnlyContest(), { requireImpactInventory: false });
 
@@ -117,6 +140,43 @@ test("private disclosure handling does not hide an unresolved deployment reprodu
   assert.equal(summary.programCompliance.status, "unknown");
   assert.equal(summary.submission.status, "needs-human");
   assert.match(summary.submission.rationale, /live deployment reproduction remains pending/i);
+});
+
+test("private review preserves unresolved technical gates across common wording", () => {
+  const unresolvedGates = [
+    "Private contact remains pending; exploit verification is missing.",
+    "The proof of concept remains unverified.",
+    "Fork reproduction is pending.",
+    "The exploit must be reproduced before disclosure.",
+    "Execution evidence is unknown.",
+    "Authorization remains pending.",
+    "Permission to audit has not been confirmed.",
+    "Target identity is unclear.",
+    "Source integrity is unverified.",
+    "The current version remains unconfirmed.",
+    "The affected version is unknown.",
+  ];
+
+  for (const humanGates of unresolvedGates) {
+    const summary = submissionDecisionSummary(privateAuditDecision(humanGates), { requireImpactInventory: false });
+    assert.equal(summary.programCompliance.status, "unknown", humanGates);
+    assert.equal(summary.submission.status, "needs-human", humanGates);
+    assert.match(summary.submission.rationale, new RegExp(humanGates.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  }
+});
+
+test("private disclosure handling distinguishes preferred process from a mandatory embargo", () => {
+  const handlingOnly = submissionDecisionSummary(privateAuditDecision(
+    "Preferred confidential contact and embargo handling remain pending. No mandatory submission or policy gates remain.",
+  ), { requireImpactInventory: false });
+  assert.equal(handlingOnly.submission.status, "eligible-to-submit");
+
+  const mandatoryEmbargo = submissionDecisionSummary(privateAuditDecision(
+    "The confidential disclosure embargo deadline remains pending.",
+  ), { requireImpactInventory: false });
+  assert.equal(mandatoryEmbargo.programCompliance.status, "unknown");
+  assert.equal(mandatoryEmbargo.submission.status, "needs-human");
+  assert.match(mandatoryEmbargo.submission.rationale, /embargo deadline remains pending/i);
 });
 
 test("source execution cannot satisfy a program that requires a local fork", () => {

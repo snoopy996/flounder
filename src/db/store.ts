@@ -1357,7 +1357,10 @@ export class MetadataStore {
             SELECT 1
               FROM confirm_decision
              WHERE confirm_decision.run_id = run.id
-               AND confirm_decision.recommendation = 'needs-human'
+               AND (
+                 confirm_decision.recommendation IS NULL
+                 OR confirm_decision.recommendation NOT IN ('submit-candidate', 'drop')
+               )
           )`,
     ).run();
   }

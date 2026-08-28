@@ -1198,6 +1198,61 @@ test("store: startup keeps needs-human health when a completed confirm run has n
   }
 });
 
+test("store: startup clears confirm health only when every decision is explicitly settled", async () => {
+  const { dir, dbPath } = await tempDbPath();
+  const reasons = ["Some confirmation decisions are unresolved."];
+  const signals = { needsHuman: 2, decisions: 3 };
+  try {
+    let db = MetadataStore.openForOutput(dir);
+    const projectId = db.upsertProject({ name: "mixed-confirm-decisions" });
+    const confirmRun = db.startRun({ projectId, kind: "confirm", runDir: path.join(dir, "confirm") });
+    db.recordRunHealth(confirmRun, { status: "needs-human", reasons, signals });
+    db.finishRun(confirmRun, "done");
+    db.close();
+
+    let raw = new DatabaseSync(dbPath);
+    const insert = raw.prepare(
+      `INSERT INTO confirm_decision(project_id, run_id, bug, reproduced, recommendation, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+    );
+    insert.run(projectId, confirmRun, "Settled decision", "no", "drop");
+    insert.run(projectId, confirmRun, "Missing recommendation", null, null);
+    insert.run(projectId, confirmRun, "Unknown recommendation", null, "unknown");
+    raw.close();
+
+    db = MetadataStore.openForOutput(dir);
+    let health = db.getRun(confirmRun);
+    assert.equal(health.health_status, "needs-human");
+    assert.deepEqual(JSON.parse(health.health_reasons_json), reasons);
+    assert.deepEqual(JSON.parse(health.health_signals_json), signals);
+    db.close();
+
+    raw = new DatabaseSync(dbPath);
+    raw.prepare(
+      `UPDATE confirm_decision
+          SET recommendation = 'drop', reproduced = 'no'
+        WHERE run_id = ? AND recommendation IS NOT 'drop'`,
+    ).run(confirmRun);
+    raw.close();
+
+    db = MetadataStore.openForOutput(dir);
+    health = db.getRun(confirmRun);
+    assert.equal(health.health_status, null);
+    assert.equal(health.health_reasons_json, null);
+    assert.equal(health.health_signals_json, null);
+    db.close();
+
+    db = MetadataStore.openForOutput(dir);
+    health = db.getRun(confirmRun);
+    assert.equal(health.health_status, null);
+    assert.equal(health.health_reasons_json, null);
+    assert.equal(health.health_signals_json, null);
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("store: ambiguous reproduced decisions do not default to real-target evidence", async () => {
   const db = await tempDb();
   const projectId = db.upsertProject({ name: "p" });
