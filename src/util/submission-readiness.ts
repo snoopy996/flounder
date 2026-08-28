@@ -23,12 +23,16 @@ export interface TechnicalClaimGateEvidence {
 const TECHNICAL_CLAIM_GATES: TechnicalClaimGate[] = ["attacker_reachability", "end_to_end_effect", "impact_bounds"];
 const DEFAULT_BOUNTY_GATES: BountyGate[] = ["scope", "live_impact", "known_issue", "payout"];
 const SOURCE_ONLY_BOUNTY_GATES: BountyGate[] = ["scope", "known_issue", "payout"];
-const TECHNICAL_GATE_SUBJECT = String.raw`(?:scope|authori[sz]ation|permissions? to audit|target identity|source integrity|live (?:impact|deployment|target|funds?)|funded deployment|production deployment|current version|affected version|execution evidence|execution|reproduction|reproduc(?:e|ed|ibility)|verification|technical confirmation|proof of concept|poc|exploit|local fork|fork)`;
+const TECHNICAL_GATE_SUBJECT = String.raw`(?:scope|authori[sz]ation|permissions? to audit|target identity|source integrity|live (?:impact|deployment|target|funds?)|funded deployment|production deployment|current version|affected version|execution evidence|execution|exploit reproduction|reproduction|reproduc(?:e|ed|ibility)|verification|technical confirmation|proof of concept|poc|exploit|local fork|fork)`;
 const UNRESOLVED_GATE_STATE = String.raw`(?:pending|missing|unknown|unclear|unverified|unconfirmed|incomplete|inconclusive|tbd|to be determined|failed|could not|cannot|not (?:yet )?(?:been )?(?:reproduced|verified|confirmed|executed|run)|must (?:be )?(?:reproduced|verified|confirmed|executed|run)|requires? (?:reproduction|verification|confirmation|execution))`;
+const RESOLVED_GATE_STATE = String.raw`(?:complete|completed successfully|confirmed|sufficient|settled|resolved|verified|reproduced(?: the (?:issue|finding|effect))?)`;
 const TECHNICAL_GATE_UNCERTAINTY = new RegExp(
   `\\b${TECHNICAL_GATE_SUBJECT}\\b.{0,48}\\b${UNRESOLVED_GATE_STATE}\\b|\\b${UNRESOLVED_GATE_STATE}\\b.{0,48}\\b${TECHNICAL_GATE_SUBJECT}\\b`,
 );
 const TECHNICAL_GATE_MENTION = new RegExp(`\\b${TECHNICAL_GATE_SUBJECT}\\b`);
+const EXPLICITLY_RESOLVED_TECHNICAL_GATE = new RegExp(
+  `^(?:the )?${TECHNICAL_GATE_SUBJECT}\\s+(?:(?:is|was|has been)\\s+)?${RESOLVED_GATE_STATE}\\.?$`,
+);
 
 export interface SubmissionReadinessOptions {
   impactInventory?: unknown;
@@ -585,8 +589,9 @@ function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): s
     && separatedTechnicalPattern.test(normalized)
     && !mandatoryProgramTerms
     && !TECHNICAL_GATE_MENTION.test(separatedTechnicalRemainder);
-  const explicitlyResolvedTechnicalGate = /^(?:the )?(?:exploit reproduction|verification|authorization|execution evidence)\s+(?:is|was|has been)?\s*(?:complete|completed successfully|confirmed|sufficient|settled|resolved)\.?$/.test(normalized);
-  if (explicitlyHandlingOnly || explicitlySeparateDisclosureHandling || explicitlyResolvedTechnicalGate) return undefined;
+  const explicitlyDisclosureContactHandling = privateReview
+    && /^(?:the )?(?:(?:preferred|authorized|private|confidential|security|disclosure)\s+)*(?:contact and embargo handling|contact|disclosure (?:contact|channel|process)|embargo (?:process|handling))\s+(?:is|remain|remains)\s+(?:pending|unknown|unconfirmed|unresolved|to be decided)\.?$/.test(normalized);
+  if (explicitlyHandlingOnly || explicitlySeparateDisclosureHandling || explicitlyDisclosureContactHandling || EXPLICITLY_RESOLVED_TECHNICAL_GATE.test(normalized)) return undefined;
   if (technicalUncertainty) return text;
   if (mandatoryProgramTerms) return text;
   const programTerms = /\b(?:scope|venue|eligib|embargo|submission window|deadline|policy terms?|contest rules?|mandatory requirement)\b/.test(normalized);

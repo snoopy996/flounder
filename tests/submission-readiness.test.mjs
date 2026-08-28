@@ -184,19 +184,25 @@ test("private review does not turn resolved technical statements into open gates
     "Verification is complete.",
     "Authorization was confirmed.",
     "Execution evidence is sufficient.",
-    "The authorized disclosure contact remains pending; no mandatory program gates remain.",
+    "The authorized disclosure contact remains pending.",
+    "The preferred authorized security contact is pending.",
+    "Source integrity was verified.",
+    "The local fork reproduced the issue.",
   ];
 
   for (const humanGates of resolvedNotes) {
-    const summary = submissionDecisionSummary(privateAuditDecision(humanGates), { requireImpactInventory: false });
+    const row = privateAuditDecision(humanGates);
+    const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
     assert.equal(summary.programCompliance.status, "met", humanGates);
     assert.equal(summary.submission.status, "eligible-to-submit", humanGates);
+    const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
+    assert.equal(normalized.recommendation, "submit-candidate", humanGates);
   }
 });
 
 test("private disclosure handling distinguishes preferred process from a mandatory embargo", () => {
   const handlingOnly = submissionDecisionSummary(privateAuditDecision(
-    "Preferred confidential contact and embargo handling remain pending. No mandatory submission or policy gates remain.",
+    "Preferred confidential contact and embargo handling remain pending.",
   ), { requireImpactInventory: false });
   assert.equal(handlingOnly.submission.status, "eligible-to-submit");
 
