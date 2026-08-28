@@ -1348,6 +1348,11 @@ export class MetadataStore {
         WHERE kind = 'confirm'
           AND status = 'done'
           AND health_status = 'needs-human'
+          AND EXISTS (
+            SELECT 1
+              FROM confirm_decision
+             WHERE confirm_decision.run_id = run.id
+          )
           AND NOT EXISTS (
             SELECT 1
               FROM confirm_decision

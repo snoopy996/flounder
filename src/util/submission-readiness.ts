@@ -563,11 +563,15 @@ function programHumanGate(row: SubmissionDecisionLike, liveRequired: boolean): s
   const policyKind = normalizedWord(profile?.policy_kind ?? profile?.policyKind ?? profile?.kind);
   const privateReview = ["private_audit", "incident", "source_review"].includes(policyKind);
   const disclosureHandling = /\b(?:private|confidential|contact|embargo|duplicate|known issue|disclosure)\b/.test(normalized);
-  const technicalAuthorization = /\b(?:scope|authoriz|permission to audit|target identity|source integrity)\b/.test(normalized);
-  if (privateReview && disclosureHandling && !technicalAuthorization) return undefined;
+  const technicalUncertainty = /\b(?:scope|authoriz|permission to audit|target identity|source integrity|live (?:impact|deployment|target|funds?)|funded deployment|production deployment|current version|affected version|execution evidence)\b/.test(normalized)
+    || /\b(?:reproduction|execution|technical confirmation)\b.{0,40}\b(?:pending|missing|unknown|unverified|failed|could not|not reproduced)\b/.test(normalized)
+    || /\b(?:pending|missing|unknown|unverified|failed|could not)\b.{0,40}\b(?:reproduction|execution|technical confirmation)\b/.test(normalized);
+  if (privateReview && disclosureHandling && !technicalUncertainty) return undefined;
   const explicitlyHandlingOnly = /\bno mandatory (?:submission|program|policy) (?:gate|gates|blocker|blockers) remain(?:s|ing)?\b/.test(normalized)
-    && /\b(?:handling|disclosure|contact|duplicate|embargo)\b/.test(normalized);
+    && /\b(?:handling|disclosure|contact|duplicate|embargo)\b/.test(normalized)
+    && !technicalUncertainty;
   if (explicitlyHandlingOnly) return undefined;
+  if (technicalUncertainty) return text;
   const programTerms = /\b(?:scope|venue|eligib|embargo|submission window|deadline|policy terms?|contest rules?|mandatory requirement)\b/.test(normalized);
   const liveTerms = /\b(?:live|funded|funds|deployment|production|current version|affected version)\b/.test(normalized);
   const adjudicationOnly = /\b(?:known issue|known_issue|novelty|duplicate|payout|reward|bounty amount|collectible)\b/.test(normalized)

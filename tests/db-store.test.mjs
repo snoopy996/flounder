@@ -1176,6 +1176,28 @@ test("store: startup keeps command provenance when restoring a private-audit tec
   }
 });
 
+test("store: startup keeps needs-human health when a completed confirm run has no decisions", async () => {
+  const { dir } = await tempDbPath();
+  try {
+    let db = MetadataStore.openForOutput(dir);
+    const projectId = db.upsertProject({ name: "confirm-without-decisions" });
+    const confirmRun = db.startRun({ projectId, kind: "confirm", runDir: path.join(dir, "confirm") });
+    db.recordRunHealth(confirmRun, {
+      status: "needs-human",
+      reasons: ["Confirmation could not produce a decision."],
+      signals: { needsHuman: 1 },
+    });
+    db.finishRun(confirmRun, "done");
+    db.close();
+
+    db = MetadataStore.openForOutput(dir);
+    assert.equal(db.getRun(confirmRun).health_status, "needs-human");
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("store: ambiguous reproduced decisions do not default to real-target evidence", async () => {
   const db = await tempDb();
   const projectId = db.upsertProject({ name: "p" });

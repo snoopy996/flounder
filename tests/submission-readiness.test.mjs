@@ -94,6 +94,31 @@ test("private disclosure handling notes do not erase a local-fork technical verd
   assert.match(normalized.humanGates, /confidential contact\/embargo/i);
 });
 
+test("private disclosure handling does not hide an unresolved deployment reproduction gate", () => {
+  const row = {
+    ...sourceOnlyContest(),
+    evidenceLevel: "local-fork-reproduced",
+    humanGates: "The private disclosure contact is unresolved, and live deployment reproduction remains pending.",
+    engagementProfile: {
+      policy_kind: "private_audit",
+      policy_sources: ["SECURITY.md"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "private disclosure channel"],
+    },
+    adjudication: {
+      gates: [{ id: "scope", status: "pass", evidence: "The affected component is authorized." }],
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+  };
+
+  const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
+  assert.equal(summary.programCompliance.status, "unknown");
+  assert.equal(summary.submission.status, "needs-human");
+  assert.match(summary.submission.rationale, /live deployment reproduction remains pending/i);
+});
+
 test("source execution cannot satisfy a program that requires a local fork", () => {
   const row = sourceOnlyContest({
     recommendation: "submit-candidate",
