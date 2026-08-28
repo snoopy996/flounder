@@ -928,6 +928,15 @@ function operatorAdjudicatedDecisionInput(
   };
 }
 
+function withoutStaleFrameworkSubmissionBlocker(value: string | null | undefined): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const marker = "Framework blocked submit-candidate:";
+  const markerIndex = text.indexOf(marker);
+  const cleaned = (markerIndex >= 0 ? text.slice(0, markerIndex) : text).trim();
+  return cleaned || null;
+}
+
 const CANONICAL_STATUS_RANK: Record<string, number> = {
   discharged: 0,
   refuted: 1,
@@ -1317,10 +1326,14 @@ export class MetadataStore {
       const members = parseJsonArray(row.members_json).filter((member): member is string => typeof member === "string");
       const linked = linkedFindingMetadata(findingsByProject.get(row.project_id), members);
       const input = operatorAdjudicatedDecisionInput(row as Record<string, unknown>, decisionsById);
-      const enforced = enforceSubmissionReadiness([input], { requireImpactInventory: false })[0] ?? input;
+      const reconciledInput = {
+        ...input,
+        humanGates: withoutStaleFrameworkSubmissionBlocker(input.humanGates) ?? undefined,
+      };
+      const enforced = enforceSubmissionReadiness([reconciledInput], { requireImpactInventory: false })[0] ?? reconciledInput;
       const evidenceLevel = decisionEvidenceLevel(enforced);
       const humanGates = enforced.recommendation === "submit-candidate"
-        ? null
+        ? withoutStaleFrameworkSubmissionBlocker(enforced.humanGates ?? row.human_gates)
         : enforced.humanGates ?? row.human_gates;
       update.run(
         enforced.recommendation ?? row.recommendation,
@@ -1331,6 +1344,29 @@ export class MetadataStore {
         row.id,
       );
     }
+    this.db.prepare(
+      `UPDATE run
+          SET health_status = NULL,
+              health_reasons_json = NULL,
+              health_signals_json = NULL
+        WHERE kind = 'confirm'
+          AND status = 'done'
+          AND health_status = 'needs-human'
+          AND EXISTS (
+            SELECT 1
+              FROM confirm_decision
+             WHERE confirm_decision.run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM confirm_decision
+             WHERE confirm_decision.run_id = run.id
+               AND (
+                 confirm_decision.recommendation IS NULL
+                 OR confirm_decision.recommendation NOT IN ('submit-candidate', 'drop')
+               )
+          )`,
+    ).run();
   }
 
   private reconcileFindingReportRunIds(): void {

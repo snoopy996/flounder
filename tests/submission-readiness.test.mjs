@@ -41,6 +41,29 @@ function sourceOnlyContest(overrides = {}) {
   };
 }
 
+function privateAuditDecision(humanGates, overrides = {}) {
+  return sourceOnlyContest({
+    evidenceLevel: "local-fork-reproduced",
+    humanGates,
+    engagementProfile: {
+      policy_kind: "private_audit",
+      policy_sources: ["SECURITY.md"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "private disclosure channel"],
+    },
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The affected component is in the authorized audit scope." },
+        ...validTechnicalClaimGates(),
+      ],
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+    ...overrides,
+  });
+}
+
 test("submission decision separates program compliance from evidence and reward uncertainty", () => {
   const summary = submissionDecisionSummary(sourceOnlyContest(), { requireImpactInventory: false });
 
@@ -60,6 +83,135 @@ test("submission decision separates program compliance from evidence and reward 
   const [normalized] = enforceSubmissionReadiness([sourceOnlyContest()], { requireImpactInventory: false });
   assert.equal(normalized.recommendation, "submit-candidate");
   assert.match(normalized.humanGates, /Private duplicate and payout/);
+});
+
+test("private disclosure handling notes do not erase a local-fork technical verdict", () => {
+  const row = {
+    bug: "Shared backing can become undercollateralized",
+    reproduced: "yes",
+    recommendation: "needs-human",
+    evidenceLevel: "local-fork-reproduced",
+    reproCommandId: "cmd-fork-1",
+    humanGates: "The team must confirm that this is not already known or privately reported and provide its preferred confidential contact/embargo process. This duplicate uncertainty is separate from technical reproduction. No public bounty or award terms were found, so no payout gate applies.",
+    engagementProfile: {
+      policy_kind: "private_audit",
+      policy_sources: ["SECURITY.md"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "private disclosure channel"],
+    },
+    adjudication: {
+      gates: [{ id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." }],
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+  };
+
+  const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
+  assert.equal(summary.technicalEvidence.level, "local-fork-reproduced");
+  assert.equal(summary.programCompliance.status, "met");
+  assert.equal(summary.submission.status, "eligible-to-submit");
+
+  const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
+  assert.equal(normalized.recommendation, "submit-candidate");
+  assert.match(normalized.humanGates, /confidential contact\/embargo/i);
+});
+
+test("private disclosure handling does not hide an unresolved deployment reproduction gate", () => {
+  const row = {
+    ...sourceOnlyContest(),
+    evidenceLevel: "local-fork-reproduced",
+    humanGates: "The private disclosure contact is unresolved, and live deployment reproduction remains pending.",
+    engagementProfile: {
+      policy_kind: "private_audit",
+      policy_sources: ["SECURITY.md"],
+      evidence_requirement: "real_target",
+      required_gates: ["scope", "private disclosure channel"],
+    },
+    adjudication: {
+      gates: [{ id: "scope", status: "pass", evidence: "The affected component is authorized." }],
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+  };
+
+  const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
+  assert.equal(summary.programCompliance.status, "unknown");
+  assert.equal(summary.submission.status, "needs-human");
+  assert.match(summary.submission.rationale, /live deployment reproduction remains pending/i);
+});
+
+test("private review preserves unresolved technical gates across common wording", () => {
+  const unresolvedGates = [
+    "Private contact remains pending; exploit verification is missing.",
+    "The proof of concept remains unverified.",
+    "Fork reproduction is pending.",
+    "The exploit must be reproduced before disclosure.",
+    "Execution evidence is unknown.",
+    "Authorization remains pending.",
+    "Permission to audit has not been confirmed.",
+    "Target identity is unclear.",
+    "Source integrity is unverified.",
+    "The current version remains unconfirmed.",
+    "The affected version is unknown.",
+    "The proof of concept status is TBD.",
+    "Technical confirmation is inconclusive.",
+    "Verification remains incomplete.",
+    "Proof of concept status is undecided.",
+    "Technical confirmation remains outstanding.",
+    "Exploit verification is awaiting completion.",
+    "Reproduction has yet to be performed.",
+    "The PoC has not passed verification.",
+    "Permission to audit is awaiting approval.",
+    "Source integrity remains undetermined.",
+    "No mandatory program gates remain; proof of concept status is undecided.",
+  ];
+
+  for (const humanGates of unresolvedGates) {
+    const row = privateAuditDecision(humanGates);
+    const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
+    assert.equal(summary.programCompliance.status, "unknown", humanGates);
+    assert.equal(summary.submission.status, "needs-human", humanGates);
+    const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
+    assert.equal(normalized.recommendation, "needs-human", humanGates);
+  }
+});
+
+test("private review does not turn resolved technical statements into open gates", () => {
+  const resolvedNotes = [
+    "Exploit reproduction completed successfully.",
+    "Verification is complete.",
+    "Authorization was confirmed.",
+    "Execution evidence is sufficient.",
+    "The authorized disclosure contact remains pending.",
+    "The preferred authorized security contact is pending.",
+    "Source integrity was verified.",
+    "The local fork reproduced the issue.",
+  ];
+
+  for (const humanGates of resolvedNotes) {
+    const row = privateAuditDecision(humanGates);
+    const summary = submissionDecisionSummary(row, { requireImpactInventory: false });
+    assert.equal(summary.programCompliance.status, "met", humanGates);
+    assert.equal(summary.submission.status, "eligible-to-submit", humanGates);
+    const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
+    assert.equal(normalized.recommendation, "submit-candidate", humanGates);
+  }
+});
+
+test("private disclosure handling distinguishes preferred process from a mandatory embargo", () => {
+  const handlingOnly = submissionDecisionSummary(privateAuditDecision(
+    "Preferred confidential contact and embargo handling remain pending.",
+  ), { requireImpactInventory: false });
+  assert.equal(handlingOnly.submission.status, "eligible-to-submit");
+
+  const mandatoryEmbargo = submissionDecisionSummary(privateAuditDecision(
+    "The confidential disclosure embargo deadline remains pending.",
+  ), { requireImpactInventory: false });
+  assert.equal(mandatoryEmbargo.programCompliance.status, "unknown");
+  assert.equal(mandatoryEmbargo.submission.status, "needs-human");
+  assert.match(mandatoryEmbargo.submission.rationale, /embargo deadline remains pending/i);
 });
 
 test("source execution cannot satisfy a program that requires a local fork", () => {
