@@ -32,7 +32,7 @@ import { deriveScopeNote } from "../scope-note.js";
 import { confirmSelectorsForFinding } from "../util/confirm-selector.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
 import { reconcileLegacyPreparedMaterialFingerprints } from "../util/prepared-material-fingerprint.js";
-import { isResumeSettledDecision, isSubmissionReadyDecision, needsConfirmEvidenceWork, needsSubmissionReadinessWork, submissionDecisionSummary, type SubmissionDecisionLike } from "../util/submission-readiness.js";
+import { isResumeSettledDecision, isSubmissionReadyDecision, isTechnicallyReproducedDecision, needsConfirmEvidenceWork, needsSubmissionReadinessWork, submissionDecisionSummary, type SubmissionDecisionLike } from "../util/submission-readiness.js";
 import { isSandboxBackend, type SandboxBackend } from "../security/sandbox.js";
 import { normalizeRunGroupManifest, normalizeWorkItemInput } from "../evaluation/contracts.js";
 import { cleanupLocalProjectStorage, inspectLocalProjectStorage, localDiskStorageStatus, type StorageProjectRecord } from "../storage/projects.js";
@@ -1164,7 +1164,7 @@ async function projectGet(c: Ctx): Promise<void> {
     const confirmDecisions = activePrepareRefresh
       ? []
       : currentConfirmDecisions(c.store.listConfirmDecisions(id).filter((row) => rowBelongsToCurrentMaterial(row, currentRunIds, materialBoundary)));
-    const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes" && submissionDecisionSummary(row, { requireImpactInventory: false }).technicalEvidence.level !== "unknown").length;
+    const reproducedBugs = confirmDecisions.filter(isTechnicallyReproducedDecision).length;
     const requiresRealTargetConfirmation = projectRequiresRealTargetConfirmation(project, allRunsRaw);
     const mappedScopeIds = new Set(scopeView.scopes.map((scope) => stringValue(scope.scope_id)).filter(Boolean));
     sendJson(c.res, 200, {
@@ -5741,7 +5741,7 @@ function projectSnapshots(store: MetadataStore, options: ProjectListOptions = {}
     const confirmDecisions = activePrepareRefresh
       ? []
       : currentConfirmDecisions(store.listConfirmDecisions(id).filter((row) => rowBelongsToCurrentMaterial(row, currentRunIds, materialBoundary)));
-    const reproducedBugs = confirmDecisions.filter((row) => row.reproduced === "yes" && submissionDecisionSummary(row, { requireImpactInventory: false }).technicalEvidence.level !== "unknown").length;
+    const reproducedBugs = confirmDecisions.filter(isTechnicallyReproducedDecision).length;
     const auditConfirmedFindings = countAuditConfirmedFindings(findings);
     const verifyPendingFindings = verifyWorklist(store, id, currentRunIds, materialBoundary).length;
     const requiresRealTargetConfirmation = projectRequiresRealTargetConfirmation(project, allRuns);

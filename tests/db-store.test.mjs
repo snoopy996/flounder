@@ -879,6 +879,7 @@ test("store: confirm decisions persist decision reports without overwriting link
         gates: [
           { id: "scope", status: "pass", evidence: "Asset is listed in scope." },
           { id: "live_impact", status: "unknown", evidence: "Live funded exposure was not established." },
+          ...validTechnicalClaimGates(),
         ],
         payout_estimate: { status: "unknown", confidence: "low", basis: "Live impact gate is unresolved." },
       },
@@ -1139,7 +1140,10 @@ test("store: startup keeps command provenance when restoring a private-audit tec
         required_gates: ["scope", "private disclosure channel"],
       },
       adjudication: {
-        gates: [{ id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." }],
+        gates: [
+          { id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." },
+          ...validTechnicalClaimGates(),
+        ],
         scope_status: "pass",
         known_issue_status: "unknown",
         payout_estimate: { status: "not-applicable" },

@@ -1361,6 +1361,7 @@ test("api: daemon pipeline worklist exposes verify candidates before confirm", a
           evidenceLevel: "real-target-reproduced",
           reproCommandId: "cmd-prior",
           engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
+          adjudication: { gates: validTechnicalClaimGates() },
           members: ["kalreadyreproduced"],
         },
         {
@@ -1490,6 +1491,7 @@ test("api: current confirm decisions hide older rows superseded by newer member 
           evidenceLevel: "real-target-reproduced",
           reproCommandId: "cmd-new",
           engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
+          adjudication: { gates: validTechnicalClaimGates() },
           members: ["kabc123"],
         },
       ]);
@@ -2354,6 +2356,7 @@ test("api: report launch queues only reproduced real-target findings that were n
           engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
           reproCommandId: "cmd1",
+          adjudication: { gates: validTechnicalClaimGates() },
         },
         {
           bug: "Gate-blocked bug",
@@ -2379,6 +2382,7 @@ test("api: report launch queues only reproduced real-target findings that were n
           engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd-existing reproduced the real target effect",
           reproCommandId: "cmd-existing",
+          adjudication: { gates: validTechnicalClaimGates() },
           reportMarkdown: "# Existing report bug\n\nExisting formal report.",
         },
         {
@@ -2396,6 +2400,7 @@ test("api: report launch queues only reproduced real-target findings that were n
           engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
           reproEvidence: "purpose=confirm command cmd-conflict reproduced the real target effect",
           reproCommandId: "cmd-conflict",
+          adjudication: { gates: validTechnicalClaimGates() },
         },
       ]);
     } finally {
@@ -3144,6 +3149,7 @@ test("api: project detail summarizes the latest prepare manifest and workspace q
           evidenceLevel: "source-only-local-confirmed",
           reproCommandId: "cmd-prepared-source",
           engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" },
+          adjudication: { gates: validTechnicalClaimGates() },
           members: ["kalreadyreproduced"],
         },
       ]);
@@ -3264,6 +3270,7 @@ test("api: a focused retry can relaunch a reproduced finding whose Confirm phase
         evidenceLevel: "source-only-local-confirmed",
         reproCommandId: "cmd-old-source-proof",
         engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
+        adjudication: { gates: validTechnicalClaimGates() },
         humanGates: "Deployment equivalence and local-fork impact remain to be checked.",
       }]);
       store.recordFindingPhaseAttempt(created.id, confirmRunId, {

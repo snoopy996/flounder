@@ -298,7 +298,13 @@ export function confirmedDecisions(rows: ConfirmDecision[] | undefined): Confirm
   return (rows ?? []).filter((row) => {
     if (row.reproduced !== "yes") return false;
     const level = row.decision_summary?.technicalEvidence.level;
-    return Boolean(level && level !== "unknown" && level !== "reasoned" && level !== "source-supported");
+    return Boolean(
+      level
+      && level !== "unknown"
+      && level !== "reasoned"
+      && level !== "source-supported"
+      && row.decision_summary?.technicalEvidence.claimValidity.status === "met",
+    );
   });
 }
 

@@ -270,7 +270,7 @@ test("ui: phase cards count report packages by reproduced decision, not linked f
       { id: 3, finding_key: "kgamma", status: "confirmed-differential", confirm_status: null, has_report: false },
     ],
     confirmDecisions: [
-      decisionWithSummary({ bug: "same root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", repro_command_id: "cmd-root", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, members_json: JSON.stringify(["kalpha", "kbeta"]) }),
+      decisionWithSummary({ bug: "same root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", repro_command_id: "cmd-root", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, adjudication: { gates: validTechnicalClaimGates() }, members_json: JSON.stringify(["kalpha", "kbeta"]) }),
     ],
   };
   const phases = phaseState(detail, { total: 0, audited: 0, deferred: 0, pending: 0 });
@@ -295,7 +295,7 @@ test("ui: phase cards do not double-count findings already covered by decisions"
       { id: 2, finding_key: "ktwo", status: "confirmed-differential", confirm_status: null, has_report: false },
     ],
     confirmDecisions: [
-      decisionWithSummary({ bug: "submit root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", repro_command_id: "cmd-submit", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, members_json: JSON.stringify(["kone"]) }),
+      decisionWithSummary({ bug: "submit root cause", reproduced: "yes", recommendation: "submit-candidate", evidence_level: "fork-reproduced", repro_command_id: "cmd-submit", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, adjudication: { gates: validTechnicalClaimGates() }, members_json: JSON.stringify(["kone"]) }),
       decisionWithSummary({ bug: "setup blocker", reproduced: "could-not-set-up", recommendation: "needs-human", engagement_profile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, members_json: JSON.stringify(["ktwo"]) }),
     ],
   };

@@ -40,11 +40,11 @@ test("confirm resume: loads SETTLED rows from the latest prior confirm of the sa
   const inputX = "/some/input-run-X";
   const inputY = "/some/input-run-Y";
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputX, [
-    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-a-old", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" } },
+    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-a-old", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" }, adjudication: { gates: validTechnicalClaimGates() } },
     { bug: "Bug B", reproduced: "could-not-set-up" },
   ]);
   await mkConfirmRun(out, "tgt-confirm-20260102T000000Z", inputX, [
-    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-a", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" } },
+    { bug: "Bug A", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-a", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" }, adjudication: { gates: validTechnicalClaimGates() } },
     { bug: "Bug B", reproduced: "no" },
   ]);
   await mkConfirmRun(out, "tgt-confirm-20260103T000000Z", inputY, [{ bug: "Bug Z", reproduced: "yes" }]); // different input → ignored
@@ -128,7 +128,7 @@ test("confirm resume: aggregate input carries settled rows from prior subset con
   await mkConfirmRun(out, "tgt-confirm-20260101T000000Z", inputA, [{ bug: "Bug A", reproduced: "yes", recommendation: "drop", members: ["ka"] }]);
   await mkAggregateConfirmRun(out, "tgt-confirm-20260102T000000Z", [inputA, inputB], [
     { bug: "Bug A newer", reproduced: "no", members: ["ka"] },
-    { bug: "Bug B", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-b", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" }, members: ["kb"] },
+    { bug: "Bug B", reproduced: "yes", recommendation: "submit-candidate", humanGates: "", evidenceLevel: "source-only-local-confirmed", reproCommandId: "cmd-b", engagementProfile: { policy_kind: "source_review", evidence_requirement: "source_only" }, adjudication: { gates: validTechnicalClaimGates() }, members: ["kb"] },
   ]);
   await mkAggregateConfirmRun(out, "tgt-confirm-20260103T000000Z", [inputA, inputC], [{ bug: "Bug C", reproduced: "yes", recommendation: "drop", members: ["kc"] }]);
 

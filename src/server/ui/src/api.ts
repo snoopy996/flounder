@@ -332,6 +332,19 @@ export interface ConfirmDecision {
       boundary: string;
       satisfiesProgramMinimum: boolean | null;
       notDemonstrated: string[];
+      riskAssessment: {
+        status: "assessed" | "incomplete";
+        label: string;
+        exploitabilityClass: "permissionless" | "user-configurable" | "privileged" | "external-condition" | "future-configuration" | "not-currently-reachable" | "unknown";
+        currentState: "active" | "inactive" | "mixed" | "unknown";
+        likelihood: "very-low" | "low" | "medium" | "high" | "unknown";
+        impactCeiling: "info" | "low" | "medium" | "high" | "critical" | "unknown";
+        residualSeverity: "info" | "low" | "medium" | "high" | "critical" | "unknown";
+        confidence: "high" | "medium" | "low" | "unknown";
+        basis: string;
+        requiredPrincipals: Array<{ role: string; identity: string; controlModel: string; attackerAccess: string; evidence: string }>;
+        changeControls: Array<{ control: string; strength: string; evidence: string }>;
+      };
       claimValidity: {
         status: "met" | "not-met" | "unknown" | "not-required";
         label: string;

@@ -14,7 +14,7 @@ import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { decisionTechnicalClaimGates, enforceSubmissionReadiness, isPermittedSubmissionEvidenceLevel, isSubmissionReadyDecision, needsSubmissionReadinessWork, requiredBountyGates, submissionDecisionSummary } from "../util/submission-readiness.js";
+import { decisionTechnicalClaimGates, enforceSubmissionReadiness, isPermittedSubmissionEvidenceLevel, isSubmissionReadyDecision, isTechnicallyReproducedDecision, needsSubmissionReadinessWork, requiredBountyGates, submissionDecisionSummary } from "../util/submission-readiness.js";
 import { canonicalFindingKey } from "../util/finding-identity.js";
 import { phaseInputFingerprint } from "../util/material-fingerprint.js";
 import type {
@@ -855,8 +855,8 @@ function structuredText(value: unknown): string {
   }
 }
 
-function decisionConfirmOutcome(row: Pick<ConfirmRow, "reproduced" | "reproCommandId">, evidenceLevel: string): "reproduced" | "not-reproduced" | null {
-  if (row.reproduced === "yes" && row.reproCommandId?.trim() && isExecutionBackedEvidenceLevel(evidenceLevel)) return "reproduced";
+function decisionConfirmOutcome(row: ConfirmRow, evidenceLevel: string): "reproduced" | "not-reproduced" | null {
+  if (row.reproCommandId?.trim() && isExecutionBackedEvidenceLevel(evidenceLevel) && isTechnicallyReproducedDecision({ ...row, evidenceLevel })) return "reproduced";
   if (row.reproduced === "no") return "not-reproduced";
   return null;
 }
@@ -1024,6 +1024,7 @@ export class MetadataStore {
     this.ensureProjectUuids();
     this.ensureFindingIdentities();
     this.reconcileConfirmDecisionMembers();
+    this.reconcileTechnicalConfirmValidity();
     this.reconcileConfirmStatuses();
     this.reconcileReproducedFindingInvariants();
     this.runDataMigrations();
@@ -1109,14 +1110,15 @@ export class MetadataStore {
   private reconcileConfirmStatuses(): void {
     const rows = this.db
       .prepare(
-        `SELECT project_id, reproduced, members_json, evidence_level, repro_evidence, repro_command_id, human_gates,
-                corroboration, novelty
+        `SELECT project_id, reproduced, recommendation, members_json, evidence_level, repro_evidence, repro_command_id, human_gates,
+                corroboration, novelty, engagement_profile_json, adjudication_json
            FROM confirm_decision
           WHERE reproduced IN ('yes','no') AND members_json IS NOT NULL`,
       )
       .all() as Array<{
         project_id: number;
         reproduced: string | null;
+        recommendation: string | null;
         members_json: string;
         evidence_level: string | null;
         repro_evidence: string | null;
@@ -1124,13 +1126,15 @@ export class MetadataStore {
         human_gates: string | null;
         corroboration: string | null;
         novelty: string | null;
+        engagement_profile_json: string | null;
+        adjudication_json: string | null;
       }>;
     if (rows.length === 0) return;
     for (const row of rows) {
       const members = jsonParseOrNull(row.members_json);
       if (!Array.isArray(members)) continue;
       const evidenceLevel = decisionEvidenceLevel(decisionEvidenceInput(row));
-      const outcome = decisionConfirmOutcome({ reproduced: row.reproduced ?? undefined, reproCommandId: row.repro_command_id ?? undefined }, evidenceLevel);
+      const outcome = decisionConfirmOutcome(decisionEvidenceInput(row), evidenceLevel);
       if (!outcome) continue;
       for (const member of members) {
         if (typeof member !== "string") continue;
@@ -1155,6 +1159,65 @@ export class MetadataStore {
         const members = parseJsonArray(row.members_json).filter((member): member is string => typeof member === "string");
         const normalized = this.canonicalConfirmMembers(row.project_id, members);
         if (JSON.stringify(members) !== JSON.stringify(normalized)) update.run(JSON.stringify(normalized), row.id);
+      }
+    }, "immediate");
+  }
+
+  /** Earlier product versions treated an executed mechanism as a real-target
+   * reproduction even when the decision had not established attacker reachability
+   * or the end-to-end effect. Re-open those findings for evidence work using the
+   * same target-neutral validity test as new decisions. The latest reproduced=yes
+   * decision linked to a finding wins; manually-set statuses with no decision link
+   * are intentionally left alone. */
+  private reconcileTechnicalConfirmValidity(): void {
+    const rows = this.db.prepare(
+      `SELECT id, project_id, reproduced, recommendation, members_json, evidence_level,
+              submission_confidence, repro_evidence, repro_command_id, human_gates,
+              corroboration, novelty, engagement_profile_json, adjudication_json
+         FROM confirm_decision
+        WHERE reproduced = 'yes' AND members_json IS NOT NULL
+        ORDER BY id`,
+    ).all() as Array<{
+      id: number;
+      project_id: number;
+      reproduced: string | null;
+      recommendation: string | null;
+      members_json: string;
+      evidence_level: string | null;
+      submission_confidence: string | null;
+      repro_evidence: string | null;
+      repro_command_id: string | null;
+      human_gates: string | null;
+      corroboration: string | null;
+      novelty: string | null;
+      engagement_profile_json: string | null;
+      adjudication_json: string | null;
+    }>;
+    if (rows.length === 0) return;
+
+    const latestValidity = new Map<string, { projectId: number; findingId: number; valid: boolean }>();
+    for (const row of rows) {
+      const members = jsonParseOrNull(row.members_json);
+      if (!Array.isArray(members)) continue;
+      const decision = decisionEvidenceInput(row);
+      const valid = isTechnicallyReproducedDecision({ ...decision, evidenceLevel: decisionEvidenceLevel(decision) });
+      for (const member of members) {
+        if (typeof member !== "string") continue;
+        for (const key of confirmMemberKeys(member)) {
+          const finding = this.resolveFindingByKey(row.project_id, key);
+          if (!finding) continue;
+          const findingId = Number(finding.id);
+          latestValidity.set(`${row.project_id}:${findingId}`, { projectId: row.project_id, findingId, valid });
+        }
+      }
+    }
+
+    this.transaction(() => {
+      const clear = this.db.prepare(
+        "UPDATE finding SET confirm_status = NULL WHERE project_id = ? AND id = ? AND confirm_status = 'reproduced'",
+      );
+      for (const result of latestValidity.values()) {
+        if (!result.valid) clear.run(result.projectId, result.findingId);
       }
     }, "immediate");
   }
@@ -2803,6 +2866,10 @@ export class MetadataStore {
         const linked = linkedFindingMetadata(findingsByKey, members);
         const evidenceLevel = decisionEvidenceLevel(r);
         const submissionConfidence = decisionSubmissionConfidence(r, evidenceLevel);
+        const riskAssessment = submissionDecisionSummary({ ...r, evidenceLevel }, { requireImpactInventory: false }).technicalEvidence.riskAssessment;
+        const decisionSeverity = riskAssessment.status === "assessed" && riskAssessment.residualSeverity !== "unknown"
+          ? riskAssessment.residualSeverity
+          : r.severity ?? maxSeverity(linked.map((entry) => entry.severity));
         stmt.run(
           projectId,
           runId,
@@ -2810,7 +2877,7 @@ export class MetadataStore {
           r.reproduced ?? null,
           r.recommendation ?? null,
           jsonOrNull(members),
-          r.severity ?? maxSeverity(linked.map((entry) => entry.severity)),
+          decisionSeverity,
           evidenceLevel,
           submissionConfidence,
           r.distinctFix ?? null,

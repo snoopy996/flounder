@@ -54,6 +54,23 @@ export type TechnicalEvidenceLevel =
   | "deployed-target-reproduced";
 export type SubmissionDisposition = "eligible-to-submit" | "strengthen-first" | "needs-human" | "do-not-submit";
 export type AdjudicationRiskStatus = "clear" | "uncertain" | "adverse" | "not-applicable";
+export type ExploitabilityClass = "permissionless" | "user-configurable" | "privileged" | "external-condition" | "future-configuration" | "not-currently-reachable" | "unknown";
+export type RiskLikelihood = "very-low" | "low" | "medium" | "high" | "unknown";
+export type RiskSeverity = "info" | "low" | "medium" | "high" | "critical" | "unknown";
+
+export interface TechnicalRiskAssessment {
+  status: "assessed" | "incomplete";
+  label: string;
+  exploitabilityClass: ExploitabilityClass;
+  currentState: "active" | "inactive" | "mixed" | "unknown";
+  likelihood: RiskLikelihood;
+  impactCeiling: RiskSeverity;
+  residualSeverity: RiskSeverity;
+  confidence: "high" | "medium" | "low" | "unknown";
+  basis: string;
+  requiredPrincipals: Array<{ role: string; identity: string; controlModel: string; attackerAccess: string; evidence: string }>;
+  changeControls: Array<{ control: string; strength: string; evidence: string }>;
+}
 
 export interface SubmissionDecisionSummary {
   schemaVersion: 1;
@@ -74,6 +91,7 @@ export interface SubmissionDecisionSummary {
     boundary: string;
     satisfiesProgramMinimum: boolean | null;
     notDemonstrated: string[];
+    riskAssessment: TechnicalRiskAssessment;
     claimValidity: {
       status: ProgramComplianceStatus | "not-required";
       label: string;
@@ -310,7 +328,18 @@ export function needsConfirmEvidenceWork(row: object): boolean {
   const summary = submissionDecisionSummary(decision, { requireImpactInventory: false });
   if (["unknown", "reasoned", "source-supported"].includes(summary.technicalEvidence.level)) return true;
   if (summary.technicalEvidence.satisfiesProgramMinimum === false) return true;
-  return summary.technicalEvidence.claimValidity.status === "unknown";
+  return summary.technicalEvidence.claimValidity.status !== "met";
+}
+
+/** A real-target result is product-valid only when execution provenance and all
+ * attacker-real technical gates are established. This is independent of bounty,
+ * disclosure, duplicate, or payout policy. */
+export function isTechnicallyReproducedDecision(row: object): boolean {
+  const decision = row as SubmissionDecisionLike;
+  if (decisionReproduced(decision) !== "yes") return false;
+  const summary = submissionDecisionSummary(decision, { requireImpactInventory: false });
+  return TECHNICAL_EVIDENCE_RANK[summary.technicalEvidence.level] >= TECHNICAL_EVIDENCE_RANK["source-executed"]
+    && summary.technicalEvidence.claimValidity.status === "met";
 }
 
 export function submissionReadinessBlocker(row: SubmissionDecisionLike, options: SubmissionReadinessOptions = {}): string | undefined {
@@ -433,7 +462,8 @@ function technicalEvidenceSummary(
           : rank < TECHNICAL_EVIDENCE_RANK["deployed-target-reproduced"]
             ? ["Deployed-target reproduction was not recorded."]
             : [];
-  const claimValidity = technicalClaimValiditySummary(row, bountyLike);
+  const claimValidity = technicalClaimValiditySummary(row);
+  const riskAssessment = technicalRiskAssessment(row);
   const validityGaps = claimValidity.requirements
     .filter((requirement) => requirement.status === "unknown" || requirement.status === "not-met")
     .map((requirement) => `${requirement.label}: ${requirement.detail}`);
@@ -443,13 +473,67 @@ function technicalEvidenceSummary(
     boundary: metadata[level].boundary,
     satisfiesProgramMinimum: bountyLike ? null : rank >= TECHNICAL_EVIDENCE_RANK["source-executed"],
     notDemonstrated: [...boundaryGaps, ...validityGaps],
+    riskAssessment,
     claimValidity,
+  };
+}
+
+function technicalRiskAssessment(row: SubmissionDecisionLike): TechnicalRiskAssessment {
+  const adjudication = asRecord(decisionAdjudication(row));
+  const raw = asRecord(adjudication?.risk_assessment ?? adjudication?.riskAssessment);
+  const exploitabilityClass = enumValue<ExploitabilityClass>(raw?.exploitability_class ?? raw?.exploitabilityClass, [
+    "permissionless", "user-configurable", "privileged", "external-condition", "future-configuration", "not-currently-reachable", "unknown",
+  ], "unknown");
+  const currentState = enumValue<TechnicalRiskAssessment["currentState"]>(raw?.current_state ?? raw?.currentState, ["active", "inactive", "mixed", "unknown"], "unknown");
+  const likelihood = enumValue<RiskLikelihood>(raw?.likelihood, ["very-low", "low", "medium", "high", "unknown"], "unknown");
+  const impactCeiling = enumValue<RiskSeverity>(raw?.impact_ceiling ?? raw?.impactCeiling, ["info", "low", "medium", "high", "critical", "unknown"], "unknown");
+  const residualSeverity = enumValue<RiskSeverity>(raw?.residual_severity ?? raw?.residualSeverity, ["info", "low", "medium", "high", "critical", "unknown"], "unknown");
+  const confidence = enumValue<TechnicalRiskAssessment["confidence"]>(raw?.confidence, ["high", "medium", "low", "unknown"], "unknown");
+  const basis = stringValue(raw?.basis);
+  const requiredPrincipals = recordList(raw?.required_principals ?? raw?.requiredPrincipals).map((principal) => ({
+    role: stringValue(principal.role),
+    identity: stringValue(principal.identity),
+    controlModel: stringValue(principal.control_model ?? principal.controlModel),
+    attackerAccess: stringValue(principal.attacker_access ?? principal.attackerAccess),
+    evidence: stringValue(principal.evidence),
+  }));
+  const changeControls = recordList(raw?.change_controls ?? raw?.changeControls).map((control) => ({
+    control: stringValue(control.control),
+    strength: stringValue(control.strength),
+    evidence: stringValue(control.evidence),
+  }));
+  const complete = Boolean(
+    raw
+    && exploitabilityClass !== "unknown"
+    && currentState !== "unknown"
+    && likelihood !== "unknown"
+    && impactCeiling !== "unknown"
+    && residualSeverity !== "unknown"
+    && confidence !== "unknown"
+    && basis
+    && requiredPrincipals.length > 0
+    && requiredPrincipals.every((principal) => principal.role && principal.identity && principal.controlModel && principal.attackerAccess && principal.evidence),
+  );
+  const label = complete
+    ? `${residualSeverity} current risk · ${likelihood} likelihood · ${exploitabilityClass}`
+    : "Current practical risk assessment incomplete";
+  return {
+    status: complete ? "assessed" : "incomplete",
+    label,
+    exploitabilityClass,
+    currentState,
+    likelihood,
+    impactCeiling,
+    residualSeverity,
+    confidence,
+    basis,
+    requiredPrincipals,
+    changeControls,
   };
 }
 
 function technicalClaimValiditySummary(
   row: SubmissionDecisionLike,
-  bountyLike: boolean,
 ): SubmissionDecisionSummary["technicalEvidence"]["claimValidity"] {
   const definitions = [
     {
@@ -471,13 +555,6 @@ function technicalClaimValiditySummary(
       unknown: "The decision does not account for existing authorization, recovery, revocation, timing, and reversibility controls when stating impact.",
     },
   ];
-  if (!bountyLike) {
-    return {
-      status: "not-required",
-      label: "Bounty claim gates not required",
-      requirements: definitions.map(({ id, label }) => ({ id, label, status: "not-required", detail: "No bounty or contest submission is being recommended." })),
-    };
-  }
   const adjudication = decisionAdjudication(row);
   const requirements = definitions.map(({ gate, id, label, unknown }) => {
     let status = classifyTechnicalClaimGate(bountyGateStatus(adjudication, gate));
@@ -911,6 +988,15 @@ function configuredBountyProfile(value: unknown): Record<string, unknown> | unde
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function recordList(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry)) : [];
+}
+
+function enumValue<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  const normalized = stringValue(value).toLowerCase().replaceAll("_", "-");
+  return allowed.includes(normalized as T) ? normalized as T : fallback;
 }
 
 function stringValue(value: unknown): string {
