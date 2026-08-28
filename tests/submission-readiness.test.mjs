@@ -155,6 +155,9 @@ test("private review preserves unresolved technical gates across common wording"
     "Source integrity is unverified.",
     "The current version remains unconfirmed.",
     "The affected version is unknown.",
+    "The proof of concept status is TBD.",
+    "Technical confirmation is inconclusive.",
+    "Verification remains incomplete.",
   ];
 
   for (const humanGates of unresolvedGates) {
@@ -162,6 +165,22 @@ test("private review preserves unresolved technical gates across common wording"
     assert.equal(summary.programCompliance.status, "unknown", humanGates);
     assert.equal(summary.submission.status, "needs-human", humanGates);
     assert.match(summary.submission.rationale, new RegExp(humanGates.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  }
+});
+
+test("private review does not turn resolved technical statements into open gates", () => {
+  const resolvedNotes = [
+    "Exploit reproduction completed successfully.",
+    "Verification is complete.",
+    "Authorization was confirmed.",
+    "Execution evidence is sufficient.",
+    "The authorized disclosure contact remains pending.",
+  ];
+
+  for (const humanGates of resolvedNotes) {
+    const summary = submissionDecisionSummary(privateAuditDecision(humanGates), { requireImpactInventory: false });
+    assert.equal(summary.programCompliance.status, "met", humanGates);
+    assert.equal(summary.submission.status, "eligible-to-submit", humanGates);
   }
 });
 

@@ -23,8 +23,8 @@ export interface TechnicalClaimGateEvidence {
 const TECHNICAL_CLAIM_GATES: TechnicalClaimGate[] = ["attacker_reachability", "end_to_end_effect", "impact_bounds"];
 const DEFAULT_BOUNTY_GATES: BountyGate[] = ["scope", "live_impact", "known_issue", "payout"];
 const SOURCE_ONLY_BOUNTY_GATES: BountyGate[] = ["scope", "known_issue", "payout"];
-const TECHNICAL_GATE_SUBJECT = String.raw`(?:scope|authori[sz]\w*|permissions? to audit|target identity|source integrity|live (?:impact|deployment|target|funds?)|funded deployment|production deployment|current version|affected version|execution evidence|execution|reproduction|reproduc(?:e|ed|ibility)|verification|proof of concept|poc|exploit|local fork|fork)`;
-const UNRESOLVED_GATE_STATE = String.raw`(?:pending|missing|unknown|unclear|unverified|unconfirmed|failed|could not|cannot|not (?:been )?(?:reproduced|verified|confirmed|executed|run)|must (?:be )?(?:reproduced|verified|confirmed|executed|run)|requires? (?:reproduction|verification|confirmation|execution))`;
+const TECHNICAL_GATE_SUBJECT = String.raw`(?:scope|authori[sz]ation|permissions? to audit|target identity|source integrity|live (?:impact|deployment|target|funds?)|funded deployment|production deployment|current version|affected version|execution evidence|execution|reproduction|reproduc(?:e|ed|ibility)|verification|technical confirmation|proof of concept|poc|exploit|local fork|fork)`;
+const UNRESOLVED_GATE_STATE = String.raw`(?:pending|missing|unknown|unclear|unverified|unconfirmed|incomplete|inconclusive|tbd|to be determined|failed|could not|cannot|not (?:yet )?(?:been )?(?:reproduced|verified|confirmed|executed|run)|must (?:be )?(?:reproduced|verified|confirmed|executed|run)|requires? (?:reproduction|verification|confirmation|execution))`;
 const TECHNICAL_GATE_UNCERTAINTY = new RegExp(
   `\\b${TECHNICAL_GATE_SUBJECT}\\b.{0,48}\\b${UNRESOLVED_GATE_STATE}\\b|\\b${UNRESOLVED_GATE_STATE}\\b.{0,48}\\b${TECHNICAL_GATE_SUBJECT}\\b`,
 );
@@ -704,7 +704,7 @@ function hasUnsettledHumanGateText(value: string): boolean {
   if (!text) return false;
   if (/^(?:none|n\/a|not applicable|no remaining gates?|no human gates?)\.?$/.test(text)) return false;
   if (/\b(?:no|none)\b.{0,32}\b(?:remaining|open|unsettled|human)\b.{0,24}\b(?:gate|gates|blocker|blockers)\b/.test(text)) return false;
-  return /\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not established|not confirmed|unknown|unclear|unverified|unconfirmed|pending|missing|failed|review|cannot|authori[sz]\w*|permission|identity|integrity|verification|reproduc\w*|exploit|poc|fork|execution|embargo|deadline|window|must)\b/.test(text);
+  return /\b(?:scope|venue|eligib|bounty|reward|payout|collectible|live|funded|funds|deployment|production|current|human gate|needs?|requires?|not (?:yet )?(?:been )?(?:established|confirmed|verified|reproduced|executed|run)|unknown|unclear|unverified|unconfirmed|incomplete|inconclusive|tbd|to be determined|pending|missing|failed|review|cannot|must)\b/.test(text);
 }
 
 function bountyGateStatus(adjudication: unknown, gate: DecisionGate): string | undefined {
