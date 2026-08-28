@@ -13,6 +13,14 @@ import { DAEMON_PROTOCOL_VERSION } from "../dist/server/protocol.js";
 const execFileAsync = promisify(execFile);
 const root = path.resolve(import.meta.dirname, "..");
 
+function validTechnicalClaimGates() {
+  return [
+    { id: "attacker_reachability", status: "pass", evidence: "The attacker reaches all preconditions with untrusted permissions." },
+    { id: "end_to_end_effect", status: "pass", evidence: "The passing confirmation command observes the claimed unauthorized effect." },
+    { id: "impact_bounds", status: "pass", evidence: "Recovery, revocation, timing, and reversibility controls are included in the impact." },
+  ];
+}
+
 // Execution is decoupled: the server owns the DB + a job queue and never runs an audit;
 // a daemon claims queued jobs, runs them elsewhere, and reports progress over HTTP. These
 // drive the server as BOTH the UI client (public API) and a simulated daemon (the hidden
@@ -316,6 +324,7 @@ test("daemon: an explicit evidence-conflict retry re-enters Verify and clears af
         engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" },
         reproEvidence: "purpose=confirm command cmd1 reproduced the real target effect",
         reproCommandId: "cmd1",
+        adjudication: { gates: validTechnicalClaimGates() },
       }]);
       const verifyRun = store.startRun({ projectId: created.id, kind: "audit", runDir: path.join(out, "conflict-verify"), budgets: { verify: true } });
       store.upsertFindings(created.id, verifyRun, [{
@@ -610,7 +619,7 @@ test("daemon: full job handoff — enqueue → claim → run start → ingest �
     // Daemon reports findings (with a status reason for the timeline) and a confirm decision.
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { findings: [{ findingKey: "f1", title: "unbound input", location: "src/x:10", status: "suspected" }], reason: "first sighting" });
     await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { findings: [{ findingKey: "f1", title: "unbound input", location: "src/x:10", status: "confirmed-differential" }], reason: "differential passed" });
-    await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { confirmDecisions: [{ bug: "unbound input", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced", reproCommandId: "cmd-confirm", engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" } }], decisionPath: "/tmp/acme-run-1/confirm_report.md" });
+    await asDaemon(base, token, "PATCH", `/api/daemon/runs/${runId}`, { confirmDecisions: [{ bug: "unbound input", reproduced: "yes", recommendation: "submit-candidate", evidenceLevel: "real-target-reproduced", reproCommandId: "cmd-confirm", engagementProfile: { policy_kind: "private_audit", evidence_requirement: "real_target" }, adjudication: { gates: validTechnicalClaimGates() } }], decisionPath: "/tmp/acme-run-1/confirm_report.md" });
 
     const findings = await j(await ui(base, "GET", projectPath + "/findings"));
     assert.equal(findings.findings.length, 1);

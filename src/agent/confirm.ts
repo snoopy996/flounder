@@ -8,7 +8,7 @@ import { writeLastRunPointer } from "../trace/last-run.js";
 import { RunLogger } from "../trace/logger.js";
 import type { Doc } from "../types.js";
 import { publicPath } from "../util/paths.js";
-import { enforceSubmissionReadiness, isResumeSettledDecision, submissionDecisionSummary } from "../util/submission-readiness.js";
+import { enforceSubmissionReadiness, isResumeSettledDecision, isTechnicallyReproducedDecision, submissionDecisionSummary } from "../util/submission-readiness.js";
 import { consolidateByFixEquivalence, type FixEquivEdge, type FixEquivItem } from "./consolidate.js";
 import { RunRecorder, type RunTrackerFactory } from "../db/record.js";
 import { findingContentKey } from "../util/finding-key.js";
@@ -949,7 +949,7 @@ function renderConfirmReport(input: {
     impactInventory: input.impactInventory,
     requireImpactInventory: true,
   }));
-  const executionBacked = summaries.filter((summary) => summary.technicalEvidence.level !== "unknown" && summary.technicalEvidence.level !== "reasoned" && summary.technicalEvidence.level !== "source-supported").length;
+  const executionBacked = input.rows.filter((row) => isTechnicallyReproducedDecision(row)).length;
   const requirementsMet = summaries.filter((summary) => summary.programCompliance.status === "met").length;
   const candidates = summaries.filter((summary) => summary.submission.status === "eligible-to-submit").length;
   out.push(`- Execution-backed decisions: ${executionBacked} / ${input.rows.length}; program minimum met: ${requirementsMet}; eligible to submit: ${candidates}`);
@@ -979,11 +979,23 @@ function renderConfirmReport(input: {
   }
   for (const [idx, row] of input.rows.entries()) {
     const summary = summaries[idx]!;
-    const badge = row.reproduced === "yes" ? `✅ ${summary.technicalEvidence.label}` : row.reproduced === "no" ? "❌ not reproduced" : row.reproduced === "could-not-set-up" ? "⚠ could not set up" : "? unknown";
+    const badge = isTechnicallyReproducedDecision(row)
+      ? `✅ ${summary.technicalEvidence.label}`
+      : row.reproduced === "yes"
+        ? "⚠ mechanism executed; attacker-real exploitability not established"
+        : row.reproduced === "no"
+          ? "❌ not reproduced"
+          : row.reproduced === "could-not-set-up"
+            ? "⚠ could not set up"
+            : "? unknown";
     out.push(`### ${idx + 1}. ${row.bug} — ${badge}`);
     out.push(`- Program requirements: ${summary.programCompliance.label}`);
     out.push(`- Evidence boundary: ${summary.technicalEvidence.boundary}`);
     out.push(`- Technical claim: ${summary.technicalEvidence.claimValidity.label}`);
+    out.push(`- Current practical risk: ${summary.technicalEvidence.riskAssessment.label}${summary.technicalEvidence.riskAssessment.basis ? ` — ${summary.technicalEvidence.riskAssessment.basis}` : ""}`);
+    if (summary.technicalEvidence.riskAssessment.status === "assessed") {
+      out.push(`  - Impact ceiling: ${summary.technicalEvidence.riskAssessment.impactCeiling}; residual severity: ${summary.technicalEvidence.riskAssessment.residualSeverity}; current state: ${summary.technicalEvidence.riskAssessment.currentState}`);
+    }
     for (const requirement of summary.technicalEvidence.claimValidity.requirements.filter((entry) => entry.status !== "met" && entry.status !== "not-required")) {
       out.push(`  - ${requirement.label}: ${requirement.status} — ${requirement.detail}`);
     }

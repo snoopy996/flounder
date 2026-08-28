@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   enforceSubmissionReadiness,
+  isTechnicallyReproducedDecision,
   submissionDecisionSummary,
 } from "../dist/util/submission-readiness.js";
 
@@ -100,7 +101,10 @@ test("private disclosure handling notes do not erase a local-fork technical verd
       required_gates: ["scope", "private disclosure channel"],
     },
     adjudication: {
-      gates: [{ id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." }],
+      gates: [
+        { id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." },
+        ...validTechnicalClaimGates(),
+      ],
       scope_status: "pass",
       known_issue_status: "unknown",
       payout_estimate: { status: "not-applicable" },
@@ -115,6 +119,126 @@ test("private disclosure handling notes do not erase a local-fork technical verd
   const [normalized] = enforceSubmissionReadiness([row], { requireImpactInventory: false });
   assert.equal(normalized.recommendation, "submit-candidate");
   assert.match(normalized.humanGates, /confidential contact\/embargo/i);
+});
+
+test("private reviews require attacker-real technical validation without operator triage", () => {
+  const counterfactual = privateAuditDecision("", {
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The deployed component is in the authorized audit scope." },
+        {
+          id: "attacker_reachability",
+          status: "fail",
+          evidence: "The passing fork test impersonated a trusted upgrader to install behavior that an untrusted caller cannot enable on the current deployment.",
+        },
+        { id: "end_to_end_effect", status: "pass", evidence: "The modified fork exhibited the accounting deficit." },
+        { id: "impact_bounds", status: "pass", evidence: "The deficit persists in the modified fork." },
+      ],
+      risk_assessment: {
+        exploitability_class: "privileged",
+        current_state: "inactive",
+        required_principals: [{
+          role: "external asset upgrader",
+          identity: "regulated institutional issuer",
+          control_model: "role-separated upgrade authority",
+          attacker_access: "compromise-required",
+          evidence: "Official deployment records identify the controller and the current implementation uses ordinary transfer semantics.",
+        }],
+        change_controls: [{ control: "role-gated upgrade", strength: "strong", evidence: "The current deployment exposes no public upgrade path." }],
+        likelihood: "very-low",
+        impact_ceiling: "high",
+        residual_severity: "info",
+        confidence: "high",
+        basis: "The mechanism has high impact only after a trusted external controller changes current asset behavior; ordinary users cannot make that change.",
+      },
+      scope_status: "pass",
+      known_issue_status: "unknown",
+      payout_estimate: { status: "not-applicable" },
+    },
+  });
+
+  const invalid = submissionDecisionSummary(counterfactual, { requireImpactInventory: false });
+  assert.equal(invalid.technicalEvidence.claimValidity.status, "not-met");
+  assert.equal(invalid.submission.status, "do-not-submit");
+  assert.equal(isTechnicallyReproducedDecision(counterfactual), false);
+  assert.match(invalid.submission.rationale, /trusted upgrader/i);
+  assert.equal(invalid.technicalEvidence.riskAssessment.status, "assessed");
+  assert.equal(invalid.technicalEvidence.riskAssessment.likelihood, "very-low");
+  assert.equal(invalid.technicalEvidence.riskAssessment.impactCeiling, "high");
+  assert.equal(invalid.technicalEvidence.riskAssessment.residualSeverity, "info");
+
+  const weakControl = privateAuditDecision("", {
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The component is authorized." },
+        { id: "attacker_reachability", status: "fail", evidence: "A privileged configuration change is required." },
+        { id: "end_to_end_effect", status: "pass", evidence: "The configured system exhibits the loss." },
+        { id: "impact_bounds", status: "pass", evidence: "No recovery path restores the loss." },
+      ],
+      risk_assessment: {
+        exploitability_class: "privileged",
+        current_state: "inactive",
+        required_principals: [{ role: "configuration owner", identity: "single operator key", control_model: "single signer", attacker_access: "compromise-required", evidence: "The owner slot resolves to one externally owned account." }],
+        change_controls: [{ control: "immediate configuration", strength: "weak", evidence: "No threshold or delay is present." }],
+        likelihood: "medium",
+        impact_ceiling: "high",
+        residual_severity: "medium",
+        confidence: "high",
+        basis: "The same conditional mechanism has materially higher practical risk because one immediately effective key controls the prerequisite.",
+      },
+      scope_status: "pass",
+      payout_estimate: { status: "not-applicable" },
+    },
+  });
+  const weak = submissionDecisionSummary(weakControl, { requireImpactInventory: false });
+  assert.equal(weak.technicalEvidence.riskAssessment.likelihood, "medium");
+  assert.equal(weak.technicalEvidence.riskAssessment.residualSeverity, "medium");
+
+  const permissionless = privateAuditDecision("", {
+    adjudication: {
+      gates: [
+        { id: "scope", status: "pass", evidence: "The component is authorized." },
+        ...validTechnicalClaimGates(),
+      ],
+      risk_assessment: {
+        exploitability_class: "permissionless",
+        current_state: "active",
+        required_principals: [{ role: "untrusted caller", identity: "any network user", control_model: "public entrypoint", attacker_access: "direct", evidence: "The fork call succeeds from an unprivileged address in current state." }],
+        change_controls: [{ control: "pause and upgrade", strength: "moderate", evidence: "Maintainers can stop future calls but cannot reverse the demonstrated effect." }],
+        likelihood: "high",
+        impact_ceiling: "high",
+        residual_severity: "high",
+        confidence: "high",
+        basis: "Any untrusted caller can trigger the current deployed path without an external configuration change.",
+      },
+      scope_status: "pass",
+      payout_estimate: { status: "not-applicable" },
+    },
+  });
+  const active = submissionDecisionSummary(permissionless, { requireImpactInventory: false });
+  assert.equal(isTechnicallyReproducedDecision(permissionless), true);
+  assert.equal(active.technicalEvidence.riskAssessment.exploitabilityClass, "permissionless");
+  assert.equal(active.technicalEvidence.riskAssessment.residualSeverity, "high");
+
+  const unidentifiedController = structuredClone(counterfactual);
+  unidentifiedController.adjudication.risk_assessment.required_principals[0].identity = "";
+  assert.equal(
+    submissionDecisionSummary(unidentifiedController, { requireImpactInventory: false }).technicalEvidence.riskAssessment.status,
+    "incomplete",
+    "the product cannot finalize principal risk without identifying who controls the required role",
+  );
+
+  const omitted = privateAuditDecision("", {
+    adjudication: {
+      gates: [{ id: "scope", status: "pass", evidence: "The component is authorized." }],
+      scope_status: "pass",
+      payout_estimate: { status: "not-applicable" },
+    },
+  });
+  const incomplete = submissionDecisionSummary(omitted, { requireImpactInventory: false });
+  assert.equal(incomplete.technicalEvidence.claimValidity.status, "unknown");
+  assert.equal(incomplete.submission.status, "strengthen-first");
+  assert.equal(isTechnicallyReproducedDecision(omitted), false);
 });
 
 test("private disclosure handling does not hide an unresolved deployment reproduction gate", () => {

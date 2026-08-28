@@ -1630,7 +1630,7 @@ function synthesisIdentity(finding: Record<string, unknown>): string {
 
 // Seed for the ONE appeal a refuted finding may make. Same claim the verify session
 // gets, plus the skeptic's exact objection and an instruction to answer it with a
-// FAITHFUL PoC (assume only what the attacker can actually cause), or concede.
+// FAITHFUL PoC (justify every capability against the assessed trust model), or concede.
 function buildAppealSeed(finding: AgentFinding, critique: string): string {
   const base = buildVerifySeed({
     title: finding.title,
@@ -1647,7 +1647,7 @@ function buildAppealSeed(finding: AgentFinding, critique: string): string {
 APPEAL: this finding was confirmed by a prior PoC, then an independent skeptic refuted that confirmation as UNREALISTIC with this objection:
 "${critique}"
 
-The underlying bug may still be real — the prior PoC may simply have been unfaithful (e.g. it gave a trusted/pinned component blanket success the attacker cannot actually obtain). Answer the objection DIRECTLY: build a NEW PoC whose setup assumes only what an attacker can actually cause in the deployed system, then confirm by execution. If, after genuine effort, the bug truly cannot be triggered without behavior the real system would never exhibit, refute it with a "REFUTED:" finding that explains why.`;
+The underlying bug may still be real — the prior PoC may simply have been unfaithful (e.g. it gave a fixed component blanket success no real actor can obtain). Answer the objection DIRECTLY, but do not blindly remove a disputed role. Investigate the role's controller, control model, stated trust boundary, current behavior, and realistic attacker path using the available source and project-owned specifications. Then build a NEW faithful PoC: either trigger the effect without the disputed capability, or demonstrate why that capability is legitimately within the assessed attacker model and faithfully reproduce its real controls. Distinguish present exploitability from a conditional mechanism and its impact ceiling. If, after genuine effort, the current exploit cannot be triggered without behavior the real system would never exhibit or control the attacker cannot realistically obtain, refute the current claim with a "REFUTED:" finding that explains the evidence and preserves the conditional concern.`;
 }
 
 function toRankedFinding(finding: AgentFinding): RankedFinding {
