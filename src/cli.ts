@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultConfig, defaultOutputDir, defaultWorkspaceDir, normalizeProjectContext, normalizeRoleModels, type AuditorConfig } from "./config.js";
+import { defaultConfig, defaultOutputDir, defaultWorkspaceDir, normalizeCustomModels, normalizeProjectContext, normalizeRoleModels, type AuditorConfig } from "./config.js";
 import { CLI_CONFIG_KEYS, configFilePath, getCliConfigValue, isCliConfigKey, loadCliConfig, setCliConfigValue, unsetCliConfigValue, type CliConfigKey } from "./config-file.js";
 import { launchProjectRunViaApi, launchViaApi, ran, resolveServer, fetchArtifact, requestControlPlane } from "./cli-client.js";
 import { buildProjectContinueBody } from "./cli-project.js";
@@ -176,7 +176,7 @@ async function main(argv: string[]): Promise<void> {
     // Name the staged project after the clue when --target wasn't given, so each prepare is its
     // own UI project rather than colliding on the default "target".
     if (cfg.targetName === "target") cfg.targetName = `prepare-${slugifyClue(clue)}`;
-    const spec: LaunchSpec = { verb: "prepare", target: cfg.targetName, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const spec: LaunchSpec = { verb: "prepare", target: cfg.targetName, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (endpoint !== undefined) spec.endpoint = endpoint;
     if (maxSteps !== undefined) spec.maxSteps = maxSteps;
     const run = await launchViaApi(resolveServer(readFlag(rest, "--server")), spec);
@@ -197,7 +197,7 @@ async function main(argv: string[]): Promise<void> {
     // It auto-RESUMES a prior interrupted confirm of the same run dir (carries settled rows forward); --fresh ignores that.
     const maxSteps = readIntFlag(rest, "--max-steps");
     const fresh = rest.includes("--fresh");
-    const spec: LaunchSpec = { verb: "confirm", target: cfg.targetName, sourcePaths: cfg.sourcePaths, corpusPaths: cfg.corpusPaths, provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, inputRunDir, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const spec: LaunchSpec = { verb: "confirm", target: cfg.targetName, sourcePaths: cfg.sourcePaths, corpusPaths: cfg.corpusPaths, provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, inputRunDir, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (cfg.buildRoot) spec.buildRoot = cfg.buildRoot;
     if (fresh) spec.fresh = true;
     if (maxSteps !== undefined) spec.maxSteps = maxSteps;
@@ -382,6 +382,7 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   }
   const rawModels = normalizeRoleModels(raw.models);
   if (rawModels) cfg.models = rawModels;
+  cfg.customModels = normalizeCustomModels(raw.customModels ?? raw.custom_models);
   if ("projectContext" in raw || "project_context" in raw) {
     cfg.projectContext = normalizeProjectContext(raw.projectContext ?? raw.project_context) ?? cfg.projectContext;
   }
@@ -593,6 +594,7 @@ function buildAuditSpec(cmd: "run" | "map" | "audit", rest: string[], cfg: Audit
     corpusPaths: cfg.corpusPaths,
     provider: cfg.provider,
     model: cfg.auditModel,
+    customModels: cfg.customModels,
     thinking: cfg.thinkingLevel,
     mapSamples: cfg.auditMapSamples,
     digSamples: cfg.auditDigSamples,
@@ -669,7 +671,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
   const noConfirm = rest.includes("--no-confirm");
   if (!noConfirm) {
     console.log(`=== flounder run pipeline · target "${target}" · prepare → map → dig → synthesize → verify → confirm → report ===`);
-    const spec: LaunchSpec = { verb: "run", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, pipeline: true, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const spec: LaunchSpec = { verb: "run", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, pipeline: true, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (endpoint !== undefined) spec.endpoint = endpoint;
     const result = await launchViaApi(server, spec);
     if (!ran(result)) process.exitCode = 1;
@@ -680,7 +682,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
 
   // Phase 1 — prepare (open-world acquisition + deployment match) stages the source.
   console.log("\n── phase 1 · prepare (acquire the target) ──");
-  const prepSpec: LaunchSpec = { verb: "prepare", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
+  const prepSpec: LaunchSpec = { verb: "prepare", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
   if (endpoint !== undefined) prepSpec.endpoint = endpoint;
   const prep = await launchViaApi(server, prepSpec);
   if (!ran(prep)) { console.error("[pipeline] prepare did not finish — stopping."); process.exitCode = 1; return; }
@@ -712,7 +714,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
   else if (findings <= 0) console.log("\n[pipeline] the dig surfaced no findings — nothing to reproduce.");
   else {
     console.log("\n── phase 3 · confirm (reproduce on the real target) ──");
-    const confSpec: LaunchSpec = { verb: "confirm", target, sourcePaths: [staged], inputRunDir: String(audit!.run_dir), provider: cfg.provider, model: cfg.auditModel, thinking: cfg.thinkingLevel, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const confSpec: LaunchSpec = { verb: "confirm", target, sourcePaths: [staged], inputRunDir: String(audit!.run_dir), provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (!ran(await launchViaApi(server, confSpec))) process.exitCode = 1;
   }
   console.log(`\n=== pipeline done · UI project "${target}" has the prepare → dig trail ===`);

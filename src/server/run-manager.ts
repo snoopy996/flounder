@@ -6,7 +6,7 @@
 
 import path from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { defaultConfig, defaultOutputDir, THINKING_LEVELS, type AuditorConfig, type AuditNextAction } from "../config.js";
+import { defaultConfig, defaultOutputDir, normalizeCustomModels, THINKING_LEVELS, type AuditorConfig, type AuditNextAction, type CustomModelDefinition } from "../config.js";
 import type { RunKind, ProviderRoles } from "../db/store.js";
 import type { SandboxBackend, SandboxNetworkMode } from "../security/sandbox.js";
 
@@ -52,6 +52,8 @@ export interface LaunchSpec {
   corpusPaths?: string[] | undefined;
   provider?: string | undefined;
   model?: string | undefined;
+  /** Custom model ids selected in the UI/API, with a known same-provider compatibility base. */
+  customModels?: CustomModelDefinition[] | undefined;
   thinking?: string | undefined;
   coverageMode?: string | undefined;
   coverageTarget?: number | undefined;
@@ -171,6 +173,7 @@ export function specToConfig(spec: LaunchSpec, out: string, workspace?: string):
   else if (root) cfg.buildRoot = root; // default the buildable root to the whole project dir
   if (spec.provider) cfg.provider = spec.provider;
   if (spec.model) cfg.auditModel = spec.model;
+  cfg.customModels = normalizeCustomModels(spec.customModels);
   if (spec.thinking && THINKING.has(spec.thinking)) cfg.thinkingLevel = spec.thinking as AuditorConfig["thinkingLevel"];
   if (spec.models) cfg.models = spec.models as NonNullable<AuditorConfig["models"]>;
   if (spec.sandboxBackend) cfg.sandboxBackend = spec.sandboxBackend;
