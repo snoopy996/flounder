@@ -48,6 +48,33 @@ function item(itemKey, expectedOutcome, target) {
   };
 }
 
+test("run-group API inherits the control-plane default provider profile", async () => {
+  await withServer(async (base) => {
+    const profile = await json(await request(base, "POST", "/api/providers", {
+      name: "evaluation daybreak default",
+      provider: "openai-codex",
+      model: "gpt-daybreak-blue-latest",
+      baseModel: "gpt-5.6-sol",
+      thinking: "xhigh",
+    }));
+    await json(await request(base, "PATCH", "/api/settings/runtime", { defaultProviderProfileId: profile.id }));
+    const workItem = item("inherits-default", "detect-positive", "evaluation-default-profile");
+    delete workItem.targetBundle.mockLlm;
+    const created = await json(await request(base, "POST", "/api/run-groups", {
+      name: "runtime-default-evaluation",
+      items: [workItem],
+    }));
+    const started = await json(await request(base, "POST", `/api/run-groups/${created.uuid}/start`, {}));
+    const job = await json(await fetch(base + `/api/jobs/${started.items[0].job_id}`));
+    const spec = JSON.parse(job.job.spec_json);
+    assert.equal(spec.provider, "openai-codex");
+    assert.equal(spec.model, "gpt-daybreak-blue-latest");
+    assert.deepEqual(spec.customModels, [
+      { provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "gpt-5.6-sol" },
+    ]);
+  });
+});
+
 test("run-group API schedules bounded work and advances from daemon evidence", async () => {
   await withServer(async (base, out) => {
     const createdResponse = await request(base, "POST", "/api/run-groups", {

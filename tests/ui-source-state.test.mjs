@@ -120,6 +120,14 @@ test("ui: provider profiles expose custom model metadata and deliver it to the s
   assert.match(appSource, /baseModel: customModel \? form\.baseModel\.trim\(\) : null/);
 });
 
+test("ui: provider settings expose the effective local default", () => {
+  assert.match(appSource, /api\.runtimeSettings\(\)/);
+  assert.match(appSource, /api\.updateRuntimeSettings\(defaultProviderProfileId\)/);
+  assert.match(appSource, />Set default<\/Button>/);
+  assert.match(appSource, />Use product default<\/Button>/);
+  assert.match(appSource, /defaultProjectProviderId\(providers, runtimeDefaultProviderProfileId\)/);
+});
+
 test("ui: unresolved local and real-target evidence conflicts require review and are not reportable", () => {
   const finding = {
     id: 7,

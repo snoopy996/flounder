@@ -496,6 +496,11 @@ export interface ProviderProfile {
   roles?: unknown;
 }
 
+export interface RuntimeSettings {
+  defaultProviderProfileId: number | null;
+  source: "local" | "product";
+}
+
 export interface PiModel {
   id: string;
   name?: string;
@@ -932,6 +937,9 @@ function projectListPath(params: ProjectListParams = {}): string {
 
 export const api = {
   catalog: () => fetchJson<ApiCatalogResponse>("/api"),
+  runtimeSettings: () => fetchJson<RuntimeSettings>("/api/settings/runtime"),
+  updateRuntimeSettings: (defaultProviderProfileId: number | null) =>
+    patchJson<RuntimeSettings & { ok: true }>("/api/settings/runtime", { defaultProviderProfileId }),
   storageDisk: () => fetchJson<{ disk: DiskStorageStatus }>("/api/storage/disk"),
   storage: () => fetchJson<StorageOverview>("/api/storage"),
   cleanupProjectStorage: (uuid: string, apply = false) => postJson<ProjectStorageCleanupResult>(`/api/storage/projects/${encodeURIComponent(uuid)}/cleanup`, { apply }),

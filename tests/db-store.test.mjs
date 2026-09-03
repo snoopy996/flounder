@@ -62,6 +62,28 @@ test("store: legacy provider profiles gain custom-model compatibility metadata",
   store.close();
 });
 
+test("store: local default provider profile persists and clears with its profile", async () => {
+  const { dbPath } = await tempDbPath();
+  const store = new MetadataStore(dbPath);
+  const id = store.createProvider({
+    name: "local default",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    thinking: "xhigh",
+  });
+  assert.equal(store.getDefaultProviderProfileId(), null);
+  store.setDefaultProviderProfileId(id);
+  assert.equal(store.getDefaultProviderProfileId(), id);
+  assert.throws(() => store.setDefaultProviderProfileId(id + 999), /no provider profile/);
+  store.close();
+
+  const reopened = new MetadataStore(dbPath);
+  assert.equal(reopened.getDefaultProviderProfileId(), id);
+  assert.equal(reopened.deleteProvider(id), true);
+  assert.equal(reopened.getDefaultProviderProfileId(), null);
+  reopened.close();
+});
+
 test("store: pre-release evaluation tables upgrade before current indexes are created", async () => {
   const { dbPath } = await tempDbPath();
   const legacy = new DatabaseSync(dbPath);

@@ -20,6 +20,8 @@ import { absolutizeRunGroupManifest, normalizeRunGroupManifest } from "./evaluat
 import { compactHistoricalInspectionWorkspaces, readStoredRunsForCompaction } from "./storage/compact.js";
 import { cleanupLocalProjectStorage, inspectLocalProjectStorage, readStorageProjectRecords } from "./storage/projects.js";
 
+type LaunchModelOverrides = Pick<LaunchSpec, "provider" | "model" | "customModels" | "thinking">;
+
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
@@ -166,7 +168,7 @@ async function main(argv: string[]): Promise<void> {
     // Open-world ACQUISITION phase, BEFORE map: turn a clue (tx / address / project / link)
     // into the complete, mainnet-matched scope the sealed audit will read, staged with a
     // provenance manifest. Usage: flounder prepare <clue> [--posture blind|informed] [--no-match-deployed] [--endpoint <url>]
-    const { cfg } = await parseConfig(rest);
+    const { cfg, modelOverrides } = await parseConfig(rest);
     const clue = (rest[0] && !rest[0].startsWith("--") ? rest[0] : undefined) ?? readFlag(rest, "--clue");
     if (!clue) throw new Error("flounder prepare needs a clue: flounder prepare <tx|address|project|url> [--posture blind|informed]");
     const posture: "blind" | "informed" = (readFlag(rest, "--posture") ?? loadCliConfig().values.posture) === "informed" ? "informed" : "blind";
@@ -176,7 +178,7 @@ async function main(argv: string[]): Promise<void> {
     // Name the staged project after the clue when --target wasn't given, so each prepare is its
     // own UI project rather than colliding on the default "target".
     if (cfg.targetName === "target") cfg.targetName = `prepare-${slugifyClue(clue)}`;
-    const spec: LaunchSpec = { verb: "prepare", target: cfg.targetName, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const spec: LaunchSpec = { verb: "prepare", target: cfg.targetName, sourcePaths: [], ...modelOverrides, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (endpoint !== undefined) spec.endpoint = endpoint;
     if (maxSteps !== undefined) spec.maxSteps = maxSteps;
     const run = await launchViaApi(resolveServer(readFlag(rest, "--server")), spec);
@@ -188,7 +190,7 @@ async function main(argv: string[]): Promise<void> {
     // Open-world confirmation pass over a prior `flounder run`: freeze its findings, then
     // reproduce/consolidate them against real-world ground truth (network enabled) and
     // emit a submit/no-submit decision sheet. Usage: flounder confirm <run-dir> --source <paths...>
-    const { cfg } = await parseConfig(rest);
+    const { cfg, modelOverrides } = await parseConfig(rest);
     const positional = rest[0] && !rest[0].startsWith("--") ? rest[0] : undefined;
     const inputRunDir = positional ?? readFlag(rest, "--run") ?? readFlag(rest, "--input");
     if (!inputRunDir) throw new Error("flounder confirm needs a prior run directory: flounder confirm <run-dir> --source <paths...>");
@@ -197,7 +199,7 @@ async function main(argv: string[]): Promise<void> {
     // It auto-RESUMES a prior interrupted confirm of the same run dir (carries settled rows forward); --fresh ignores that.
     const maxSteps = readIntFlag(rest, "--max-steps");
     const fresh = rest.includes("--fresh");
-    const spec: LaunchSpec = { verb: "confirm", target: cfg.targetName, sourcePaths: cfg.sourcePaths, corpusPaths: cfg.corpusPaths, provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, inputRunDir, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const spec: LaunchSpec = { verb: "confirm", target: cfg.targetName, sourcePaths: cfg.sourcePaths, corpusPaths: cfg.corpusPaths, ...modelOverrides, inputRunDir, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (cfg.buildRoot) spec.buildRoot = cfg.buildRoot;
     if (fresh) spec.fresh = true;
     if (maxSteps !== undefined) spec.maxSteps = maxSteps;
@@ -210,12 +212,12 @@ async function main(argv: string[]): Promise<void> {
 }
 
 async function runSealedAuditCommand(cmd: "run" | "map" | "audit", rest: string[]): Promise<void> {
-  const { cfg } = await parseConfig(rest);
+  const { cfg, modelOverrides } = await parseConfig(rest);
   // `flounder run <clue>` with no --source = the one-command pipeline: prepare → map → dig →
   // confirm → report, end to end (each a separate tracked phase; the sealed dig stays network-sealed).
   if (cmd === "run" && cfg.sourcePaths.length === 0) {
     const clue = (rest[0] && !rest[0].startsWith("--")) ? rest[0] : readFlag(rest, "--clue");
-    if (clue) { await runPipeline(rest, cfg, clue); return; }
+    if (clue) { await runPipeline(rest, cfg, clue, modelOverrides); return; }
   }
   if (cfg.sourcePaths.length === 0) throw new Error("--source <paths...> is required (or give a clue: flounder run <tx|address|link>)");
   if (cfg.dryRun) throw new Error("agentic mode has no --dry-run; use --mock-llm for an offline check (or `npm run mock-audit`)");
@@ -223,7 +225,7 @@ async function runSealedAuditCommand(cmd: "run" | "map" | "audit", rest: string[
   // which dispatches it to a daemon that executes and streams it back — so every CLI run is
   // tracked and visible in the UI exactly like a UI-launched one. No in-process path. No
   // control plane reachable → a clear error (we never auto-spawn one).
-  const spec = buildAuditSpec(cmd, rest, cfg);
+  const spec = buildAuditSpec(cmd, rest, cfg, modelOverrides);
   // `audit --verify <file>`: read the LOCAL findings file and carry its CONTENTS in the spec
   // (not a path — the daemon may be on another machine), so verify is a control-plane run too.
   if (cmd === "audit") {
@@ -234,7 +236,7 @@ async function runSealedAuditCommand(cmd: "run" | "map" | "audit", rest: string[
   if (!ran(run)) process.exitCode = 1;
 }
 
-async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig }> {
+async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig; modelOverrides: LaunchModelOverrides }> {
   const cfg = defaultConfig();
   // Persisted CLI config (user-global < project-local < env) is the base layer, applied BELOW
   // an explicit --config file and the flags — so `flounder config set provider …` sticks but a
@@ -245,8 +247,10 @@ async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig }> {
   if (fileCfg.thinking) cfg.thinkingLevel = fileCfg.thinking;
   if (fileCfg.out) cfg.outputDir = fileCfg.out;
   const configPath = readFlag(args, "--config");
+  let explicitConfig: Record<string, unknown> = {};
   if (configPath) {
-    applyConfigOverrides(cfg, JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>);
+    explicitConfig = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    applyConfigOverrides(cfg, explicitConfig);
   }
   cfg.targetName = readFlag(args, "--target") ?? cfg.targetName;
   const sourcePaths = readMultiFlag(args, "--source");
@@ -303,7 +307,22 @@ async function parseConfig(args: string[]): Promise<{ cfg: AuditorConfig }> {
   if (thinking === "off" || thinking === "minimal" || thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "xhigh") {
     cfg.thinkingLevel = thinking;
   }
-  return { cfg };
+  const hasConfigKey = (...keys: string[]): boolean => keys.some((key) => Object.prototype.hasOwnProperty.call(explicitConfig, key));
+  const identityExplicit = Boolean(
+    fileCfg.provider
+    || fileCfg.model
+    || readFlag(args, "--provider")
+    || readFlag(args, "--audit-model")
+    || readFlag(args, "--model")
+    || hasConfigKey("provider", "auditModel", "model", "customModels", "custom_models")
+  );
+  const thinkingExplicit = Boolean(fileCfg.thinking || thinking || hasConfigKey("thinkingLevel", "thinking_level", "thinking"));
+  const modelOverrides: LaunchModelOverrides = identityExplicit
+    ? { provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel }
+    : thinkingExplicit
+      ? { thinking: cfg.thinkingLevel }
+      : {};
+  return { cfg, modelOverrides };
 }
 
 function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>): void {
@@ -377,8 +396,9 @@ function applyConfigOverrides(cfg: AuditorConfig, raw: Record<string, unknown>):
   if (typeof rawDigConcurrency === "number" && Number.isFinite(rawDigConcurrency)) cfg.auditDigConcurrency = Math.max(1, Math.floor(rawDigConcurrency));
   const rawVerifyConcurrency = raw.auditVerifyConcurrency ?? raw.audit_verify_concurrency;
   if (typeof rawVerifyConcurrency === "number" && Number.isFinite(rawVerifyConcurrency)) cfg.auditVerifyConcurrency = Math.max(1, Math.floor(rawVerifyConcurrency));
-  if (raw.thinkingLevel === "off" || raw.thinkingLevel === "minimal" || raw.thinkingLevel === "low" || raw.thinkingLevel === "medium" || raw.thinkingLevel === "high" || raw.thinkingLevel === "xhigh") {
-    cfg.thinkingLevel = raw.thinkingLevel;
+  const rawThinking = raw.thinkingLevel ?? raw.thinking_level ?? raw.thinking;
+  if (rawThinking === "off" || rawThinking === "minimal" || rawThinking === "low" || rawThinking === "medium" || rawThinking === "high" || rawThinking === "xhigh") {
+    cfg.thinkingLevel = rawThinking;
   }
   const rawModels = normalizeRoleModels(raw.models);
   if (rawModels) cfg.models = rawModels;
@@ -586,16 +606,13 @@ function namePad(value: string): string {
 /** Build the launch spec for a sealed audit verb (run/map/audit). Materials come from cfg
  * (config-file + flags; the client makes them absolute before sending). Budgets are carried ONLY
  * when explicitly capped, so the daemon's unbounded default applies otherwise. */
-function buildAuditSpec(cmd: "run" | "map" | "audit", rest: string[], cfg: AuditorConfig): LaunchSpec {
+function buildAuditSpec(cmd: "run" | "map" | "audit", rest: string[], cfg: AuditorConfig, modelOverrides: LaunchModelOverrides): LaunchSpec {
   const spec: LaunchSpec = {
     verb: cmd,
     target: cfg.targetName,
     sourcePaths: cfg.sourcePaths,
     corpusPaths: cfg.corpusPaths,
-    provider: cfg.provider,
-    model: cfg.auditModel,
-    customModels: cfg.customModels,
-    thinking: cfg.thinkingLevel,
+    ...modelOverrides,
     mapSamples: cfg.auditMapSamples,
     digSamples: cfg.auditDigSamples,
     digMaxSamples: cfg.auditDigMaxSamples,
@@ -661,7 +678,7 @@ function safeJsonParse(text: string): unknown {
 // if the audit found anything. The user runs one
 // command and reads the final trail. --no-confirm stops after the dig; --posture/--no-match-deployed/
 // --endpoint tune prepare; --max-scopes/--dig-* tune the dig (via buildAuditSpec).
-async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Promise<void> {
+async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string, modelOverrides: LaunchModelOverrides): Promise<void> {
   const server = resolveServer(readFlag(rest, "--server"));
   const target = cfg.targetName === "target" ? `aud-${slugifyClue(clue)}` : cfg.targetName;
   cfg.targetName = target;
@@ -671,7 +688,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
   const noConfirm = rest.includes("--no-confirm");
   if (!noConfirm) {
     console.log(`=== flounder run pipeline · target "${target}" · prepare → map → dig → synthesize → verify → confirm → report ===`);
-    const spec: LaunchSpec = { verb: "run", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, pipeline: true, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const spec: LaunchSpec = { verb: "run", target, sourcePaths: [], ...modelOverrides, clue, posture, matchDeployed, pipeline: true, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (endpoint !== undefined) spec.endpoint = endpoint;
     const result = await launchViaApi(server, spec);
     if (!ran(result)) process.exitCode = 1;
@@ -682,7 +699,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
 
   // Phase 1 — prepare (open-world acquisition + deployment match) stages the source.
   console.log("\n── phase 1 · prepare (acquire the target) ──");
-  const prepSpec: LaunchSpec = { verb: "prepare", target, sourcePaths: [], provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
+  const prepSpec: LaunchSpec = { verb: "prepare", target, sourcePaths: [], ...modelOverrides, clue, posture, matchDeployed, out: cfg.outputDir, ...sandboxSpec(cfg) };
   if (endpoint !== undefined) prepSpec.endpoint = endpoint;
   const prep = await launchViaApi(server, prepSpec);
   if (!ran(prep)) { console.error("[pipeline] prepare did not finish — stopping."); process.exitCode = 1; return; }
@@ -705,7 +722,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
   // Phase 2 — run = map → dig, NETWORK-SEALED, on the staged source.
   console.log("\n── phase 2 · run (map → dig, network-sealed) ──");
   cfg.sourcePaths = [staged];
-  const audit = await launchViaApi(server, buildAuditSpec("run", rest, cfg));
+  const audit = await launchViaApi(server, buildAuditSpec("run", rest, cfg, modelOverrides));
   if (!ran(audit)) { console.error("[pipeline] audit did not finish — stopping."); process.exitCode = 1; return; }
 
   // Phase 3 — confirm (open-world reproduction) the dig's findings on the real target.
@@ -714,7 +731,7 @@ async function runPipeline(rest: string[], cfg: AuditorConfig, clue: string): Pr
   else if (findings <= 0) console.log("\n[pipeline] the dig surfaced no findings — nothing to reproduce.");
   else {
     console.log("\n── phase 3 · confirm (reproduce on the real target) ──");
-    const confSpec: LaunchSpec = { verb: "confirm", target, sourcePaths: [staged], inputRunDir: String(audit!.run_dir), provider: cfg.provider, model: cfg.auditModel, customModels: cfg.customModels, thinking: cfg.thinkingLevel, out: cfg.outputDir, ...sandboxSpec(cfg) };
+    const confSpec: LaunchSpec = { verb: "confirm", target, sourcePaths: [staged], inputRunDir: String(audit!.run_dir), ...modelOverrides, out: cfg.outputDir, ...sandboxSpec(cfg) };
     if (!ran(await launchViaApi(server, confSpec))) process.exitCode = 1;
   }
   console.log(`\n=== pipeline done · UI project "${target}" has the prepare → dig trail ===`);

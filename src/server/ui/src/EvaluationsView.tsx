@@ -605,7 +605,12 @@ function NewEvaluationModal({ providers, onClose, onCreated }: { providers: Prov
       name: name.trim(),
       kind,
       parallelism: Math.max(1, Number(parallelism) || 1),
-      config: provider ? { provider: provider.provider, ...(provider.model ? { model: provider.model } : {}), ...(provider.thinking ? { thinking: provider.thinking } : {}) } : {},
+      config: provider ? {
+        provider: provider.provider,
+        ...(provider.model ? { model: provider.model } : {}),
+        ...(provider.baseModel && provider.model ? { customModels: [{ provider: provider.provider, model: provider.model, baseModel: provider.baseModel }] } : {}),
+        ...(provider.thinking ? { thinking: provider.thinking } : {}),
+      } : {},
     };
     setSubmitting(true);
     try {

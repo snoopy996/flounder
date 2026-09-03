@@ -256,6 +256,7 @@ export interface RunGroupInput {
 }
 
 const SCHEMA_VERSION = 10;
+const DEFAULT_PROVIDER_PROFILE_META_KEY = "default_provider_profile_id";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -3683,6 +3684,27 @@ export class MetadataStore {
 
   // --- providers (model-strategy profiles) ----------------------------------
 
+  /** The operator-local provider default. The product fallback remains a server concern so
+   * changing this preference never rewrites the public/default runtime configuration. */
+  getDefaultProviderProfileId(): number | null {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(DEFAULT_PROVIDER_PROFILE_META_KEY) as { value?: unknown } | undefined;
+    const id = typeof row?.value === "string" ? Number(row.value) : Number.NaN;
+    return Number.isSafeInteger(id) && id > 0 && this.getProvider(id) ? id : null;
+  }
+
+  setDefaultProviderProfileId(id: number | null): void {
+    if (id === null) {
+      this.db.prepare("DELETE FROM meta WHERE key = ?").run(DEFAULT_PROVIDER_PROFILE_META_KEY);
+      return;
+    }
+    if (!Number.isSafeInteger(id) || id <= 0 || !this.getProvider(id)) {
+      throw new Error(`no provider profile with id ${id}`);
+    }
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(DEFAULT_PROVIDER_PROFILE_META_KEY, String(id));
+  }
+
   /** A project selects one of these; launch resolves it into provider/model/thinking
    * (+ per-phase overrides). Stored as a named, reusable profile. */
   createProvider(input: ProviderInput): number {
@@ -3716,6 +3738,7 @@ export class MetadataStore {
     this.transaction(() => {
       // drop the dangling selection on any project that referenced this profile, then delete
       this.db.prepare("UPDATE project SET provider_id = NULL WHERE provider_id = ?").run(id);
+      this.db.prepare("DELETE FROM meta WHERE key = ? AND value = ?").run(DEFAULT_PROVIDER_PROFILE_META_KEY, String(id));
       removed = Number(this.db.prepare("DELETE FROM provider WHERE id = ?").run(id).changes) > 0;
     });
     return removed;

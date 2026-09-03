@@ -19,6 +19,7 @@ import {
   type PrepareSummary,
   type PiModel,
   type ProviderProfile,
+  type RuntimeSettings,
   type RunUpdatePayload,
   type RunRow,
   type RunHealth,
@@ -568,7 +569,9 @@ function providerProfileLabel(provider: ProviderProfile): string {
   return parts.join(" · ");
 }
 
-function defaultProjectProviderId(providers: ProviderProfile[]): string {
+function defaultProjectProviderId(providers: ProviderProfile[], runtimeDefaultProviderProfileId: number | null): string {
+  const runtimeDefault = providers.find((provider) => provider.id === runtimeDefaultProviderProfileId);
+  if (runtimeDefault) return String(runtimeDefault.id);
   const preferred = providers.find((provider) =>
     provider.provider === "openai-codex"
     && provider.model === DEFAULT_OPENAI_CODEX_MODEL
@@ -1642,6 +1645,7 @@ export function App() {
   const [maintainerMode, setMaintainerMode] = useState(false);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [providers, setProviders] = useState<ProviderProfile[]>([]);
+  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings>({ defaultProviderProfileId: null, source: "product" });
   const [daemons, setDaemons] = useState<DaemonRow[]>([]);
   const [bugs, setBugs] = useState<FindingRow[]>([]);
   const [bugsTotal, setBugsTotal] = useState(0);
@@ -1756,11 +1760,12 @@ export function App() {
   }
 
   async function refreshBase() {
-    const [catalogRes, projectRes, archivedRes, providerRes, daemonRes] = await Promise.all([
+    const [catalogRes, projectRes, archivedRes, providerRes, runtimeSettingsRes, daemonRes] = await Promise.all([
       api.catalog().catch(() => ({ maintainerMode: false })),
       api.projects({ limit: PROJECT_PAGE_SIZE, q: projectQuery, status: projectStatusParam(projectStatusFilter) }),
       api.archivedProjects({ limit: PROJECT_PAGE_SIZE }),
       api.providers(),
+      api.runtimeSettings(),
       api.daemons(),
     ]);
     const normalizedProjects = normalizeProjectListResponse(projectRes, projectStatusFilter);
@@ -1771,6 +1776,7 @@ export function App() {
     setProjectStatusCounts(normalizedProjects.statusCounts);
     setArchivedProjectsTotal(archivedRes.total);
     setProviders(providerRes.providers);
+    setRuntimeSettings(runtimeSettingsRes);
     setDaemons(daemonRes.daemons);
   }
 
@@ -2298,6 +2304,7 @@ export function App() {
           <SettingsView
             pane={route.settingsPane}
             providers={providers}
+            runtimeSettings={runtimeSettings}
             daemons={daemons}
             archivedProjects={archivedProjects}
             archivedTotal={archivedProjectsTotal}
@@ -2313,6 +2320,7 @@ export function App() {
       {modal === "new-project" ? (
         <NewProjectModal
           providers={providers}
+          runtimeDefaultProviderProfileId={runtimeSettings.defaultProviderProfileId}
           daemons={daemons}
           onClose={() => setModal(null)}
           onCreated={async (uuid, runAfterCreate) => {
@@ -5492,6 +5500,7 @@ function storageSize(bytes: number): string {
 function SettingsView({
   pane,
   providers,
+  runtimeSettings,
   daemons,
   archivedProjects,
   archivedTotal,
@@ -5503,6 +5512,7 @@ function SettingsView({
 }: {
   pane: SettingsPane;
   providers: ProviderProfile[];
+  runtimeSettings: RuntimeSettings;
   daemons: DaemonRow[];
   archivedProjects: ProjectSnapshot[];
   archivedTotal: number;
@@ -5522,7 +5532,7 @@ function SettingsView({
         <button className={pane === "archived" ? "sel" : ""} onClick={() => go("/settings/archived")}>Archived Projects</button>
       </aside>
       <section className="settings-content">
-        {pane === "providers" ? <ProvidersPane providers={providers} onRefresh={onRefresh} /> : null}
+        {pane === "providers" ? <ProvidersPane providers={providers} runtimeSettings={runtimeSettings} onRefresh={onRefresh} /> : null}
         {pane === "daemons" ? <DaemonsPane daemons={daemons} onRefresh={onRefresh} /> : null}
         {pane === "storage" ? <StoragePane /> : null}
         {pane === "archived" ? (
@@ -5599,11 +5609,20 @@ function ArchivedProjectsPane({
   );
 }
 
-function ProvidersPane({ providers, onRefresh }: { providers: ProviderProfile[]; onRefresh: () => Promise<void> }) {
+function ProvidersPane({ providers, runtimeSettings, onRefresh }: { providers: ProviderProfile[]; runtimeSettings: RuntimeSettings; onRefresh: () => Promise<void> }) {
   const [editing, setEditing] = useState<ProviderProfile | null>(null);
   const [creating, setCreating] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const [error, setError] = useState("");
+  async function setDefaultProvider(defaultProviderProfileId: number | null) {
+    try {
+      setError("");
+      await api.updateRuntimeSettings(defaultProviderProfileId);
+      await onRefresh();
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err));
+    }
+  }
   async function deleteProvider(provider: ProviderProfile) {
     try {
       await api.deleteProvider(provider.id);
@@ -5618,10 +5637,11 @@ function ProvidersPane({ providers, onRefresh }: { providers: ProviderProfile[];
       <div className="pane-head">
         <div>
           <h1>Provider profiles</h1>
-          <p>A profile selects the model vendor. Credentials stay on each daemon; projects choose phase-level models from this base.</p>
+          <p>A profile selects the model vendor. The local default applies to new projects, evaluations, and API/CLI launches that do not choose a model explicitly. Credentials stay on each daemon.</p>
         </div>
         <div className="pane-actions">
           <Counter>{providers.length}</Counter>
+          {runtimeSettings.source === "local" ? <Button size="sm" onClick={() => void setDefaultProvider(null)}>Use product default</Button> : null}
           <Button variant="primary" icon="package" onClick={() => { setCreating(true); setEditing(null); setError(""); }}>New Provider</Button>
         </div>
       </div>
@@ -5659,6 +5679,9 @@ function ProvidersPane({ providers, onRefresh }: { providers: ProviderProfile[];
               </span>
             ) : (
               <span className="row-actions">
+                {provider.id === runtimeSettings.defaultProviderProfileId
+                  ? <span className="label">Default · {runtimeSettings.source}</span>
+                  : <Button size="sm" onClick={() => void setDefaultProvider(provider.id)}>Set default</Button>}
                 <IconButton icon="pencil" title={`Edit ${provider.name}`} aria-label={`Edit ${provider.name}`} onClick={() => { setEditing(provider); setCreating(false); setError(""); }} />
                 <IconButton className="danger" icon="trash" title={`Delete ${provider.name}`} aria-label={`Delete ${provider.name}`} onClick={() => setPendingDelete(provider.id)} />
               </span>
@@ -6121,11 +6144,11 @@ function PhaseProviderOverrides({ providers, defaultProviderId, values, onChange
   );
 }
 
-function NewProjectModal({ providers, daemons, onClose, onCreated, onError }: { providers: ProviderProfile[]; daemons: DaemonRow[]; onClose: () => void; onCreated: (uuid: string, runAfterCreate: boolean) => Promise<void>; onError: (message: string) => void }) {
+function NewProjectModal({ providers, runtimeDefaultProviderProfileId, daemons, onClose, onCreated, onError }: { providers: ProviderProfile[]; runtimeDefaultProviderProfileId: number | null; daemons: DaemonRow[]; onClose: () => void; onCreated: (uuid: string, runAfterCreate: boolean) => Promise<void>; onError: (message: string) => void }) {
   const [advanced, setAdvanced] = useState(false);
   const [phaseOpen, setPhaseOpen] = useState(false);
   const firstDaemon = daemons.find((daemon) => daemonHealth(daemon) === "online") ?? daemons[0];
-  const [form, setForm] = useState({ intent: "", name: "", runAfterCreate: true, daemonId: firstDaemon?.id ? String(firstDaemon.id) : "", providerId: defaultProjectProviderId(providers), dir: "", sourcePaths: ".", buildRoot: ".", corpusPaths: "docs/specs", coverageMode: "standard" as CoverageMode, maxScopes: "30", mapSamples: "2", digSamples: "1", digMaxSamples: "3", adaptiveDig: true, eagerPrepare: true, mapSteps: "", digSteps: "", digConcurrency: "1", verifyConcurrency: "2", engagementKind: "" as EngagementKindForm, contestBatchScopes: "10", contestDigConcurrency: "5", contestStopAfterHours: "48", contestSkipConfirm: true, contestAppendMap: true });
+  const [form, setForm] = useState({ intent: "", name: "", runAfterCreate: true, daemonId: firstDaemon?.id ? String(firstDaemon.id) : "", providerId: defaultProjectProviderId(providers, runtimeDefaultProviderProfileId), dir: "", sourcePaths: ".", buildRoot: ".", corpusPaths: "docs/specs", coverageMode: "standard" as CoverageMode, maxScopes: "30", mapSamples: "2", digSamples: "1", digMaxSamples: "3", adaptiveDig: true, eagerPrepare: true, mapSteps: "", digSteps: "", digConcurrency: "1", verifyConcurrency: "2", engagementKind: "" as EngagementKindForm, contestBatchScopes: "10", contestDigConcurrency: "5", contestStopAfterHours: "48", contestSkipConfirm: true, contestAppendMap: true });
   const [phaseProviders, setPhaseProviders] = useState<PhaseProviderForm>({ prepare: "", map: "", dig: "", confirm: "" });
   const providerMissing = providers.length === 0;
   const daemonMissing = daemons.length === 0;
