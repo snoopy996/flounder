@@ -216,6 +216,12 @@ Projects select a default provider profile and may override it per phase:
 prepare, map, dig, confirm. The selected daemon must authenticate every provider
 profile the project can use.
 
+Settings -> Providers can mark any profile as the local runtime default. New
+projects, evaluations, and ad-hoc API/CLI launches inherit it when they do not
+make an explicit model selection. Resetting the preference restores the
+packaged `openai-codex · gpt-5.6-sol · xhigh` fallback; existing projects remain
+pinned to their saved profile.
+
 Fresh stores seed starter profiles named `openai-codex · gpt-5.6-sol · xhigh` and
 `claude-code · opus 4.8 max`.
 
@@ -232,6 +238,7 @@ Common agent calls:
 ```bash
 curl http://127.0.0.1:4500/api/projects
 curl http://127.0.0.1:4500/api/providers
+curl http://127.0.0.1:4500/api/settings/runtime
 curl http://127.0.0.1:4500/api/daemons
 curl http://127.0.0.1:4500/api/projects/<uuid>
 curl 'http://127.0.0.1:4500/api/projects/<uuid>/backlog?status=open'
@@ -257,9 +264,18 @@ curl -X PATCH http://127.0.0.1:4500/api/backlog/<id> \
   -d '{"status":"resolved"}'
 ```
 
-Creating a project requires both a provider profile and a daemon. `dir` is the
-project directory under the daemon workspace; source and corpus paths are
-relative to that directory.
+Set or clear the local default through the same agent-drivable API:
+
+```bash
+curl -X PATCH http://127.0.0.1:4500/api/settings/runtime \
+  -H 'content-type: application/json' \
+  -d '{"defaultProviderProfileId":1}'
+```
+
+Use `null` to restore the product fallback. Creating a project may omit
+`providerId` to inherit this effective default. `dir` is the project directory
+under the selected daemon workspace; source and corpus paths are relative to
+that directory.
 
 ```bash
 curl -X POST http://127.0.0.1:4500/api/projects \

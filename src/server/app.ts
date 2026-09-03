@@ -221,6 +221,18 @@ const ROUTES: Route[] = [
   route({ method: "GET", path: "/api", summary: "This catalog: every enabled resource and operation, so an agent can self-learn and drive the workflow without the UI.", handler: (c) => sendJson(c.res, 200, apiCatalog(c.maintainerMode)) }),
 
   route({
+    method: "GET", path: "/api/settings/runtime",
+    summary: "Read the effective control-plane runtime defaults. A local provider-profile preference overrides the product fallback without changing existing projects.",
+    handler: (c) => sendJson(c.res, 200, runtimeSettings(c.store)),
+  }),
+  route({
+    method: "PATCH", path: "/api/settings/runtime",
+    summary: "Set the local default provider profile used by new projects, evaluations, and ad-hoc launches that omit an explicit model selection. Pass null to restore the product fallback.",
+    body: { defaultProviderProfileId: "positive provider-profile id, or null to restore the product default" },
+    handler: runtimeSettingsUpdate,
+  }),
+
+  route({
     method: "GET", path: "/api/storage/disk",
     summary: "Read the local Flounder output volume's free-space pressure without scanning project files.",
     handler: async (c) => sendJson(c.res, 200, { disk: await localDiskStorageStatus(c.out) }),
@@ -274,11 +286,11 @@ const ROUTES: Route[] = [
   }),
   route({
     method: "POST", path: "/api/projects",
-    summary: "Create a project (no run starts). A project selects exactly one execution daemon and one default provider profile; config.prepareClue can store the user's target clue/task for later Prepare. Rejects a duplicate name.",
+    summary: "Create a project (no run starts). A project selects exactly one execution daemon and one default provider profile; omitting providerId applies the control plane's local/product default. config.prepareClue can store the user's target clue/task for later Prepare. Rejects a duplicate name.",
     body: {
       name: "string (required, unique)",
       daemonId: "number (required for normal use) — execution daemon that claims this project's jobs",
-      providerId: "number (required for normal use) — default provider profile; phase overrides live in config.phaseProviders",
+      providerId: "number? — default provider profile; omitted uses the control-plane default; phase overrides live in config.phaseProviders",
       dir: "string? — project directory under the selected daemon workspace; defaults to the project UUID",
       sourcePaths: "string[] — code paths relative to dir",
       buildRoot: "string? — buildable root relative to dir",
@@ -645,11 +657,12 @@ const ROUTES: Route[] = [
 
   route({
     method: "POST", path: "/api/launch",
-    summary: "Queue an ad-hoc run from a full launch spec (absolute materials, no project staging) — the entry point the CLI drives. Upserts a project row keyed by `target` so the run is grouped + visible, enqueues the job, and nudges daemons. Use POST /api/projects/:uuid/runs instead to launch a UI-configured project.",
+    summary: "Queue an ad-hoc run from a launch spec (absolute materials, no project staging) — the entry point the CLI drives. providerProfileId selects a saved profile; otherwise an omitted provider/model uses the control-plane default. Upserts a project row keyed by `target` so the run is grouped + visible, enqueues the job, and nudges daemons. Use POST /api/projects/:uuid/runs instead to launch a UI-configured project.",
     body: {
       verb: "'run' | 'map' | 'audit' | 'confirm' | 'prepare' (required)", target: "string (required) — run/project name",
       sourcePaths: "string[] — ABSOLUTE code paths the daemon reads", corpusPaths: "string[]? — ABSOLUTE design/reference paths", buildRoot: "string? — ABSOLUTE buildable root",
-      provider: "string?", model: "string?", customModels: "array? — custom model definitions { provider, model, baseModel }; baseModel must be a known same-provider pi model", thinking: "string?",
+      providerProfileId: "positive provider-profile id? — explicit saved profile; its custom-model definition is delivered with the job",
+      provider: "string? — explicit provider override", model: "string? — explicit model override", customModels: "array? — custom model definitions { provider, model, baseModel }; baseModel must be a known same-provider pi model", thinking: "string? — explicit reasoning override",
       scopeCoverageMode: "focused|standard|half|full|custom? — standard/focused are cumulative project targets, not per-run additions", maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
       sandboxBackend: "'auto'|'oci'|'apple-container'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
       remap: "boolean?", appendMap: "boolean? — expand existing scope inventory by appending novel scopes", appendMapSeedPaths: "string[]? — extra prior scope inventories used only as append-map covered-reference seed", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> synthesize -> verify -> confirm -> report", continueCoverage: "boolean? — explicit opt-in to open the next mapped scope batch after the current pipeline round is fully settled", verifyFromStart: "boolean? — pipeline: re-run Verify from the beginning instead of only pending candidates", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
@@ -757,7 +770,7 @@ export function apiCatalog(maintainerMode = false): {
       ? "REST API for white-hat audits, durable evaluations, and explicitly enabled Flounder-maintainer experiments."
       : "REST API for tracking and driving white-hat audits and durable evaluation groups. Maintainer-only source-improvement surfaces are disabled.",
     maintainerMode,
-    resources: ["project", "provider", "daemon", "run", "run-group", "work-item", ...(maintainerMode ? ["harness-experiment"] : []), "scope", "discovery-backlog", "finding", "confirm-decision", "storage"],
+    resources: ["runtime-settings", "project", "provider", "daemon", "run", "run-group", "work-item", ...(maintainerMode ? ["harness-experiment"] : []), "scope", "discovery-backlog", "finding", "confirm-decision", "storage"],
     endpoints: ROUTES.filter((r) => !r.hidden && (!r.maintainerOnly || maintainerMode)).map((r) => ({
       method: r.method,
       path: r.path,
@@ -1116,6 +1129,52 @@ interface ProjectBody {
   pinned?: boolean;
   sortOrder?: number | null;
 }
+
+interface RuntimeSettingsResponse {
+  defaultProviderProfileId: number | null;
+  source: "local" | "product";
+}
+
+function productDefaultProviderProfile(store: MetadataStore): ProviderProfile | undefined {
+  return store.listProviders().find((profile) =>
+    profile.provider === "openai-codex"
+    && profile.model === DEFAULT_AUDIT_MODEL
+    && profile.thinking === "xhigh"
+  );
+}
+
+function runtimeDefaultProviderProfile(store: MetadataStore): { profile?: ProviderProfile; source: RuntimeSettingsResponse["source"] } {
+  const configuredId = store.getDefaultProviderProfileId();
+  const configured = configuredId === null ? undefined : store.getProvider(configuredId);
+  if (configured) return { profile: configured, source: "local" };
+  const productDefault = productDefaultProviderProfile(store);
+  return productDefault ? { profile: productDefault, source: "product" } : { source: "product" };
+}
+
+function runtimeSettings(store: MetadataStore): RuntimeSettingsResponse {
+  const resolved = runtimeDefaultProviderProfile(store);
+  return {
+    defaultProviderProfileId: resolved.profile?.id ?? null,
+    source: resolved.source,
+  };
+}
+
+async function runtimeSettingsUpdate(c: Ctx): Promise<void> {
+  const body = (await readBody(c.req)) as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(body, "defaultProviderProfileId")) {
+    return sendJson(c.res, 400, { error: "defaultProviderProfileId is required" });
+  }
+  if (body.defaultProviderProfileId === null) {
+    c.store.setDefaultProviderProfileId(null);
+    return sendJson(c.res, 200, { ok: true, ...runtimeSettings(c.store) });
+  }
+  const id = positiveIntegerId(body.defaultProviderProfileId);
+  if (!id) return sendJson(c.res, 400, { error: "defaultProviderProfileId must be a positive integer or null" });
+  if (!c.store.getProvider(id)) return sendJson(c.res, 404, { error: `no provider profile with id ${id}` });
+  c.store.setDefaultProviderProfileId(id);
+  sendJson(c.res, 200, { ok: true, ...runtimeSettings(c.store) });
+}
+
 function projectFields(body: ProjectBody): Omit<ProjectInput, "name"> {
   return {
     sourcePaths: body.sourcePaths,
@@ -1133,7 +1192,14 @@ async function projectCreate(c: Ctx): Promise<void> {
   const name = (body.name ?? "").trim();
   if (!name) return sendJson(c.res, 400, { error: "project name is required" });
   if (c.store.getProject(name)) return sendJson(c.res, 409, { error: `a project named "${name}" already exists` });
-  const id = c.store.upsertProject({ name, ...projectFields(body) });
+  if (body.providerId !== undefined && body.providerId !== null) {
+    const explicitProviderId = positiveIntegerId(body.providerId);
+    if (!explicitProviderId) return sendJson(c.res, 400, { error: "providerId must be a positive integer" });
+    if (!c.store.getProvider(explicitProviderId)) return sendJson(c.res, 404, { error: `no provider profile with id ${explicitProviderId}` });
+  }
+  const fields = projectFields(body);
+  const providerId = fields.providerId ?? runtimeDefaultProviderProfile(c.store).profile?.id;
+  const id = c.store.upsertProject({ name, ...fields, ...(providerId ? { providerId } : {}) });
   const project = c.store.getProjectById(id);
   sendJson(c.res, 200, { ok: true, id, uuid: project?.uuid, name });
 }
@@ -3455,6 +3521,17 @@ function resolvePrepareManifestPath(runDir: string, workspaceDir: string): strin
 // runLaunch (which resolves a configured project's staged materials under a daemon workspace),
 // this takes the spec as-is: ABSOLUTE materials, no `dir`, so the (co-located) daemon resolves
 // them verbatim. A project row is upserted purely so the run is grouped + visible in the UI.
+function applyProviderProfileDefaults(spec: LaunchSpec, profile: ProviderProfile): void {
+  spec.provider ??= profile.provider;
+  spec.model ??= profile.model ?? undefined;
+  spec.thinking ??= profile.thinking ?? undefined;
+  if (!spec.models && Object.keys(profile.roles).length > 0) spec.models = profile.roles;
+  spec.customModels = normalizeCustomModels([
+    ...customModelsForProfiles([profile]),
+    ...(spec.customModels ?? []),
+  ]);
+}
+
 async function launch(c: Ctx): Promise<void> {
   const body = (await readBody(c.req)) as Record<string, unknown>;
   const target = String(body.target ?? "").trim();
@@ -3463,11 +3540,21 @@ async function launch(c: Ctx): Promise<void> {
   if (!["run", "map", "audit", "confirm", "prepare"].includes(verb)) {
     return sendJson(c.res, 400, { error: "verb must be one of run | map | audit | confirm | prepare" });
   }
+  let profile: ProviderProfile | undefined;
+  if (Object.prototype.hasOwnProperty.call(body, "providerProfileId")) {
+    const profileId = positiveIntegerId(body.providerProfileId);
+    if (!profileId) return sendJson(c.res, 400, { error: "providerProfileId must be a positive integer" });
+    profile = c.store.getProvider(profileId);
+    if (!profile) return sendJson(c.res, 404, { error: `no provider profile with id ${profileId}` });
+  } else if (!(typeof body.provider === "string" && body.provider.trim()) && !(typeof body.model === "string" && body.model.trim())) {
+    profile = runtimeDefaultProviderProfile(c.store).profile;
+  }
   const spec = normalizeLaunchSpec(body, target, verb as RunKind, c.out);
+  if (profile) applyProviderProfileDefaults(spec, profile);
   const customModelError = launchCustomModelError(spec);
   if (customModelError) return sendJson(c.res, 400, { error: customModelError });
   if (!c.store.getProject(target)) {
-    c.store.upsertProject({ name: target, sourcePaths: spec.sourcePaths, ...(spec.buildRoot ? { buildRoot: spec.buildRoot } : {}), corpusPaths: spec.corpusPaths ?? [], config: launchDisplayConfig(spec) });
+    c.store.upsertProject({ name: target, sourcePaths: spec.sourcePaths, ...(spec.buildRoot ? { buildRoot: spec.buildRoot } : {}), corpusPaths: spec.corpusPaths ?? [], config: launchDisplayConfig(spec), ...(profile ? { providerId: profile.id } : {}) });
   }
   const blockingJob = activeProjectJob(c.store, target);
   const jobId = c.store.enqueueJob(target, spec);
@@ -4457,6 +4544,10 @@ function scheduleRunGroupWith(store: MetadataStore, plane: ControlPlane, runGrou
     for (const item of pending) {
       try {
         const spec = buildWorkItemLaunchSpec(item, group);
+        if (!spec.mockLlm && !spec.provider && !spec.model) {
+          const profile = runtimeDefaultProviderProfile(store).profile;
+          if (profile) applyProviderProfileDefaults(spec, profile);
+        }
         const bundle = parseStoredJson(item.target_bundle_json);
         const daemonId = typeof bundle?.daemonId === "number" ? bundle.daemonId : undefined;
         const jobId = store.enqueueJob(evaluationTrackingProjectName(item), spec, daemonId);

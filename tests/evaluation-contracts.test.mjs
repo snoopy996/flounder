@@ -76,6 +76,14 @@ test("evaluation contracts normalize and materialize answer-safe manifests", () 
   assert.equal(spec.provider, "openai-codex");
   assert.equal(spec.thinking, "xhigh");
   assert.equal(spec.verb, "run");
+  const customSpec = buildWorkItemLaunchSpec(row, { config_json: JSON.stringify({
+    provider: "openai-codex",
+    model: "gpt-daybreak-blue-latest",
+    customModels: [{ provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "gpt-5.6-sol" }],
+  }) });
+  assert.deepEqual(customSpec.customModels, [
+    { provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "gpt-5.6-sol" },
+  ]);
   assert.match(spec.historyDir, /^evaluation-state\/11111111-1111-4111-8111-111111111111-[a-f0-9]{12}\/attempt-1$/);
   assert.match(spec.buildCacheDir, /^evaluation-cache\/.+-[a-f0-9]{12}$/);
   const retrySpec = buildWorkItemLaunchSpec({ ...row, attempts: 1 }, { config_json: "{}" });

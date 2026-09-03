@@ -1,6 +1,7 @@
 import type { LaunchSpec } from "../server/run-manager.js";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { normalizeCustomModels } from "../config.js";
 import {
   capabilitySurfaceScopeNote,
   normalizeEvidenceContract,
@@ -48,6 +49,7 @@ export function buildWorkItemLaunchSpec(item: Record<string, unknown>, group: Re
   const provider = targetBundle.provider ?? stringValue(groupConfig.provider);
   const model = targetBundle.model ?? stringValue(groupConfig.model);
   const thinking = targetBundle.thinking ?? stringValue(groupConfig.thinking);
+  const customModels = normalizeCustomModels(groupConfig.customModels);
   const workItemUuid = stringValue(item.uuid);
   if (!workItemUuid) throw new Error("evaluation work item is missing its durable uuid");
   const attempt = Math.max(1, Math.floor(numberValue(item.attempts) + 1));
@@ -67,6 +69,7 @@ export function buildWorkItemLaunchSpec(item: Record<string, unknown>, group: Re
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(customModels.length > 0 ? { customModels } : {}),
     ...(scopeNote ? { scopeNote } : {}),
     ...(targetBundle.mockLlm ? { mockLlm: true } : {}),
     ...(targetBundle.maxScopes !== undefined ? { maxScopes: targetBundle.maxScopes } : {}),

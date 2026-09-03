@@ -226,7 +226,10 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
    provider, model, and thinking level. Fresh stores seed `openai-codex ·
    gpt-5.6-sol · xhigh` and `claude-code · opus 4.8 max`; the selected daemon still
    needs local auth for every provider the project can use. A project can
-   override the profile per phase: prepare, map, dig, confirm.
+   override the profile per phase: prepare, map, dig, confirm. **Set default**
+   makes a profile the local default for new projects, evaluations, and
+   API/CLI launches that omit an explicit model; **Use product default** restores
+   the packaged `gpt-5.6-sol` fallback without changing existing projects.
 
 6. Create or reuse a project. Set:
 
