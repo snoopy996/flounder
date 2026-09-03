@@ -30,6 +30,38 @@ function validTechnicalClaimGates() {
   ];
 }
 
+test("store: legacy provider profiles gain custom-model compatibility metadata", async () => {
+  const { dbPath } = await tempDbPath();
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec(`
+    CREATE TABLE provider(
+      id INTEGER PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT,
+      thinking TEXT,
+      roles_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO provider(name, provider, model, thinking, created_at, updated_at)
+    VALUES ('default', 'openai-codex', 'gpt-5.6-sol', 'xhigh', '2026-01-01', '2026-01-01');
+  `);
+  legacy.close();
+
+  const store = new MetadataStore(dbPath);
+  assert.equal(store.getProviderByName("default").baseModel, null);
+  const id = store.createProvider({
+    name: "custom",
+    provider: "openai-codex",
+    model: "gpt-daybreak-blue-latest",
+    baseModel: "gpt-5.6-sol",
+    thinking: "xhigh",
+  });
+  assert.equal(store.getProvider(id).baseModel, "gpt-5.6-sol");
+  store.close();
+});
+
 test("store: pre-release evaluation tables upgrade before current indexes are created", async () => {
   const { dbPath } = await tempDbPath();
   const legacy = new DatabaseSync(dbPath);

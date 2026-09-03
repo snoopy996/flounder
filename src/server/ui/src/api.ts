@@ -491,6 +491,7 @@ export interface ProviderProfile {
   name: string;
   provider: string;
   model?: string | null;
+  baseModel?: string | null;
   thinking?: string | null;
   roles?: unknown;
 }

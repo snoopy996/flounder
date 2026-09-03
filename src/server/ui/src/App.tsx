@@ -5649,6 +5649,7 @@ function ProvidersPane({ providers, onRefresh }: { providers: ProviderProfile[];
             <span className="grow">
               <strong>{provider.name}</strong>
               <small>{provider.provider}{provider.model ? ` · ${provider.model}` : ""}{provider.thinking ? ` · ${provider.thinking}` : ""}</small>
+              {provider.baseModel ? <small>Custom model · compatibility metadata from {provider.baseModel}</small> : null}
               <small className="resource-command">daemon auth: flounder daemon provider check {provider.provider}</small>
             </span>
             {pendingDelete === provider.id ? (
@@ -5681,6 +5682,7 @@ function ProviderForm({ provider, onCancel, onSaved, onError }: { provider: Prov
     name: provider?.name ?? "",
     provider: provider?.provider ?? "openai-codex",
     model: provider?.model ?? "",
+    baseModel: provider?.baseModel ?? "",
     thinking: provider?.thinking ?? "xhigh",
   });
   const [providerOptions, setProviderOptions] = useState<string[]>([]);
@@ -5712,6 +5714,8 @@ function ProviderForm({ provider, onCancel, onSaved, onError }: { provider: Prov
     };
   }, [form.provider]);
   const selectedModel = modelOptions.find((model) => model.id === form.model.trim());
+  const aliasSupported = !["claude-code", "codex-cli", "mock"].includes(form.provider);
+  const customModel = aliasSupported && form.model.trim().length > 0 && modelOptions.length > 0 && !selectedModel;
   const knownModelLevels = selectedModel?.thinkingLevels?.length ? selectedModel.thinkingLevels : null;
   const allowProviderDefaultThinking = form.model.trim().length === 0 || !knownModelLevels;
   const thinkingChoices = knownModelLevels ?? THINKING_LEVELS;
@@ -5725,6 +5729,17 @@ function ProviderForm({ provider, onCancel, onSaved, onError }: { provider: Prov
       return { ...current, thinking: preferredThinkingLevel(levels) };
     });
   }, [form.model, form.thinking, knownModelLevels, modelOptions]);
+  useEffect(() => {
+    // Preserve an existing custom profile while the catalog is still loading.
+    if (modelOptions.length === 0) return;
+    if (!customModel) {
+      if (form.baseModel) setForm((current) => ({ ...current, baseModel: "" }));
+      return;
+    }
+    if (modelOptions.some((model) => model.id === form.baseModel)) return;
+    const preferred = modelOptions.find((model) => model.id === DEFAULT_OPENAI_CODEX_MODEL) ?? modelOptions[0];
+    if (preferred) setForm((current) => ({ ...current, baseModel: preferred.id }));
+  }, [customModel, form.baseModel, modelOptions]);
   const providerChoices = [...new Set([form.provider, ...providerOptions].filter(Boolean))].sort();
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -5733,6 +5748,7 @@ function ProviderForm({ provider, onCancel, onSaved, onError }: { provider: Prov
         name: form.name.trim(),
         provider: form.provider.trim(),
         model: form.model.trim() || undefined,
+        baseModel: customModel ? form.baseModel.trim() : null,
         thinking: form.thinking || undefined,
       });
       await onSaved();
@@ -5743,8 +5759,17 @@ function ProviderForm({ provider, onCancel, onSaved, onError }: { provider: Prov
   return (
     <form className="inline-editor" onSubmit={(event) => void submit(event)}>
       <label>Name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={`openai-codex · ${DEFAULT_OPENAI_CODEX_MODEL} · xhigh`} /></label>
-      <label>Provider<select required value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value, model: "" })}>{providerChoices.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+      <label>Provider<select required value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value, model: "", baseModel: "" })}>{providerChoices.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
       <label>Model<input list="provider-model-options" value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder="provider default" /><datalist id="provider-model-options">{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>
+      {customModel ? (
+        <label>
+          Compatibility base
+          <select required value={form.baseModel} onChange={(event) => setForm({ ...form, baseModel: event.target.value })}>
+            {modelOptions.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
+          </select>
+          <small>The custom ID is sent to the provider. This known model supplies local transport, tool, context, and reasoning metadata.</small>
+        </label>
+      ) : null}
       <label>Thinking<select value={form.thinking} onChange={(event) => setForm({ ...form, thinking: event.target.value })}>
         {allowProviderDefaultThinking ? <option value="">provider default</option> : null}
         {thinkingChoices.map((level) => <option key={level} value={level}>{level}</option>)}
@@ -6187,8 +6212,8 @@ function NewProjectModal({ providers, daemons, onClose, onCreated, onError }: { 
         <FormSection title="Basics">
           <div className="form-grid two">
             <Field label="Project name" help="Leave blank to use the generated name from the task." span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={inferredName} /></Field>
-            <Field label="Execution daemon" help={daemonMissing ? "Go to Settings -> Daemons to create one." : "Jobs for this project are claimed only by this daemon."}><select required disabled={daemonMissing} value={form.daemonId} onChange={(event) => setForm({ ...form, daemonId: event.target.value })}><option value="" disabled>Select daemon</option>{daemons.map((d) => <option key={d.id} value={d.id}>{d.name ?? `daemon-${d.id}`} · {relativeAge(d)}</option>)}</select></Field>
-            <Field label="Default provider" help={providerMissing ? "Go to Settings -> Providers to create one." : "Used by every phase unless overridden below."}><select required disabled={providerMissing} value={form.providerId} onChange={(event) => setForm({ ...form, providerId: event.target.value })}><option value="" disabled>Select provider</option>{providers.map((p) => <option key={p.id} value={p.id}>{providerProfileLabel(p)}</option>)}</select></Field>
+            <Field label="Execution daemon" help={daemonMissing ? "Go to Settings -> Daemons to create one." : "Jobs and the selected provider model definition are delivered only to this daemon."}><select required disabled={daemonMissing} value={form.daemonId} onChange={(event) => setForm({ ...form, daemonId: event.target.value })}><option value="" disabled>Select daemon</option>{daemons.map((d) => <option key={d.id} value={d.id}>{d.name ?? `daemon-${d.id}`} · {relativeAge(d)}</option>)}</select></Field>
+            <Field label="Default provider" help={providerMissing ? "Go to Settings -> Providers to create one." : "Used by every phase unless overridden below, including any custom model compatibility definition."}><select required disabled={providerMissing} value={form.providerId} onChange={(event) => setForm({ ...form, providerId: event.target.value })}><option value="" disabled>Select provider</option>{providers.map((p) => <option key={p.id} value={p.id}>{providerProfileLabel(p)}</option>)}</select></Field>
             <Field label="Project directory" help="Resolved under the daemon workspace. Empty uses the project UUID."><input value={form.dir} onChange={(event) => setForm({ ...form, dir: event.target.value })} placeholder="defaults to project UUID" /></Field>
           </div>
         </FormSection>
@@ -6350,8 +6375,8 @@ function EditProjectModal({ detail, providers, daemons, onClose, onSaved, onErro
         </section>
         <FormSection title="Basics">
           <div className="form-grid two">
-            <Field label="Execution daemon" help="Jobs for this project are claimed only by this daemon."><select required value={form.daemonId} onChange={(event) => setForm({ ...form, daemonId: event.target.value })}><option value="" disabled>Select daemon</option>{daemons.map((d) => <option key={d.id} value={d.id}>{d.name ?? `daemon-${d.id}`} · {relativeAge(d)}</option>)}</select></Field>
-            <Field label="Default provider" help="Used by every phase unless overridden below."><select required value={form.providerId} onChange={(event) => setForm({ ...form, providerId: event.target.value })}><option value="" disabled>Select provider</option>{providers.map((p) => <option key={p.id} value={p.id}>{providerProfileLabel(p)}</option>)}</select></Field>
+            <Field label="Execution daemon" help="Jobs and the selected provider model definition are delivered only to this daemon."><select required value={form.daemonId} onChange={(event) => setForm({ ...form, daemonId: event.target.value })}><option value="" disabled>Select daemon</option>{daemons.map((d) => <option key={d.id} value={d.id}>{d.name ?? `daemon-${d.id}`} · {relativeAge(d)}</option>)}</select></Field>
+            <Field label="Default provider" help="Used by every phase unless overridden below, including any custom model compatibility definition."><select required value={form.providerId} onChange={(event) => setForm({ ...form, providerId: event.target.value })}><option value="" disabled>Select provider</option>{providers.map((p) => <option key={p.id} value={p.id}>{providerProfileLabel(p)}</option>)}</select></Field>
             <Field label="Project directory" help="Resolved under the daemon workspace."><input value={form.dir} onChange={(event) => setForm({ ...form, dir: event.target.value })} /></Field>
           </div>
         </FormSection>

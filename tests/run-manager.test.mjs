@@ -30,6 +30,24 @@ test("ActivityBus: snapshot returns a bounded recent tail", () => {
   assert.deepEqual(bus.snapshot(10).map((ev) => ev.kind), ["step", "step", "thinking_delta"]);
 });
 
+test("specToConfig carries bounded custom model definitions to the daemon runtime", () => {
+  const cfg = specToConfig({
+    verb: "run",
+    target: "custom-model",
+    sourcePaths: [],
+    provider: "openai-codex",
+    model: "gpt-daybreak-blue-latest",
+    customModels: [
+      { provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "gpt-5.6-sol" },
+      { provider: "", model: "invalid", baseModel: "gpt-5.6-sol" },
+    ],
+  }, "out");
+  assert.equal(cfg.auditModel, "gpt-daybreak-blue-latest");
+  assert.deepEqual(cfg.customModels, [
+    { provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "gpt-5.6-sol" },
+  ]);
+});
+
 // buildArgs is the pure core of launching: spec -> flounder CLI argv. The run-manager shells out
 // to the same CLI, and continue/restart map to the kernel's resume / --remap behavior.
 

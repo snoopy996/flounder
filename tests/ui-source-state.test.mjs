@@ -113,6 +113,13 @@ test("ui: storage pressure is visible and project cleanup keeps database records
   assert.match(stylesSource, /\.storage-project-card/);
 });
 
+test("ui: provider profiles expose custom model metadata and deliver it to the selected daemon", () => {
+  assert.match(appSource, /Compatibility base/);
+  assert.match(appSource, /The custom ID is sent to the provider/);
+  assert.match(appSource, /provider model definition are delivered only to this daemon/);
+  assert.match(appSource, /baseModel: customModel \? form\.baseModel\.trim\(\) : null/);
+});
+
 test("ui: unresolved local and real-target evidence conflicts require review and are not reportable", () => {
   const finding = {
     id: 7,

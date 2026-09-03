@@ -19,6 +19,12 @@ export interface AuditorConfig {
   buildCacheDir?: string;
   provider: string;
   auditModel: string;
+  // Operator-defined model ids that reuse the transport/capability metadata of a
+  // known model on the same provider. The requested `model` id is still sent on
+  // the wire; `baseModel` is only the local compatibility template. This lets a
+  // control plane deliver an allowlisted/private model alias to a remote daemon
+  // without editing daemon-local pi files or storing credentials in the server.
+  customModels: CustomModelDefinition[];
   maxTokens: number;
   thinkingLevel: ThinkingLevel;
   projectContext: ProjectContext;
@@ -156,6 +162,12 @@ export interface RoleModel {
   thinking: AuditorConfig["thinkingLevel"];
 }
 
+export interface CustomModelDefinition {
+  provider: string;
+  model: string;
+  baseModel: string;
+}
+
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const DEFAULT_AUDIT_MODEL = "gpt-5.6-sol";
@@ -208,6 +220,23 @@ export function normalizeRoleModels(input: unknown): AuditorConfig["models"] | u
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
+/** Validate the untrusted config/job representation of custom model aliases. */
+export function normalizeCustomModels(input: unknown): CustomModelDefinition[] {
+  if (!Array.isArray(input)) return [];
+  const out = new Map<string, CustomModelDefinition>();
+  for (const raw of input.slice(0, 64)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Record<string, unknown>;
+    const provider = typeof row.provider === "string" ? row.provider.trim() : "";
+    const model = typeof row.model === "string" ? row.model.trim() : "";
+    const baseModel = typeof row.baseModel === "string" ? row.baseModel.trim() : "";
+    if (!provider || !model || !baseModel || model === baseModel) continue;
+    if (provider.length > 128 || model.length > 256 || baseModel.length > 256) continue;
+    out.set(`${provider}\0${model}`, { provider, model, baseModel });
+  }
+  return [...out.values()];
+}
+
 export function defaultConfig(): AuditorConfig {
   return {
     targetName: "target",
@@ -216,6 +245,7 @@ export function defaultConfig(): AuditorConfig {
     outputDir: defaultOutputDir(),
     provider: "openai-codex",
     auditModel: DEFAULT_AUDIT_MODEL,
+    customModels: [],
     maxTokens: 8000,
     thinkingLevel: "xhigh",
     projectContext: {},

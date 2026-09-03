@@ -216,7 +216,9 @@ export type ProviderRoles = Partial<Record<AuditPhase, RoleOverride>>;
 export interface ProviderInput {
   name: string;
   provider: string;
-  model?: string | undefined;
+  model?: string | null | undefined;
+  /** Known model whose pi transport/capability metadata a custom model id reuses. */
+  baseModel?: string | null | undefined;
   thinking?: string | undefined;
   roles?: ProviderRoles | undefined;
 }
@@ -225,6 +227,7 @@ export interface ProviderProfile {
   name: string;
   provider: string;
   model: string | null;
+  baseModel: string | null;
   thinking: string | null;
   roles: ProviderRoles;
   created_at: string;
@@ -252,7 +255,7 @@ export interface RunGroupInput {
   budget?: unknown;
 }
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -503,6 +506,7 @@ CREATE TABLE IF NOT EXISTS provider(
   name TEXT UNIQUE NOT NULL,
   provider TEXT NOT NULL,         -- pi-ai provider id, or claude-code / codex-cli / mock
   model TEXT,                     -- default model for all phases (null = provider default)
+  base_model TEXT,                -- known same-provider model used as metadata template for a custom model id
   thinking TEXT,                  -- default thinking level
   roles_json TEXT,                -- { map?, dig?, refute? : { provider?, model?, thinking? } }
   created_at TEXT NOT NULL,
@@ -606,6 +610,7 @@ const ADDITIVE_COLUMNS = [
   ["project", "pinned_at", "ALTER TABLE project ADD COLUMN pinned_at TEXT"],
   ["project", "sort_order", "ALTER TABLE project ADD COLUMN sort_order INTEGER"],
   ["daemon", "workspace", "ALTER TABLE daemon ADD COLUMN workspace TEXT"],
+  ["provider", "base_model", "ALTER TABLE provider ADD COLUMN base_model TEXT"],
   ["run", "daemon_id", "ALTER TABLE run ADD COLUMN daemon_id INTEGER REFERENCES daemon(id) ON DELETE SET NULL"],
   ["run", "artifact_reconcile_version", "ALTER TABLE run ADD COLUMN artifact_reconcile_version INTEGER NOT NULL DEFAULT 0"],
   ["run", "run_scopes_target", "ALTER TABLE run ADD COLUMN run_scopes_target INTEGER"],
@@ -3683,8 +3688,8 @@ export class MetadataStore {
   createProvider(input: ProviderInput): number {
     const ts = now();
     const info = this.db
-      .prepare("INSERT INTO provider(name, provider, model, thinking, roles_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(input.name, input.provider, input.model ?? null, input.thinking ?? null, jsonOrNull(input.roles), ts, ts);
+      .prepare("INSERT INTO provider(name, provider, model, base_model, thinking, roles_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(input.name, input.provider, input.model ?? null, input.baseModel ?? null, input.thinking ?? null, jsonOrNull(input.roles), ts, ts);
     return Number(info.lastInsertRowid);
   }
 
@@ -3692,11 +3697,12 @@ export class MetadataStore {
     const cur = this.getProvider(id);
     if (!cur) return false;
     this.db
-      .prepare("UPDATE provider SET name = ?, provider = ?, model = ?, thinking = ?, roles_json = ?, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE provider SET name = ?, provider = ?, model = ?, base_model = ?, thinking = ?, roles_json = ?, updated_at = ? WHERE id = ?")
       .run(
         input.name ?? cur.name,
         input.provider ?? cur.provider,
         input.model !== undefined ? (input.model ?? null) : cur.model,
+        input.baseModel !== undefined ? (input.baseModel ?? null) : cur.baseModel,
         input.thinking !== undefined ? (input.thinking ?? null) : cur.thinking,
         input.roles !== undefined ? jsonOrNull(input.roles) : jsonOrNull(cur.roles),
         now(),
@@ -3874,6 +3880,7 @@ function toProviderProfile(row: Record<string, unknown>): ProviderProfile {
     name: String(row.name),
     provider: String(row.provider),
     model: (row.model as string | null) ?? null,
+    baseModel: (row.base_model as string | null) ?? null,
     thinking: (row.thinking as string | null) ?? null,
     roles: roles ?? {},
     created_at: String(row.created_at),

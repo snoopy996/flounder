@@ -17,7 +17,7 @@ import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, rea
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_AUDIT_MODEL, defaultOutputDir, defaultWorkspaceDir } from "../config.js";
+import { DEFAULT_AUDIT_MODEL, defaultOutputDir, defaultWorkspaceDir, normalizeCustomModels, type CustomModelDefinition } from "../config.js";
 import { MetadataStore, type RunKind, type Coverage, type DiscoveryBacklogFilter, type DiscoveryBacklogKind, type DiscoveryBacklogStatus, type ProviderInput, type ProviderProfile, type ProjectInput, type ProjectListOptions, type ProviderRoles, type RoleOverride } from "../db/store.js";
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getProviders, getModels } from "@earendil-works/pi-ai/compat";
@@ -549,13 +549,13 @@ const ROUTES: Route[] = [
 
   route({
     method: "GET", path: "/api/providers",
-    summary: "List saved provider profiles — a reusable model strategy (provider + model + thinking, with optional per-phase map/dig/refute overrides) that a project selects.",
+    summary: "List saved provider profiles — a reusable model strategy that a project binds to one execution daemon. A profile may register a custom model id through a known same-provider base model.",
     handler: (c) => sendJson(c.res, 200, { providers: c.store.listProviders() }),
   }),
   route({
     method: "POST", path: "/api/providers",
     summary: "Create a provider profile.",
-    body: { name: "string (unique)", provider: "pi-ai provider id, or claude-code / codex-cli / mock", model: "string? — default model", thinking: "off|minimal|low|medium|high|xhigh?", roles: "object? — per-phase overrides { map|dig|refute: { provider?, model?, thinking? } }" },
+    body: { name: "string (unique)", provider: "pi-ai provider id, or claude-code / codex-cli / mock", model: "string? — default or custom model id", baseModel: "string? — required when model is not in pi's catalog; known same-provider model whose transport/capability metadata is reused", thinking: "off|minimal|low|medium|high|xhigh?", roles: "object? — per-phase overrides { map|dig|refute: { provider?, model?, thinking? } }" },
     handler: providerCreate,
   }),
   route({
@@ -579,7 +579,7 @@ const ROUTES: Route[] = [
     method: "PATCH", path: "/api/providers/:id",
     summary: "Update a provider profile.",
     params: { id: "provider id" },
-    body: { name: "string?", provider: "string?", model: "string?", thinking: "string?", roles: "object?" },
+    body: { name: "string?", provider: "string?", model: "string|null?", baseModel: "string|null? — compatibility base for a custom model id", thinking: "string?", roles: "object?" },
     handler: providerUpdate,
   }),
   route({
@@ -649,7 +649,7 @@ const ROUTES: Route[] = [
     body: {
       verb: "'run' | 'map' | 'audit' | 'confirm' | 'prepare' (required)", target: "string (required) — run/project name",
       sourcePaths: "string[] — ABSOLUTE code paths the daemon reads", corpusPaths: "string[]? — ABSOLUTE design/reference paths", buildRoot: "string? — ABSOLUTE buildable root",
-      provider: "string?", model: "string?", thinking: "string?",
+      provider: "string?", model: "string?", customModels: "array? — custom model definitions { provider, model, baseModel }; baseModel must be a known same-provider pi model", thinking: "string?",
       scopeCoverageMode: "focused|standard|half|full|custom? — standard/focused are cumulative project targets, not per-run additions", maxScopes: "number?", mapSteps: "number?", digSteps: "number?", maxSteps: "number?", digSamples: "number?", digConcurrency: "number?",
       sandboxBackend: "'auto'|'oci'|'apple-container'|'host'?", sandboxImage: "string?", sandboxAllowHostFallback: "boolean?", sandboxPrepareNetwork: "'none'|'enabled'?", sandboxConfirmNetwork: "'none'|'enabled'?",
       remap: "boolean?", appendMap: "boolean? — expand existing scope inventory by appending novel scopes", appendMapSeedPaths: "string[]? — extra prior scope inventories used only as append-map covered-reference seed", quick: "boolean?", mockLlm: "boolean?", pipeline: "boolean? — run clue pipeline: prepare if needed -> map/dig -> synthesize -> verify -> confirm -> report", continueCoverage: "boolean? — explicit opt-in to open the next mapped scope batch after the current pipeline round is fully settled", verifyFromStart: "boolean? — pipeline: re-run Verify from the beginning instead of only pending candidates", region: "string?", scope: "string?", scopeNote: "string? — map/audit: 'authorized scope note' that focuses map on the in-scope target (the pipeline auto-derives it from prepare's manifest)", verifyFindings: "object|array? — audit: inline suspected finding(s) to confirm-or-refute by execution",
@@ -3464,6 +3464,8 @@ async function launch(c: Ctx): Promise<void> {
     return sendJson(c.res, 400, { error: "verb must be one of run | map | audit | confirm | prepare" });
   }
   const spec = normalizeLaunchSpec(body, target, verb as RunKind, c.out);
+  const customModelError = launchCustomModelError(spec);
+  if (customModelError) return sendJson(c.res, 400, { error: customModelError });
   if (!c.store.getProject(target)) {
     c.store.upsertProject({ name: target, sourcePaths: spec.sourcePaths, ...(spec.buildRoot ? { buildRoot: spec.buildRoot } : {}), corpusPaths: spec.corpusPaths ?? [], config: launchDisplayConfig(spec) });
   }
@@ -3500,6 +3502,7 @@ function normalizeLaunchSpec(body: Record<string, unknown>, target: string, verb
     buildRoot: str(body.buildRoot),
     provider: str(body.provider),
     model: str(body.model),
+    customModels: normalizeCustomModels(body.customModels),
     thinking: str(body.thinking),
     maxScopes: num(body.maxScopes),
     mapSteps: num(body.mapSteps),
@@ -3543,7 +3546,7 @@ function normalizeLaunchSpec(body: Record<string, unknown>, target: string, verb
 // The project-row config_json for a launched ad-hoc run (display only; the daemon runs the spec).
 function launchDisplayConfig(spec: LaunchSpec): Record<string, unknown> {
   const cfg: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries({ provider: spec.provider, model: spec.model, thinking: spec.thinking, maxScopes: spec.maxScopes, mapSteps: spec.mapSteps, mapSamples: spec.mapSamples, digSteps: spec.digSteps, digSamples: spec.digSamples, digMaxSamples: spec.digMaxSamples, adaptiveDig: spec.adaptiveDig, eagerPrepare: spec.eagerPrepare, digConcurrency: spec.digConcurrency, verifyConcurrency: spec.verifyConcurrency, sandboxBackend: spec.sandboxBackend, sandboxImage: spec.sandboxImage, sandboxAllowHostFallback: spec.sandboxAllowHostFallback, sandboxPrepareNetwork: spec.sandboxPrepareNetwork, sandboxConfirmNetwork: spec.sandboxConfirmNetwork, sandboxMemoryMb: spec.sandboxMemoryMb, sandboxCpus: spec.sandboxCpus })) {
+  for (const [k, v] of Object.entries({ provider: spec.provider, model: spec.model, customModels: spec.customModels, thinking: spec.thinking, maxScopes: spec.maxScopes, mapSteps: spec.mapSteps, mapSamples: spec.mapSamples, digSteps: spec.digSteps, digSamples: spec.digSamples, digMaxSamples: spec.digMaxSamples, adaptiveDig: spec.adaptiveDig, eagerPrepare: spec.eagerPrepare, digConcurrency: spec.digConcurrency, verifyConcurrency: spec.verifyConcurrency, sandboxBackend: spec.sandboxBackend, sandboxImage: spec.sandboxImage, sandboxAllowHostFallback: spec.sandboxAllowHostFallback, sandboxPrepareNetwork: spec.sandboxPrepareNetwork, sandboxConfirmNetwork: spec.sandboxConfirmNetwork, sandboxMemoryMb: spec.sandboxMemoryMb, sandboxCpus: spec.sandboxCpus })) {
     if (v !== undefined) cfg[k] = v;
   }
   return cfg;
@@ -4567,28 +4570,97 @@ function readProviderInput(body: Record<string, unknown>): Partial<ProviderInput
   const out: Partial<ProviderInput> = {};
   const name = str(body.name); if (name) out.name = name;
   const provider = str(body.provider); if (provider) out.provider = provider;
-  if ("model" in body) out.model = str(body.model);
+  if ("model" in body) out.model = str(body.model) ?? null;
+  if ("baseModel" in body) out.baseModel = str(body.baseModel) ?? null;
   if ("thinking" in body) { const t = str(body.thinking); out.thinking = t && THINKING.has(t) ? t : undefined; }
   if ("roles" in body && body.roles && typeof body.roles === "object") out.roles = body.roles as ProviderInput["roles"];
   return out;
+}
+
+function providerInputError(input: Pick<ProviderInput, "provider" | "model" | "baseModel">): string | undefined {
+  const model = input.model?.trim() ?? "";
+  const baseModel = input.baseModel?.trim() ?? "";
+  if (!baseModel) {
+    if (model && isPiProvider(input.provider) && !hasPiModel(input.provider, model)) {
+      return `model "${model}" is not in pi's ${input.provider} catalog; baseModel is required for a custom model id`;
+    }
+    return undefined;
+  }
+  if (!model) return "baseModel requires a custom model id";
+  if (model === baseModel) return "baseModel must differ from the custom model id";
+  if (!isPiProvider(input.provider)) return `baseModel aliases are supported only for pi providers, not ${input.provider}`;
+  if (hasPiModel(input.provider, model)) return `model "${model}" is already built in; remove baseModel`;
+  if (!hasPiModel(input.provider, baseModel)) return `baseModel "${baseModel}" is not in pi's ${input.provider} catalog`;
+  return undefined;
+}
+
+function customModelDefinitionsError(definitions: CustomModelDefinition[]): string | undefined {
+  for (const definition of definitions) {
+    const error = providerInputError(definition);
+    if (error) return `invalid customModels entry for ${definition.provider}/${definition.model}: ${error}`;
+  }
+  return undefined;
+}
+
+function launchCustomModelError(spec: LaunchSpec): string | undefined {
+  const definitions = spec.customModels ?? [];
+  const definitionError = customModelDefinitionsError(definitions);
+  if (definitionError) return definitionError;
+  const provider = spec.provider ?? "openai-codex";
+  const model = spec.model?.trim();
+  if (!model || !isPiProvider(provider) || hasPiModel(provider, model)) return undefined;
+  if (definitions.some((definition) => definition.provider === provider && definition.model === model)) return undefined;
+  return `model "${model}" is not in pi's ${provider} catalog; customModels must include a known same-provider baseModel`;
+}
+
+function isPiProvider(provider: string): boolean {
+  try {
+    return (getProviders() as unknown as string[]).includes(provider);
+  } catch {
+    return false;
+  }
+}
+
+function hasPiModel(provider: string, model: string): boolean {
+  try {
+    return (getModels(provider as never) ?? []).some((entry) => String((entry as { id: unknown }).id) === model);
+  } catch {
+    return false;
+  }
 }
 
 async function providerCreate(c: Ctx): Promise<void> {
   const input = readProviderInput((await readBody(c.req)) as Record<string, unknown>);
   if (!input.name || !input.provider) return sendJson(c.res, 400, { error: "name and provider are required" });
   if (c.store.getProviderByName(input.name)) return sendJson(c.res, 409, { error: `a provider named "${input.name}" already exists` });
-  const id = c.store.createProvider({ name: input.name, provider: input.provider, model: input.model, thinking: input.thinking, roles: input.roles });
+  const error = providerInputError({ provider: input.provider, model: input.model, baseModel: input.baseModel });
+  if (error) return sendJson(c.res, 400, { error });
+  const id = c.store.createProvider({ name: input.name, provider: input.provider, model: input.model, baseModel: input.baseModel, thinking: input.thinking, roles: input.roles });
   sendJson(c.res, 200, { ok: true, id });
 }
 
 async function providerUpdate(c: Ctx): Promise<void> {
   const id = Number(c.params.id);
-  if (!c.store.getProvider(id)) return sendJson(c.res, 404, { error: "no such provider" });
+  const current = c.store.getProvider(id);
+  if (!current) return sendJson(c.res, 404, { error: "no such provider" });
   const input = readProviderInput((await readBody(c.req)) as Record<string, unknown>);
   if (input.name) {
     const clash = c.store.getProviderByName(input.name);
     if (clash && clash.id !== id) return sendJson(c.res, 409, { error: `a provider named "${input.name}" already exists` });
   }
+  const effective = {
+    provider: input.provider ?? current.provider,
+    model: input.model !== undefined ? input.model : current.model,
+    baseModel: input.baseModel !== undefined ? input.baseModel : current.baseModel,
+  };
+  // Selecting a built-in model clears an old alias template unless the request
+  // explicitly supplied a (necessarily invalid) baseModel, which is reported.
+  if (input.baseModel === undefined && effective.model && hasPiModel(effective.provider, effective.model)) {
+    effective.baseModel = null;
+    input.baseModel = null;
+  }
+  const error = providerInputError(effective);
+  if (error) return sendJson(c.res, 400, { error });
   c.store.updateProvider(id, input);
   sendJson(c.res, 200, { ok: true });
 }
@@ -5845,6 +5917,16 @@ function phaseProviderProfiles(project: Record<string, unknown>, store: Metadata
   return out;
 }
 
+function customModelsForProfiles(profiles: Array<ProviderProfile | undefined>): CustomModelDefinition[] {
+  const models = new Map<string, CustomModelDefinition>();
+  for (const profile of profiles) {
+    if (!profile?.model || !profile.baseModel) continue;
+    const definition = { provider: profile.provider, model: profile.model, baseModel: profile.baseModel };
+    models.set(`${definition.provider}\0${definition.model}`, definition);
+  }
+  return [...models.values()];
+}
+
 function launchSpec(store: MetadataStore, project: Record<string, unknown>, body: Record<string, unknown>, out: string, profile?: ProviderProfile, progress?: Coverage, phaseProfiles: PhaseProfiles = {}): LaunchSpec {
   const cfg = (safeParse(project.config_json) as Record<string, unknown>) ?? {};
   const overrides = (body.overrides as Record<string, unknown>) ?? {};
@@ -5899,6 +5981,7 @@ function launchSpec(store: MetadataStore, project: Record<string, unknown>, body
   }
   const legacyRoles = profile && Object.keys(profile.roles).length > 0 ? profile.roles : undefined;
   const primaryProfile = phaseProfile(primaryPhase as "prepare" | "map" | "dig" | "confirm");
+  const customModels = customModelsForProfiles([profile, primaryProfile, ...Object.values(phaseProfiles)]);
   const autoCoverage = usesAutoCoverage(verb, body);
   const coverage = resolveCoverage(merged, autoCoverage ? progress : undefined, explicitRunMaxScopes);
   return {
@@ -5910,6 +5993,7 @@ function launchSpec(store: MetadataStore, project: Record<string, unknown>, body
     corpusPaths: list(overrides.corpusPaths, project.corpus_paths),
     provider: primaryProfile?.provider ?? str(merged.provider),
     model: phaseModel(primaryPhase) ?? str(primaryProfile?.model) ?? str(merged.model),
+    customModels,
     thinking: phaseThinking(primaryPhase) ?? str(primaryProfile?.thinking) ?? str(merged.thinking),
     models: Object.keys(roles).length > 0 ? roles : legacyRoles,
     coverageMode: coverage.mode,

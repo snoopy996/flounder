@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { getModel, getProviders } from "@earendil-works/pi-ai/compat";
+import { getProviders } from "@earendil-works/pi-ai/compat";
 import { createAgentSession, DefaultResourceLoader, defineTool, SessionManager, type ExtensionAPI, type ResourceLoader, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AuditorConfig } from "../config.js";
@@ -10,6 +10,7 @@ import { AUDIT_CONFIRM_SYSTEM, AUDIT_PREPARE_SYSTEM, DISCOVERY_BACKLOG_RULES, MA
 import { describeAction, readScratchScopes, scratchHasFindings, scratchHasFindingsArtifact, type AgentTool, type ToolContext } from "./tools.js";
 import { SCOPE_OUTCOME_FILE, scratchHasScopeOutcome } from "./scope-outcomes.js";
 import { flounderAgentDir } from "../provider-auth.js";
+import { resolvePiModel } from "../llm/model-resolver.js";
 
 // Continuous-session driver (point 5). Instead of re-driving a stateless
 // complete() once per step — which re-sends the whole transcript every turn and
@@ -188,7 +189,7 @@ export async function runAuditSession(input: {
    * persisted blocks from different dig sessions separate in the activity feed. */
   activityStreamId?: string;
 }): Promise<SessionDriverResult> {
-  const model = getModelSafe(input.cfg.provider, input.cfg.auditModel);
+  const model = resolvePiModel(input.cfg.provider, input.cfg.auditModel, input.cfg.customModels);
   if (!model) throw new Error(`audit session: unknown provider/model ${input.cfg.provider}/${input.cfg.auditModel}`);
   if (input.activityStreamId) input.ctx.activityStreamId = input.activityStreamId;
   else delete input.ctx.activityStreamId;
@@ -1060,7 +1061,7 @@ export class SessionLlmClient implements LlmClient {
   constructor(private readonly cfg: AuditorConfig, private readonly logger?: RunLogger) {}
   async complete(input: { tag: string; system: string; user: string; model?: string; maxTokens?: number; thinkingLevel?: AuditorConfig["thinkingLevel"]; agentic?: boolean }): Promise<string> {
     const modelName = input.model ?? this.cfg.auditModel;
-    const model = getModelSafe(this.cfg.provider, modelName);
+    const model = resolvePiModel(this.cfg.provider, modelName, this.cfg.customModels);
     if (!model) throw new Error(`session completion: unknown provider/model ${this.cfg.provider}/${modelName}`);
     const { session } = await createAgentSession({
       model,
@@ -1136,14 +1137,6 @@ function extractMessageText(content: unknown): string {
       .join("");
   }
   return "";
-}
-
-function getModelSafe(provider: string, modelId?: string): ReturnType<typeof getModel> | undefined {
-  try {
-    return getModel(provider as never, (modelId ?? "") as never) ?? undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function mapThinkingLevel(level: AuditorConfig["thinkingLevel"]): AuditorConfig["thinkingLevel"] {

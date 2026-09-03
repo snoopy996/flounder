@@ -8,5 +8,5 @@ import { PiAiClient } from "./pi-ai.js";
 export function createLlmClient(cfg: AuditorConfig, logger: RunLogger): LlmClient {
   if (cfg.provider === "claude-code") return new ClaudeCodeClient(logger);
   if (cfg.provider === "codex-cli") return new CodexCliClient(logger);
-  return new PiAiClient(cfg.provider, logger);
+  return new PiAiClient(cfg.provider, logger, cfg.customModels);
 }

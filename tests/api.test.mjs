@@ -70,6 +70,8 @@ test("api: GET /api is a self-describing catalog of every resource + operation",
     assert.match(projectCreate.body.config, /phaseProviders/);
     assert.match(projectCreate.body.config, /prepareClue/);
     assert.match(projectCreate.body.config, /bug-bounty-contest/);
+    const providerCreate = cat.endpoints.find((e) => e.method === "POST" && e.path === "/api/providers");
+    assert.match(providerCreate.body.baseModel, /required when model is not in pi's catalog/);
     const projectList = cat.endpoints.find((e) => e.method === "GET" && e.path === "/api/projects");
     assert.match(projectList.query.archived, /archived projects/);
     assert.match(projectList.query.limit, /default 100/);
@@ -5566,6 +5568,7 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     assert.ok(codexDefault, "expected codex gpt-5.6-sol xhigh starter profile");
     assert.equal(codexDefault.provider, "openai-codex");
     assert.equal(codexDefault.model, "gpt-5.6-sol");
+    assert.equal(codexDefault.baseModel, null);
     assert.equal(codexDefault.thinking, "xhigh");
     const opusMax = seeded.find((p) => p.name === "claude-code · opus 4.8 max");
     assert.ok(opusMax, "expected opus 4.8 max starter profile");
@@ -5583,6 +5586,62 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     assert.ok(gpt56sol, "the pinned pi runtime must expose the default gpt-5.6-sol model");
     assert.ok(gpt56sol.thinkingLevels.includes("xhigh"), "gpt-5.6-sol should expose xhigh through pi metadata");
 
+    // Unknown pi model ids must declare a known compatibility base. The saved
+    // definition is delivered in the selected daemon's job instead of requiring
+    // daemon-local models.json synchronization.
+    const invalidCustom = await post("/api/providers", { name: "invalid-custom", provider: "openai-codex", model: "gpt-daybreak-blue-latest", thinking: "xhigh" });
+    assert.equal(invalidCustom.status, 400);
+    assert.match((await json(invalidCustom)).error, /baseModel is required/);
+    const invalidDirectLaunch = await post("/api/launch", {
+      target: "invalid-direct-custom",
+      verb: "run",
+      provider: "openai-codex",
+      model: "gpt-daybreak-blue-latest",
+      customModels: [{ provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "missing-base" }],
+    });
+    assert.equal(invalidDirectLaunch.status, 400);
+    assert.match((await json(invalidDirectLaunch)).error, /baseModel .* is not in pi's openai-codex catalog/);
+    const missingDirectDefinition = await post("/api/launch", {
+      target: "missing-direct-custom",
+      verb: "run",
+      provider: "openai-codex",
+      model: "gpt-daybreak-blue-latest",
+    });
+    assert.equal(missingDirectDefinition.status, 400);
+    assert.match((await json(missingDirectDefinition)).error, /customModels must include/);
+    const custom = await json(await post("/api/providers", {
+      name: "daybreak-local",
+      provider: "openai-codex",
+      model: "gpt-daybreak-blue-latest",
+      baseModel: "gpt-5.6-sol",
+      thinking: "xhigh",
+    }));
+    const customProfile = (await json(await fetch(base + "/api/providers/" + custom.id))).provider;
+    assert.equal(customProfile.model, "gpt-daybreak-blue-latest");
+    assert.equal(customProfile.baseModel, "gpt-5.6-sol");
+
+    const daemon = await json(await post("/api/daemons", { name: "daybreak-worker" }));
+    const project = await json(await post("/api/projects", {
+      name: "daybreak-project",
+      daemonId: daemon.id,
+      providerId: custom.id,
+      sourcePaths: ["."],
+      buildRoot: ".",
+    }));
+    const launched = await json(await post(`/api/projects/${project.uuid}/runs`, { verb: "run", allowOfflineQueue: true }));
+    const queuedJob = (await json(await fetch(base + "/api/jobs/" + launched.jobId))).job;
+    const queuedSpec = JSON.parse(queuedJob.spec_json);
+    assert.equal(queuedJob.daemon_id, daemon.id);
+    assert.equal(queuedSpec.provider, "openai-codex");
+    assert.equal(queuedSpec.model, "gpt-daybreak-blue-latest");
+    assert.deepEqual(queuedSpec.customModels, [
+      { provider: "openai-codex", model: "gpt-daybreak-blue-latest", baseModel: "gpt-5.6-sol" },
+    ]);
+
+    // Returning a profile to a built-in model also removes stale alias metadata.
+    await fetch(base + "/api/providers/" + custom.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "gpt-5.6-sol" }) });
+    assert.equal((await json(await fetch(base + "/api/providers/" + custom.id))).provider.baseModel, null);
+
     // create with a per-phase override (map cheaper than dig), then read it back
     const created = await json(await post("/api/providers", { name: "prof-x", provider: "openai-codex", model: "gpt-5.5", thinking: "high", roles: { map: { thinking: "low" } } }));
     assert.ok(created.ok && typeof created.id === "number");
@@ -5599,6 +5658,7 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     assert.equal((await json(await fetch(base + "/api/providers/" + created.id))).provider.thinking, "xhigh");
     assert.equal((await fetch(base + "/api/providers/" + created.id, { method: "DELETE" })).status, 200);
     assert.equal((await fetch(base + "/api/providers/" + created.id)).status, 404);
+    assert.equal((await fetch(base + "/api/providers/" + custom.id, { method: "DELETE" })).status, 200);
   });
 });
 

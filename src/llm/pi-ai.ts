@@ -1,12 +1,14 @@
-import { complete, getModel, getProviders, type KnownProvider } from "@earendil-works/pi-ai/compat";
+import { complete, getProviders, type KnownProvider } from "@earendil-works/pi-ai/compat";
 import type { LlmClient } from "../types.js";
 import type { RunLogger } from "../trace/logger.js";
-import type { ThinkingLevel } from "../config.js";
+import type { CustomModelDefinition, ThinkingLevel } from "../config.js";
+import { resolvePiModel } from "./model-resolver.js";
 
 export class PiAiClient implements LlmClient {
   constructor(
     private readonly provider: string,
     private readonly logger?: RunLogger,
+    private readonly customModels: readonly CustomModelDefinition[] = [],
   ) {}
 
   async complete(input: {
@@ -19,7 +21,7 @@ export class PiAiClient implements LlmClient {
   }): Promise<string> {
     if (!input.model) throw new Error("model is required");
     const provider = normalizeProvider(this.provider);
-    const model = getModel(provider, input.model as never);
+    const model = resolvePiModel(provider, input.model, this.customModels);
     if (!model) throw new Error(`Unknown pi-ai model: provider=${this.provider} model=${input.model}`);
 
     const options: { maxTokens?: number; reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" } = {};
