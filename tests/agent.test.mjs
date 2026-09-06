@@ -483,7 +483,7 @@ test("driver routing: real pi providers use the continuous session, mock/CLI fal
 });
 
 test("pi session preserves the configured xhigh thinking level", () => {
-  assert.equal(defaultConfig().auditModel, "gpt-6-astra");
+  assert.equal(defaultConfig().auditModel, "gpt-5.6-sol");
   assert.equal(defaultConfig().thinkingLevel, "xhigh");
   assert.equal(mapThinkingLevel("off"), "off");
   assert.equal(mapThinkingLevel("minimal"), "minimal");
