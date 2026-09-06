@@ -4,8 +4,11 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { findEnvKeys, getEnvApiKey, getProviders } from "@earendil-works/pi-ai/compat";
-import { getOAuthProvider, getOAuthProviders, type OAuthPrompt, type OAuthSelectPrompt } from "@earendil-works/pi-ai/oauth";
+import type { AuthPrompt } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { flounderHomeDir } from "./config.js";
+
+const authProviders = new Map(builtinProviders().map((provider) => [provider.id, provider]));
 
 const LOCAL_FALLBACK_PROVIDERS = new Set(["mock", "codex-cli", "claude-code"]);
 
@@ -85,7 +88,7 @@ export function knownRuntimeProviders(): string[] {
 export async function providerAuthStatus(provider: string): Promise<ProviderAuthStatus> {
   const normalized = provider.trim();
   const authPath = providerAuthPath();
-  const oauthLogin = getOAuthProviders().some((entry) => entry.id === normalized);
+  const oauthLogin = Boolean(authProviders.get(normalized)?.auth.oauth);
   const base = {
     provider: normalized,
     authPath,
@@ -132,7 +135,7 @@ export async function loginProvider(provider: string): Promise<void> {
     return;
   }
 
-  const oauth = getOAuthProvider(normalized);
+  const oauth = authProviders.get(normalized)?.auth.oauth;
   if (!oauth) {
     const expected = EXPECTED_ENV[normalized] ?? [];
     const env = expected.length ? `\nExpected environment variables: ${expected.join(", ")}` : "";
@@ -142,26 +145,31 @@ export async function loginProvider(provider: string): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const credentials = await oauth.login({
-      onAuth: (info) => {
-        console.log(`\nOpen this URL in your browser:\n${info.url}`);
-        if (info.instructions) console.log(info.instructions);
-        console.log();
+      signal: new AbortController().signal,
+      notify: (event) => {
+        if (event.type === "auth_url") {
+          console.log(`\nOpen this URL in your browser:\n${event.url}`);
+          if (event.instructions) console.log(event.instructions);
+        } else if (event.type === "device_code") {
+          console.log(`\nOpen this URL in your browser:\n${event.verificationUri}`);
+          console.log(`Enter code: ${event.userCode}`);
+        } else {
+          console.log(event.message);
+          if (event.type === "info") {
+            for (const link of event.links ?? []) console.log(link.url);
+          }
+        }
       },
-      onDeviceCode: (info) => {
-        console.log(`\nOpen this URL in your browser:\n${info.verificationUri}`);
-        console.log(`Enter code: ${info.userCode}`);
-        console.log();
+      prompt: async (prompt) => {
+        if (prompt.type === "select") return selectOption(rl, prompt);
+        return promptLine(rl, `${prompt.message}${prompt.placeholder ? ` (${prompt.placeholder})` : ""}: `, prompt.signal);
       },
-      onPrompt: (prompt) => promptLine(rl, formatPrompt(prompt)),
-      onManualCodeInput: () => promptLine(rl, "Paste the authorization code: "),
-      onSelect: async (prompt) => selectOption(rl, prompt),
-      onProgress: (message) => console.log(message),
     });
 
     const authPath = providerAuthPath();
     await mkdir(dirname(authPath), { recursive: true });
     const auth = await readAuthFile(authPath);
-    auth[normalized] = { type: "oauth", ...credentials };
+    auth[normalized] = credentials;
     await writeFile(authPath, JSON.stringify(auth, null, 2), { encoding: "utf8", mode: 0o600 });
     await chmod(authPath, 0o600).catch(() => undefined);
     console.log(`\n${normalized} credentials saved for Flounder daemons on this machine.`);
@@ -225,18 +233,24 @@ async function readAuthFile(authPath: string): Promise<Record<string, unknown>> 
   }
 }
 
-function promptLine(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
-  return new Promise((resolve) => rl.question(question, resolve));
+function promptLine(rl: ReturnType<typeof createInterface>, question: string, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const onAbort = () => reject(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    rl.question(question, { signal }, (answer) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(answer);
+    });
+  });
 }
 
-function formatPrompt(prompt: OAuthPrompt): string {
-  return `${prompt.message}${prompt.placeholder ? ` (${prompt.placeholder})` : ""}: `;
-}
-
-async function selectOption(rl: ReturnType<typeof createInterface>, prompt: OAuthSelectPrompt): Promise<string | undefined> {
+async function selectOption(rl: ReturnType<typeof createInterface>, prompt: Extract<AuthPrompt, { type: "select" }>): Promise<string> {
   console.log(`\n${prompt.message}`);
   prompt.options.forEach((option, index) => console.log(`  ${index + 1}. ${option.label}`));
-  const answer = await promptLine(rl, `Enter number (1-${prompt.options.length}): `);
+  const answer = await promptLine(rl, `Enter number (1-${prompt.options.length}): `, prompt.signal);
   const index = Number.parseInt(answer, 10) - 1;
-  return prompt.options[index]?.id;
+  const option = prompt.options[index];
+  if (!option) throw new Error("Invalid login option");
+  return option.id;
 }

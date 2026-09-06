@@ -5569,10 +5569,10 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     // a fresh store is seeded with starter profiles
     const seeded = (await json(await fetch(base + "/api/providers"))).providers;
     assert.ok(seeded.length >= 1 && seeded.some((p) => p.provider === "openai-codex"), "expected seeded providers");
-    const codexDefault = seeded.find((p) => p.name === "openai-codex · gpt-5.6-sol · xhigh");
-    assert.ok(codexDefault, "expected codex gpt-5.6-sol xhigh starter profile");
+    const codexDefault = seeded.find((p) => p.name === "openai-codex · gpt-6-astra · xhigh");
+    assert.ok(codexDefault, "expected codex gpt-6-astra xhigh starter profile");
     assert.equal(codexDefault.provider, "openai-codex");
-    assert.equal(codexDefault.model, "gpt-5.6-sol");
+    assert.equal(codexDefault.model, "gpt-6-astra");
     assert.equal(codexDefault.baseModel, null);
     assert.equal(codexDefault.thinking, "xhigh");
     const productSettings = await json(await fetch(base + "/api/settings/runtime"));
@@ -5593,9 +5593,9 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     const discoveredModels = (await json(await fetch(base + "/api/pi/models/openai-codex"))).models;
     assert.ok(discoveredModels.length >= 1, "expected pi model discovery");
     assert.ok(discoveredModels.every((m) => Array.isArray(m.thinkingLevels) && m.thinkingLevels.length >= 1));
-    const gpt56sol = discoveredModels.find((m) => m.id === "gpt-5.6-sol");
-    assert.ok(gpt56sol, "the pinned pi runtime must expose the default gpt-5.6-sol model");
-    assert.ok(gpt56sol.thinkingLevels.includes("xhigh"), "gpt-5.6-sol should expose xhigh through pi metadata");
+    const astra = discoveredModels.find((m) => m.id === "gpt-6-astra");
+    assert.ok(astra, "the pinned pi runtime must expose the default Astra model");
+    assert.ok(astra.thinkingLevels.includes("xhigh"), "Astra should expose xhigh through pi metadata");
 
     // Unknown pi model ids must declare a known compatibility base. The saved
     // definition is delivered in the selected daemon's job instead of requiring
@@ -5655,7 +5655,7 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     }));
     const explicitProductJob = (await json(await fetch(base + "/api/jobs/" + explicitProductDirect.jobId))).job;
     const explicitProductSpec = JSON.parse(explicitProductJob.spec_json);
-    assert.equal(explicitProductSpec.model, "gpt-5.6-sol");
+    assert.equal(explicitProductSpec.model, "gpt-6-astra");
     assert.deepEqual(explicitProductSpec.customModels, []);
 
     const daemon = await json(await post("/api/daemons", { name: "daybreak-worker" }));

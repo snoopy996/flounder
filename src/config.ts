@@ -170,7 +170,7 @@ export interface CustomModelDefinition {
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-export const DEFAULT_AUDIT_MODEL = "gpt-5.6-sol";
+export const DEFAULT_AUDIT_MODEL = "gpt-6-astra";
 
 export function flounderHomeDir(): string {
   return path.join(os.homedir(), ".flounder");

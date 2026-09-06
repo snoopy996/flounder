@@ -88,7 +88,7 @@ import {
 } from "./domain";
 import { Icon, type IconName } from "./icons";
 
-const DEFAULT_OPENAI_CODEX_MODEL = "gpt-5.6-sol";
+const DEFAULT_OPENAI_CODEX_MODEL = "gpt-6-astra";
 
 type View = "projects" | "evaluations" | "findings" | "settings";
 type SettingsPane = "providers" | "daemons" | "storage" | "archived";
