@@ -56,7 +56,7 @@ export class PiAiClient implements LlmClient {
 }
 
 function normalizeProvider(provider: string): KnownProvider {
-  const known = getProviders();
+  const known: readonly string[] = getProviders();
   if (known.includes(provider as KnownProvider)) return provider as KnownProvider;
   throw new Error(`Unknown pi-ai provider: ${provider}. Known providers: ${known.join(", ")}`);
 }

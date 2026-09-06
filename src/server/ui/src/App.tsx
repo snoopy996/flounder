@@ -5783,7 +5783,7 @@ function ProviderForm({ provider, onCancel, onSaved, onError }: { provider: Prov
     <form className="inline-editor" onSubmit={(event) => void submit(event)}>
       <label>Name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={`openai-codex · ${DEFAULT_OPENAI_CODEX_MODEL} · xhigh`} /></label>
       <label>Provider<select required value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value, model: "", baseModel: "" })}>{providerChoices.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-      <label>Model<input list="provider-model-options" value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder="provider default" /><datalist id="provider-model-options">{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>
+      <label>Model<input list="provider-model-options" value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value, thinking: event.target.value.trim() === "gpt-6-astra" ? "medium" : form.thinking })} placeholder="provider default" /><datalist id="provider-model-options">{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>
       {customModel ? (
         <label>
           Compatibility base

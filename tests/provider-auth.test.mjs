@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +20,7 @@ test("provider auth imports an existing pi provider credential into the Flounder
   process.env.PI_AGENT_DIR = piAgent;
   try {
     const status = await providerAuthStatus("openai-codex");
+    assert.equal(status.oauthLogin, true);
     assert.equal(status.configured, true);
     assert.equal(status.source, "stored");
     assert.match(status.sourceLabel ?? "", /imported from/);
@@ -72,3 +74,45 @@ function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
+
+
+test("provider login consumes pi auth interactions and persists the typed OAuth credential", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "flounder-provider-login-"));
+  const script = `
+    import assert from "node:assert/strict";
+    import { mock } from "node:test";
+    import { readFile, stat } from "node:fs/promises";
+    const credential = { type: "oauth", access: "fixture-access", refresh: "fixture-refresh", expires: 12345 };
+    let closed = false;
+    mock.module("node:readline", { namedExports: { createInterface: () => ({
+      question(message, options, done) { done(message.startsWith("Enter number") ? "1" : "fixture-code"); },
+      close() { closed = true; }
+    }) } });
+    const originalProviders = await import("@earendil-works/pi-ai/providers/all");
+    mock.module("@earendil-works/pi-ai/providers/all", { namedExports: { ...originalProviders, builtinProviders: () => [{
+      id: "fixture-oauth", auth: { oauth: { async login(interaction) {
+        assert.ok(interaction.signal instanceof AbortSignal);
+        interaction.notify({ type: "auth_url", url: "https://example.com/login", instructions: "Fixture login" });
+        interaction.notify({ type: "device_code", verificationUri: "https://example.com/device", userCode: "fixture" });
+        interaction.notify({ type: "progress", message: "Fixture progress" });
+        interaction.notify({ type: "info", message: "Fixture info", links: [{ url: "https://example.com" }] });
+        assert.equal(await interaction.prompt({ type: "manual_code", message: "Code" }), "fixture-code");
+        assert.equal(await interaction.prompt({ type: "select", message: "Account", options: [{ id: "fixture", label: "Fixture" }] }), "fixture");
+        const controller = new AbortController();
+        controller.abort(new Error("Fixture canceled"));
+        await assert.rejects(interaction.prompt({ type: "text", message: "Canceled", signal: controller.signal }), /Fixture canceled/);
+        return credential;
+      } } }
+    }] } });
+    const { loginProvider, providerAuthPath } = await import("./dist/provider-auth.js");
+    await loginProvider("fixture-oauth");
+    assert.deepEqual(JSON.parse(await readFile(providerAuthPath(), "utf8")), { "fixture-oauth": credential });
+    assert.equal((await stat(providerAuthPath())).mode & 0o777, 0o600);
+    assert.equal(closed, true);
+  `;
+  execFileSync(process.execPath, ["--experimental-test-module-mocks", "--input-type=module", "-e", script], {
+    cwd: path.resolve(import.meta.dirname, ".."),
+    env: { ...process.env, FLOUNDER_AGENT_DIR: root, FLOUNDER_DISABLE_PI_AUTH_IMPORT: "1" },
+    stdio: "pipe",
+  });
+});

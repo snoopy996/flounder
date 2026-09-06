@@ -5575,6 +5575,10 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     assert.equal(codexDefault.model, "gpt-5.6-sol");
     assert.equal(codexDefault.baseModel, null);
     assert.equal(codexDefault.thinking, "xhigh");
+    const astraStarter = seeded.find((p) => p.name === "openai-codex · gpt-6-astra · medium");
+    assert.ok(astraStarter, "expected an optional Astra medium starter profile");
+    assert.equal(astraStarter.model, "gpt-6-astra");
+    assert.equal(astraStarter.thinking, "medium");
     const productSettings = await json(await fetch(base + "/api/settings/runtime"));
     assert.deepEqual(productSettings, { defaultProviderProfileId: codexDefault.id, source: "product" });
     const invalidDefault = await fetch(base + "/api/settings/runtime", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProviderProfileId: "1" }) });
@@ -5593,9 +5597,9 @@ test("api: provider profiles — seed + CRUD + per-phase roles; pi discovery", a
     const discoveredModels = (await json(await fetch(base + "/api/pi/models/openai-codex"))).models;
     assert.ok(discoveredModels.length >= 1, "expected pi model discovery");
     assert.ok(discoveredModels.every((m) => Array.isArray(m.thinkingLevels) && m.thinkingLevels.length >= 1));
-    const gpt56sol = discoveredModels.find((m) => m.id === "gpt-5.6-sol");
-    assert.ok(gpt56sol, "the pinned pi runtime must expose the default gpt-5.6-sol model");
-    assert.ok(gpt56sol.thinkingLevels.includes("xhigh"), "gpt-5.6-sol should expose xhigh through pi metadata");
+    const astra = discoveredModels.find((m) => m.id === "gpt-6-astra");
+    assert.ok(astra, "the pinned pi runtime must expose the Astra model");
+    assert.ok(astra.thinkingLevels.includes("medium"), "Astra should expose medium through pi metadata");
 
     // Unknown pi model ids must declare a known compatibility base. The saved
     // definition is delivered in the selected daemon's job instead of requiring

@@ -794,9 +794,10 @@ export function startUiServer(options: UiServerOptions = {}): ReturnType<typeof 
     throw new Error("Refusing to bind flounder ui to a non-loopback host without operator auth. Set FLOUNDER_UI_TOKEN and send Authorization: Bearer <token> for control-plane API access.");
   }
   const store = MetadataStore.openForOutput(out);
-  // Seed a couple of starter profiles so a fresh install has something to select (no-op if any exist).
+  // Seed starter profiles so a fresh install has something to select (no-op if any exist).
   store.seedProviders([
     { name: `openai-codex · ${DEFAULT_AUDIT_MODEL} · xhigh`, provider: "openai-codex", model: DEFAULT_AUDIT_MODEL, thinking: "xhigh" },
+    { name: "openai-codex · gpt-6-astra · medium", provider: "openai-codex", model: "gpt-6-astra", thinking: "medium" },
     { name: "claude-code · opus 4.8 max", provider: "claude-code", model: "claude-opus-4-8", thinking: "xhigh" },
   ]);
   const artifactReconciled = reconcileSuccessfulArtifactRuns(store);

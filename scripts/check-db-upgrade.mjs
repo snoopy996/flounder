@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -22,7 +22,14 @@ try {
   await execFileAsync("git", ["archive", "--format=tar", `--output=${archive}`, tag], { cwd: root, maxBuffer: 50 * 1024 * 1024 });
   await execFileAsync("tar", ["-xf", archive, "-C", release], { cwd: root });
   await symlink(path.join(root, "node_modules"), path.join(release, "node_modules"), "dir");
-  await execFileAsync(process.execPath, [path.join(root, "node_modules", "typescript", "bin", "tsc"), "-p", path.join(release, "tsconfig.json")], {
+  // Compile only the released database and its dependencies. The historical
+  // agent runtime may not typecheck against the current pi dependency APIs.
+  const dbConfig = path.join(release, "tsconfig.db-upgrade.json");
+  await writeFile(dbConfig, JSON.stringify({
+    extends: "./tsconfig.json",
+    include: ["src/db/store.ts"],
+  }));
+  await execFileAsync(process.execPath, [path.join(root, "node_modules", "typescript", "bin", "tsc"), "-p", dbConfig], {
     cwd: release,
     maxBuffer: 20 * 1024 * 1024,
   });
