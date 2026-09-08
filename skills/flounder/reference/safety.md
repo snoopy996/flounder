@@ -87,3 +87,20 @@ dependency folders.
 Generated reports intended for disclosure should use repository-relative paths
 or explicit placeholders, include only scoped evidence, and exclude private run
 material unless explicitly reviewed for publication.
+
+## Evidence Boundary And Submission Advice
+
+Keep four axes separate: mandatory program compliance, the technical evidence
+boundary, submission advice, and reward/duplicate adjudication risk. A
+`reproduced` row must record whether execution was source-only local,
+local integration, a local fork, or the real published target. Official terms
+may accept pinned source-only evidence; never invent a live-deployment gate for
+that engagement. An unknown private duplicate or award amount is not itself a
+failed technical confirmation or a failed mandatory submission term.
+
+Attacker reachability, the claimed end-to-end effect, and impact bounds still
+require evidence. Privileged access alone proves neither exploitability nor
+safety. Preserve current-state/control evidence and distinguish a conditional
+mechanism from a currently reproduced attack. `submit-candidate` is advice,
+not authorization to disclose. Submission/disclosure requires the user's
+explicit authorization and the appropriate private venue.

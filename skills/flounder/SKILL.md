@@ -68,7 +68,7 @@ Choose the mode from the user's intent before launching anything:
 | "Do a blind audit / test Flounder's capability / no hints" | Blind capability audit | Recommended: `flounder run <project-or-repo-or-package-link>` or a dashboard project with a factual target clue. If source is already staged or external preparation is explicitly unwanted, use `flounder run --source <paths...> --build-root <root>`. | Do not add incident docs, known bug names, exploit theories, or answer-bearing corpus. Official target docs are allowed only as target material, not as a hidden answer. |
 | "Here is a suspicious tx/address; find the hack/root cause" | Incident investigation | `flounder run <tx-or-address-or-incident-link>` | Treat the clue as evidence, not as proof. Prepare may fetch chain/source data; confirm by local fork/read-only reproduction only. |
 | "Audit this project/repo openly like a white-hat researcher" | Open-world public-source audit | Create a project with source paths when available plus a task/clue naming the project, bounty, repo, package, or deployment, then Run. | Let Prepare collect official docs, scope, deployments, and provenance. Do not use private or answer-bearing material. |
-| "Audit this normal bounty / should we submit to this bounty?" | Normal bug bounty | Project with `engagement.kind="bug-bounty"`, source/build/corpus paths when available, and a task/clue naming the public or private program scope. | Keep real-target Confirm when a live target exists. Submit only reproduced or locally confirmed source findings that pass scope, duplicate, known-issue, impact, and payout-readiness gates. |
+| "Audit this normal bounty / should we submit to this bounty?" | Normal bug bounty | Project with `engagement.kind="bug-bounty"`, source/build/corpus paths when available, and a task/clue naming the public or private program scope. | Keep real-target Confirm when a live target exists. Submit only execution-backed findings meeting official scope, evidence, and mandatory submission terms; record private duplicate and reward uncertainty separately. |
 | "Start this contest / maximize contest bounty speed" | Bug bounty contest | Project with `engagement.kind="bug-bounty-contest"` and contest strategy such as `batchScopes`, `digConcurrency`, `skipRealTargetConfirm`, and `appendMapWhenExhausted`. | Run short settled batches: verify/refute and report before opening the next batch. Source-only local confirmation may be enough when venue rules allow it, but suspected-only findings are not submissions. Use append-map, not remap, when expanding coverage. |
 
 When in doubt: if the user asks to measure Flounder's unaided recall, use blind
@@ -210,6 +210,7 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
    Curated target-specific images are available for common non-EVM audits:
 
    ```bash
+   npm run sandbox:rust:target -- --target <target-root> --execute
    npm run sandbox:cairo:build  # flounder-sandbox:cairo, Scarb + Starknet Foundry
    npm run sandbox:ton:build    # flounder-sandbox:ton, TON Blueprint + FunC/Tolk/Tact
    ```
@@ -224,12 +225,22 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
 
 5. Create or reuse a provider profile in Settings. A provider profile selects
    provider, model, and thinking level. Fresh stores seed `openai-codex ·
-   gpt-5.6-sol · xhigh` and `claude-code · opus 4.8 max`; the selected daemon still
+   gpt-5.6-sol · xhigh`, `openai-codex · gpt-6-astra · medium`, and
+   `claude-code · opus 4.8 max`; the selected daemon still
    needs local auth for every provider the project can use. A project can
    override the profile per phase: prepare, map, dig, confirm. **Set default**
    makes a profile the local default for new projects, evaluations, and
    API/CLI launches that omit an explicit model; **Use product default** restores
    the packaged `gpt-5.6-sol` fallback without changing existing projects.
+
+
+   The optional `openai-codex · gpt-6-astra · medium` starter profile does not replace
+   the Sol product default. Selecting Astra in the provider editor initializes
+   `medium` thinking; the operator may override it. Custom model ids use a known
+   same-provider **Compatibility base** for transport, context, tool, and reasoning
+   metadata. The job carries the definition to the selected daemon in memory;
+   credentials remain daemon-local, and no matching daemon-local pi models file is
+   needed. The provider must actually authorize the custom model id.
 
 6. Create or reuse a project. Set:
 

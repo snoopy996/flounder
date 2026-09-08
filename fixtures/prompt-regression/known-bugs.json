@@ -4,40 +4,28 @@
   "promptContract": {
     "requiredNeedles": [
       {
-        "needle": "what MUST this equal",
-        "capability": "trusted value binding"
+        "needle": "source-grounded evidence",
+        "capability": "evidence supports correctness claims"
       },
       {
-        "needle": "DESIGN INTENT",
-        "capability": "derive obligations from design material"
-      },
-      {
-        "needle": "wrong referent",
-        "capability": "do not accept a constraint to the wrong source value"
-      },
-      {
-        "needle": "canonical/range-checked",
-        "capability": "check canonical decoding and ranges at serialization boundaries"
-      },
-      {
-        "needle": "silent normalization",
-        "capability": "catch decoders that change the checked statement"
+        "needle": "scope_outcome.json",
+        "capability": "coverage handoff separate from findings"
       },
       {
         "needle": "ACTUAL vulnerable code path",
-        "capability": "execution confirmation must exercise the real path"
+        "capability": "execution confirms the real path"
       },
       {
         "needle": "only capabilities a real attacker actually has",
-        "capability": "attacker-real PoC construction"
+        "capability": "attacker-real construction"
       },
       {
-        "needle": "LEGITIMATE authority",
-        "capability": "trace effect sinks back to legitimate authority"
+        "needle": "purpose=confirm",
+        "capability": "execution gate"
       },
       {
-        "needle": "count/length/index",
-        "capability": "trace effect cardinality back to the same authority or statement"
+        "needle": "resource_requests.json",
+        "capability": "blocked execution is not a negative result"
       }
     ],
     "forbiddenDefaultPromptNeedles": [

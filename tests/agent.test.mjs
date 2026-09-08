@@ -825,10 +825,10 @@ test("prompt contract keeps attacker-faithful PoC rule on legacy and pi-session 
   ]) {
     assert.ok(prompt.includes(MAP_GRANULARITY_RULES), "map prompt should carry the shared granularity rules");
     assert.ok(prompt.includes("dig batch cap"), "map prompt should state that dig caps do not limit map inventory");
-    assert.ok(prompt.includes("10 inspect commands"), "map prompt should force an early scope checkpoint before broad exploration drifts too long");
+    assert.ok(prompt.includes("update it incrementally"), "map prompt should preserve early incremental checkpoints");
     assert.ok(prompt.includes("not completion") || prompt.includes("final completeness pass"), "map prompt should treat early scopes.json writes as checkpoints");
-    assert.ok(prompt.includes("expansion pass") || prompt.includes("final completeness pass"), "map prompt should require a final expansion pass before done");
-    assert.ok(prompt.includes("complete binding chain"), "map prompt should require value-binding scopes to cover producer, enforcement, and consumer lines");
+    assert.ok(prompt.includes("record any gaps"), "map output should report unresolved coverage");
+    assert.ok(prompt.includes("whole obligation"), "map region should include enough context for independent assessment");
     assert.ok(prompt.includes("0-100"), "map prompt should use a 100-point scope score scale");
   }
 
@@ -852,17 +852,12 @@ test("prompt contract keeps attacker-faithful PoC rule on legacy and pi-session 
     buildSessionPrompt({ cfg: defaultConfig(), fileManifest: "x.rs", verify: "claim" }),
   ];
   for (const prompt of verifyPrompts) {
-    assert.ok(prompt.includes("native build root") || prompt.includes("native workspace"), "verify should prefer native target workspaces over standalone harnesses");
-    assert.ok(prompt.includes("standalone PoC package"), "verify should constrain standalone PoC package use");
-    assert.ok(prompt.includes("purpose=build"), "verify should own dependency fetch/compile setup instead of requiring prepare to pre-warm everything");
-    assert.ok(prompt.includes("missing-registry-package"), "verify should avoid repeating missing registry-package failures");
-    assert.ok(prompt.includes("DNS failure"), "verify should avoid repeating network setup failures");
-    assert.ok(prompt.includes("setup blocker"), "verify should distinguish environment setup failures from false-positive refutations");
-    assert.ok(prompt.includes("emit done immediately"), "verify should stop after the selected claim has a verdict");
-    assert.ok(
-      prompt.includes("broader coverage") || prompt.includes("broader audit coverage") || prompt.includes("related bugs"),
-      "verify should not drift into open-ended audit coverage",
-    );
+    assert.ok(prompt.includes("copied build root"), "verify should expose prepared build capabilities");
+    assert.ok(prompt.includes("purpose=build"), "build work must not become confirmation");
+    assert.ok(prompt.includes("purpose=confirm"), "verify must require execution confirmation");
+    assert.ok(prompt.includes("UNRESOLVED"), "setup failure must not become refutation");
+    assert.ok(prompt.includes("ONE claim"), "verify should remain scoped to the selected claim");
+    assert.ok(prompt.includes("do not discover unrelated issues"), "verify must not drift into discovery");
   }
 
   const preparePrompt = buildSessionPrompt({ cfg: defaultConfig(), fileManifest: "(empty)", prepare: "Clue: official source" });
@@ -1804,12 +1799,8 @@ test("per-role model config: role entry overrides default overrides top-level, n
   assert.equal(digCfg.auditModel, "claude-opus-4-8");
 });
 
-test("deep mode: obligation-driven prompt enforces design-intent enumeration and pins a focus region", () => {
-  // The deep system prompt must carry the method that makes missing-constraint
-  // bugs visible: enumerate obligations from design intent, discharge each by the
-  // enforcing line, treat a constraint to the wrong referent / an absent constraint
-  // as the finding, and never clear on "looks standard".
-  for (const needle of ["obligation", "DESIGN INTENT", "ABSENCE is the finding", "wrong referent", "looks standard", "complete binding chain"]) {
+test("deep mode preserves the region, evidence bar, and model-owned method", () => {
+  for (const needle of ["non-limiting hint", "You own", "scope_outcome.json", "source-grounded evidence", "blockers explicit"]) {
     assert.ok(AUDIT_DEEP_SYSTEM.includes(needle), `deep system prompt missing: ${needle}`);
   }
   const tools = [];
@@ -1995,7 +1986,7 @@ test("legacy loop uses the synthesis prompt instead of falling back to breadth a
         calls.push(input);
         if (input.tag === "audit_finalize") return "[]";
         assert.match(input.system, /SYNTHESIS mode/);
-        assert.match(input.user, /sink-driven synthesis/i);
+        assert.match(input.user, /Choose the composition method/i);
         assert.match(input.user, /PER-SCOPE FINDINGS/);
         return JSON.stringify({ thought: "synthesis complete", done: true, summary: "done" });
       },

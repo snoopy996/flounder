@@ -16,6 +16,7 @@ provider, API, budget, output, and pi extension details.
 - [REST API](#rest-api)
 - [Outputs](#outputs)
 - [Pi Extension](#pi-extension)
+- [Local Storage](#local-storage)
 
 ## Product Surfaces
 
@@ -104,8 +105,8 @@ rules matter:
 
 - `standard`: default authorized review.
 - `bug-bounty`: normal bounty work; keep real-target Confirm when a live target
-  exists and gate reports on scope, duplicate, known-issue, impact, payout, and
-  disclosure readiness.
+  exists and gate reports on official scope, evidence, and mandatory submission
+  terms. Record private duplicate and reward uncertainty separately.
 - `bug-bounty-contest`: time-limited contest work; run short settled batches,
   optionally skip real-target Confirm when source-only rules allow it, and
   append-map novel scopes when the inventory is exhausted.
@@ -144,6 +145,36 @@ is done unless capped by launch config.
 | `--append-map`, `--expand-map` | Ask MAP to append novel scopes while preserving existing scope status |
 | `--append-map-seed <path>` | Add prior scope inventories as covered-reference material for append-map |
 
+### Coverage Controls
+
+| Option | Behavior |
+| --- | --- |
+| `--map-samples <n>` | Independent MAP inventories are unioned; singleton scopes are retained. Default 1. |
+| `--dig-samples <n>` | Independent DIG passes per scope. Default 1. |
+| `--dig-max-samples <n>` | Adaptive ceiling above the base sample count; extra passes require incomplete, uncertain, or disagreeing outcomes. Default 1. |
+| `--no-adaptive-dig` | Disable outcome-driven passes above `--dig-samples`. |
+| `--eager-prepare` | Warm the isolated toolchain after MAP, before DIG. Default off. |
+| `--dig-concurrency <n>` | Concurrent scopes, each with its own workspace and session. Default 1. |
+| `--verify-concurrency <n>` | Concurrent verification of findings in isolated workspaces. Default 2. |
+| `--continue-coverage` | With `continue`, explicitly open another mapped batch after the current round is settled. |
+
+Standard project coverage targets 30 audited project scopes; the inventory can
+contain more. `--max-scopes` caps a run's pending scope work; with
+`continue --coverage custom`, it specifies the custom coverage target. Scope
+coverage and model-turn budgets are different: map/dig turns remain unbounded
+unless explicitly capped. Repetition is sampling, not novel coverage.
+
+```bash
+flounder run --source ./src --build-root . --map-samples 2 --dig-samples 2 --dig-max-samples 3
+flounder continue --project <uuid> --continue-coverage
+```
+
+Inventories and memory are tied to the prepared-material fingerprint. Changed
+source starts fresh coverage; it must not inherit an old completion verdict.
+DIG writes coverage outcomes even when there is no finding, and SYNTHESIS can
+use their composition evidence. Missing outcomes or setup blockers remain
+visible coverage gaps rather than evidence of safety.
+
 ## Sandbox And Network
 
 | Flag | Meaning |
@@ -171,11 +202,14 @@ Build curated target-specific images when a bounty target needs native
 confirmation tools that are not in the baseline image:
 
 ```bash
+npm run sandbox:rust:target -- --target <target-root> --execute
 npm run sandbox:cairo:build  # flounder-sandbox:cairo, Scarb + Starknet Foundry
 npm run sandbox:ton:build    # flounder-sandbox:ton, TON Blueprint + FunC/Tolk/Tact
 ```
 
-Then pass the selected image explicitly:
+The Rust builder reads the target pin and prints the exact
+`flounder-sandbox:rust-<version>` image name. Pass that image explicitly for Rust
+audits. Then pass the selected image explicitly for other toolchains:
 
 ```bash
 flounder run --source ./src --build-root . --sandbox-image flounder-sandbox:cairo
@@ -222,8 +256,16 @@ make an explicit model selection. Resetting the preference restores the
 packaged `openai-codex · gpt-5.6-sol · xhigh` fallback; existing projects remain
 pinned to their saved profile.
 
-Fresh stores seed starter profiles named `openai-codex · gpt-5.6-sol · xhigh` and
-`claude-code · opus 4.8 max`.
+Fresh stores seed starter profiles named `openai-codex · gpt-5.6-sol · xhigh`,
+`openai-codex · gpt-6-astra · medium`, and `claude-code · opus 4.8 max`.
+
+The optional `openai-codex · gpt-6-astra · medium` starter profile does not replace
+the Sol product default. Selecting Astra in the provider editor initializes
+`medium` thinking; the operator may override it. Custom model ids use a known
+same-provider **Compatibility base** for transport, context, tool, and reasoning
+metadata. The job carries the definition to the selected daemon in memory;
+credentials remain daemon-local, and no matching daemon-local pi models file is
+needed. The provider must actually authorize the custom model id.
 
 ## REST API
 
@@ -367,3 +409,23 @@ When loaded through pi, Flounder registers:
 
 The dashboard/API path is still the recommended agent surface for project,
 daemon, provider, live activity, and finding lifecycle management.
+
+## Local Storage
+
+Run storage commands on the machine owning the files; a control-plane report
+cannot measure a remote daemon's disk.
+
+```bash
+flounder storage report --json
+flounder storage clean --project <uuid>
+flounder storage clean --project <uuid> --apply
+flounder storage compact
+flounder storage compact --apply
+```
+
+`clean` previews by default. Applying it removes a terminal project's local
+artifacts, history, and configured workspace while preserving database records;
+those retained rows do not restore deleted PoCs or transcripts. Active work is
+refused. `compact` only removes paired per-command inspection copies from
+terminal runs, retaining reports, findings, PoCs, and transcripts. Review the
+preview and the user's retention intent before applying cleanup.
