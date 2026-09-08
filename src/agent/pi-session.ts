@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import type { AuditorConfig } from "../config.js";
 import type { RunLogger } from "../trace/logger.js";
 import type { LlmClient } from "../types.js";
-import { AUDIT_CONFIRM_SYSTEM, AUDIT_PREPARE_SYSTEM, DISCOVERY_BACKLOG_RULES, MAP_GRANULARITY_RULES, MAP_SCORING_RULES, POC_TRUST_RULE, SCOPE_OUTCOME_RULES, renderEngagementContext, type TranscriptStep } from "./prompts.js";
+import { AUDIT_MISSION, DEEP_MISSION, MAP_MISSION, SYNTHESIS_MISSION, VERIFY_MISSION, AUDIT_CONFIRM_SYSTEM, AUDIT_PREPARE_SYSTEM, DISCOVERY_BACKLOG_RULES, MAP_GRANULARITY_RULES, POC_TRUST_RULE, SCOPE_OUTCOME_RULES, renderEngagementContext, type TranscriptStep } from "./prompts.js";
 import { describeAction, readScratchScopes, scratchHasFindings, scratchHasFindingsArtifact, type AgentTool, type ToolContext } from "./tools.js";
 import { SCOPE_OUTCOME_FILE, scratchHasScopeOutcome } from "./scope-outcomes.js";
 import { flounderAgentDir } from "../provider-auth.js";
@@ -761,7 +761,7 @@ ${input.deep && !input.synthesize && !input.verify ? `\n${SCOPE_OUTCOME_RULES}` 
 Use the provided tools to investigate:
 - read: read loaded source/corpus or files you create in the sandbox.
 - write / edit: create or modify your own test/scratch files inside the copied workspace. You CANNOT modify the target source under audit — write tests as new files; to show a fix, declare it in the finding's "fix" field and the framework applies it during confirmation.
-- bash: run one local command. Use purpose="inspect" to explore (ls/find/rg/cat/sed/jq), check tool availability (which nargo), and read local JSON (jq . file or jq length file). Use purpose="build" for dependency resolution or compilation that makes the workspace buildable (cargo build, cmake -S/-B/--build, ninja, make, forge build, npm install, …); it is not confirmation-eligible. For CMake, prefer generator-neutral commands like cmake -S <src> -B <build> then cmake --build <build> --parallel 2 on large targets; pass -G Ninja only after ninja --version succeeds, and keep parallelism bounded. Use purpose="confirm" to PROVE a bug with a real local test runner (cargo test, ctest, forge test, go test, node --test, pytest, …) and declared success_patterns. A model-written standalone test that does not import pristine target source will run, but it cannot become confirmation-eligible.
+- bash: run one local command. Use purpose="inspect" to explore (ls/find/rg/cat/sed/jq), check tool availability (which nargo), and read local JSON (jq . file or jq length file). Use purpose="build" for dependency resolution or compilation that makes the workspace buildable (cargo build, cmake -S/-B/--build, ninja, make, forge build, npm install, …); it is not confirmation-eligible. Use purpose="confirm" to PROVE a bug with a real local test runner (cargo test, ctest, forge test, go test, node --test, pytest, …) and declared success_patterns. A model-written standalone test that does not import pristine target source will run, but it cannot become confirmation-eligible.
 ${reportingBlock}
 
 Target evidence boundary:
@@ -785,16 +785,16 @@ ${input.fileManifest}
 
 ${input.map
     ? input.mapExistingScopesPath && input.mapExistingScopesCount
-      ? `Read ${input.mapExistingScopesPath} first. It contains the existing ${input.mapExistingScopesCount} scope(s) that must be preserved and not duplicated. Apply the three lenses to find coverage gaps beyond that file, and write scopes.json early with ONLY newly discovered non-duplicate scopes (each: id, obligation, region, lenses, exposure, difficulty, score, why). Do not deep-dive or prove bugs in this phase; coverage over depth. Emit done only after a final expansion pass for omitted scopes not already represented in the existing inventory.
+      ? `Read ${input.mapExistingScopesPath} first. It contains the existing ${input.mapExistingScopesCount} scope(s) that must be preserved and not duplicated. Choose your enumeration method to find coverage gaps beyond that file, and write scopes.json early with ONLY newly discovered non-duplicate scopes (each: id, obligation, region, lenses, exposure, difficulty, score, why). Do not deep-dive or prove bugs in this phase; coverage over depth. Before done, account for omitted scopes and record any unresolved coverage gaps.
 
 ${MAP_GRANULARITY_RULES}`
-      : `Apply the three lenses and write scopes.json early as a checkpoint, then keep expanding and splitting it until it is the COMPLETE scope inventory (each: id, obligation, region, lenses, exposure, difficulty, score, why). Do not deep-dive or prove bugs in this phase; coverage over depth. Emit done only after a final completeness pass over the loaded first-party tree.
+      : `Choose your enumeration method and write scopes.json early as a checkpoint, then keep expanding and splitting it until it is the COMPLETE scope inventory (each: id, obligation, region, lenses, exposure, difficulty, score, why). Do not deep-dive or prove bugs in this phase; coverage over depth. Before done, account for the loaded scope and record any unresolved coverage gaps.
 
 ${MAP_GRANULARITY_RULES}`
     : input.synthesize
-      ? "Begin the sink-driven synthesis: enumerate the security-critical sinks, trace each backward across components for an input that arrives un-bound to a legitimate authority, compose the cross-component chains, and write findings.json (each composed exploit with its entry → unbound input → sink links and confirmation). Do not just re-list the per-scope findings."
+      ? "Choose the composition method and write findings.json with evidence for each claimed end-to-end effect. Do not merely repeat per-scope findings."
       : input.deep
-        ? `Begin the obligation-driven method: model the system, rank and commit to the most soundness-critical region (unless one is pinned above), then enumerate its obligations from design intent and discharge each by naming the enforcing line or flagging its absence. Write only UNMET or uncertain obligations with a concrete missing edge to findings.json; discharged obligations are not findings. Persist the separate ${SCOPE_OUTCOME_FILE} coverage handoff before done. Do not wrap up while obligations remain unchecked.`
+        ? `Audit the pinned or model-chosen region. Write actionable claims to findings.json; discharged obligations are not findings. Persist the separate ${SCOPE_OUTCOME_FILE} coverage handoff with checked obligations, evidence, and unresolved blockers before done.`
         : "Begin the audit. When you have investigated thoroughly, write findings.json with only actionable suspected/confirmed bugs (or [] if none), then stop."}`;
 }
 
@@ -862,7 +862,7 @@ ${input.memoryHint && input.memoryHint.trim().length > 0 ? input.memoryHint.trim
 Loaded source files:
 ${input.fileManifest}
 
-Consolidate the findings into distinct bugs, reproduce each distinct bug against real ground truth, classify the engagement policy, adjudicate scope/live-impact/known-issue/payout gates when the policy is bounty-like, write impact_inventory.json for bounty-like reproduced rows, check novelty/corroboration online (leads only, never proof), then write confirm_decision.json and emit done.`;
+Complete execution-grounded reproduction, distinctness, novelty, and the submission gates required by official engagement terms in the order you choose. Write impact_inventory.json only when live exposure is a required gate, checkpoint confirm_decision.json, and emit done with unresolved evidence explicit.`;
 }
 
 function buildReportFinalizePrompt(reportSeed: string, missingFiles: string[]): string {
@@ -987,7 +987,7 @@ function verifyIntro(claim: string): string {
 The suspected finding to verify:
 ${claim}
 
-Method: (1) read the cited code + its callers/callees/modifiers, and check whether the claimed-unconstrained value is actually bound elsewhere (a verified hash/proof, a require, a check) — many "X is unconstrained" claims are false. At decode/serialization/proof boundaries, also check whether the value is length-checked, canonical/range-checked, and interpreted in the correct domain/modulus/units rather than silently normalized into a different statement. (2) Write a NEW PoC test in the sandbox that exercises the ACTUAL code path and triggers the claimed bug; prefer adding it inside the target's native build root or package test tree so existing manifests, lockfiles, local patches, and prepared caches are reused. Use purpose=build when dependency fetch or compilation is needed; package registry/network setup belongs here, not in prepare, and it is not confirmation-eligible. Create a standalone PoC package only when it can import pristine target source without inventing a new dependency-resolution problem. For Rust, if the staged package has a Cargo.lock newer than installed Cargo understands, try the native manifest with the needed Cargo compatibility flag (for example -Znext-lockfile-bump) before making a fresh harness. Do not keep retrying the same missing-registry-package or DNS failure; switch back to the native workspace or record a setup blocker without upgrading or refuting the finding. Run the final proof with purpose=confirm and success_patterns; that final proof must stay local/no-live-network. (3) Verdict in findings.json: if the PoC passes and triggers the bug, record the finding at its true severity citing command_id, and supply fix_patch + patched_success_patterns for differential confirmation; if after genuine effort it cannot reproduce because the claim is mitigated/false, record ONE finding of severity "info" whose title starts "REFUTED:" with evidence citing the exact mitigating line. After writing the verdict for this ONE claim, emit done immediately. Do not keep auditing for stronger variants, related bugs, extra affected surfaces, or broader coverage; those belong to a separate dig/synthesis run. Never confirm by assertion — default to refuting unless an executable PoC proves it.`;
+${VERIFY_MISSION}`;
 }
 
 function mapIntro(existingScopesPath?: string, existingScopesCount?: number): string {
@@ -997,57 +997,28 @@ function mapIntro(existingScopesPath?: string, existingScopesCount?: number): st
   return `You are an autonomous white-hat security auditor doing the MAP phase: enumerate the COMPLETE set of audit SCOPES for this target. You are NOT finding or proving bugs yet — a later phase deep-audits each scope. Your job is COVERAGE, not a ranked shortlist that drops things.
 ${appendMapBlock}
 
-Apply THREE lenses (general method, not a hint about this target); be exhaustive, over-list rather than silently omit:
-1. SPEC CONDITIONS — read the design/spec material under corpus/ (and higher-level code) and list every security statement the system must enforce; each maps to the code that enforces it. A stated condition with NO enforcing code is itself a scope.
-2. VALUE / ASSET FLOW — every place value or authority is created, destroyed, transferred, or authorized, and the gate on each. Count/length/index values that decide how many asset, message, state-transition, or proof/public-input records are processed are their own scopes; each must be bound to the same legitimate authority, commitment, or proof statement as the records it gates.
-3. TRUSTED-BUT-UNBOUND INPUTS — every attacker-controlled value (witnessed/decoded/assigned/external) later logic trusts; the scope is "what binds this to its required value?". A trusted value with no visible binding is the highest-value scope.
-
-Do not judge importance by gut feel or "looks like a bug". A region whose link to the asset is indirect (e.g. a key/address-integrity check that only matters because breaking it enables a later double-spend) MUST still be listed — those are exactly what a rank-and-pick misses.
-
-${MAP_SCORING_RULES}
-
-${MAP_GRANULARITY_RULES}
-
-${DISCOVERY_BACKLOG_RULES}
-
-Write scopes.json at the workspace root EARLY — after the initial directory/entrypoint scan, and no later than 10 inspect commands — then UPDATE it (rewrite the full array) as you find more, so a complete-as-of-now inventory survives if you run out of budget. The first write is a checkpoint, not completion. Do not stop at 30 scopes or any dig-batch cap; those caps apply only after mapping. It is a JSON array of {"id","obligation","region":"file:lines","lenses":[...],"exposure","difficulty","score","why"}. On a large codebase do NOT read every file first — use bash (ls/grep for public/external entrypoints, state writes, value transfers) to enumerate, and spend little per scope (broad and shallow). Before done, make a final expansion pass over the first-party tree, split broad scopes, update scopes.json, and only then stop. You CANNOT modify the target source.`;
+${MAP_MISSION}`;
 }
 
 function breadthIntro(): string {
   return `You are an autonomous white-hat security auditor working on AUTHORIZED source code that has been copied into your working directory.
 Your goal is to find real, exploitable, high-impact security vulnerabilities and to prove them.
 
-You are in full control of the investigation. There is no fixed checklist and no required bug taxonomy. Decide for yourself what to read, what to suspect, which hypotheses to test, and when to stop. Use the full depth of your own security knowledge: form a model of what the code must guarantee (its invariants and trust boundaries), then look for where the implementation lets an attacker break that guarantee.
-
-General method (applies to any code, not a hint about this target): for every value the code trusts — especially anything assigned, witnessed, decoded, or taken as input — explicitly ask "what MUST this equal for the security property to hold, and is there a visible check/constraint that enforces it?" A value later logic relies on but nothing binds to its required value is a classic bug. Reaching a file is not auditing it: when a component looks standard, state the exact invariant it must satisfy and find the line that enforces it before concluding it is correct. At serialization, ABI, FFI, proof, and transcript boundaries, discharge the one-to-one interpretation obligation explicitly: exact length, canonical/range-checked encoding, correct domain/modulus/units, and no silent normalization that changes the statement the rest of the code believes it is checking. When a count, length, index, or loop bound decides how many asset, message, state-transition, or proof/public-input records are processed, trace that cardinality back to the same legitimate authority, commitment, or proof statement as the records it gates. Trust nothing external as ground truth: agreement with a reference implementation, an upstream version, a spec, a book, or a prior audit is NOT evidence of correctness — the reference can carry the same bug, and some bugs live in the canonical implementation itself. Never clear a component because it "matches upstream", looks "standard", or matches the spec; clear it only by naming the exact invariant and the constraint that enforces it, or by an executable counterexample. Reason from the security property itself, not from what the materials say the code does. Record credible suspicions to findings.json as hypotheses (with location and why) as you go — do not hold them only in your head.`;
+${AUDIT_MISSION}`;
 }
 
 function deepIntro(deepFocus?: string): string {
   const focus = deepFocus && deepFocus.trim().length > 0 ? deepFocus.trim() : "";
   return `You are an autonomous white-hat security auditor performing a DEEP, NARROW-SCOPE audit of AUTHORIZED source code copied into your working directory.
-This is NOT a breadth survey. You are auditing a small, high-criticality slice to a much higher standard of rigor: either prove it enforces every security property it is responsible for, or find the exact point where it does not.
-
-${focus ? `Focus region (pinned): ${focus}. Audit this region.` : "No focus is pinned: first model the system and RANK the most soundness-critical region (a region is critical when a top-level balance/supply/authorization/uniqueness/integrity property the whole system depends on is ENFORCED there), commit your budget to it, and keep the ranked shortlist in the transcript. Do not write shortlist notes to findings.json."}
-
-Obligation-driven method (general, not a hint about this target):
-- ENUMERATE obligations from DESIGN INTENT, not the code's appearance. Read the design material under corpus/ and the higher-level code that USES this region to determine what it is SUPPOSED to guarantee. Write each obligation explicitly as "value/relationship X must equal/hold Y for property P". The code cannot tell you what it should enforce; the intent does.
-- DISCHARGE each obligation one at a time. Finding that "a constraint exists" is NOT discharge: state exactly what the constraint binds the value to and confirm that referent is the value the obligation actually requires — not merely an adjacent/internal value, and not merely a relationship among witnessed values when the property names a specific trusted source. A value bound to the wrong referent leaves the obligation UNMET.
-- At serialization, ABI, FFI, proof, and transcript boundaries, discharge includes one-to-one interpretation: exact length, canonical/range-checked encoding, correct domain/modulus/units, and no silent normalization that changes the statement being checked.
-- When a count, length, index, or loop bound decides how many asset, message, state-transition, or proof/public-input records are processed, discharge it separately: it must be bound to the same legitimate authority, commitment, or proof statement as the records it gates.
-- A MISSING enforcing constraint is the finding. Missing-constraint bugs look like ordinary assignment/witnessing on every line — reason from the obligation, never from whether the code "looks standard", "matches upstream", or is "the canonical implementation" (the reference can carry the same bug; some bugs live in the canonical code itself).
-- Write only UNMET or uncertain obligations with a concrete missing edge to findings.json. Discharged-with-line obligations are reasoning, not findings; keep them in the transcript and do not write them to findings.json.`;
+${focus ? `Focus region (pinned): ${focus}. Audit this region.` : "No focus is pinned; choose a region from the authorized source."}
+${AUDIT_MISSION}
+${DEEP_MISSION}`;
 }
 
 function synthesizeIntro(seed: string): string {
   return `You are an autonomous white-hat security auditor in SYNTHESIS mode on AUTHORIZED source code. The per-scope deep audit has finished; each scope was audited IN ISOLATION. Your job is to find exploits that NO single scope could see — bugs that exist only in the COMPOSITION of multiple components, where each part can look acceptable on its own.
 
-Sink-driven method (general, not a hint about this target):
-1. ENUMERATE the security-critical SINKS — every place the system produces an irreversible, privileged effect: value or authority leaves the system (funds out, mint, burn, role/owner/allowance change), or a guarded state transition commits. A sink is critical wherever it lives, in any component or language.
-2. For EACH sink, trace BACKWARD across components every value that decides the effect — recipient, amount, asset, the caller, any count/length/index that decides how many records or effects are processed, and whatever is supposed to AUTHORIZE it (a proof, a signature, a balance, on-chain state). Follow each to where it is established and ask: is it bound to a LEGITIMATE authority along the WHOLE path to the sink? A value constrained inside one component but arriving UN-bound at the sink — or a sink reachable by a caller/path that never proves the authority the effect requires — is the bug, even when every individual component looked correct in its own scope.
-3. A "by-design" / emergency / escape / admin / fallback / privileged path is itself a trust boundary, never a discharge: ask what effect it grants and whether each effect is bound to a legitimate authority. "This path is intended to exist" is NOT a reason it is safe; "this parameter cannot be forged" does NOT clear the path if the path still authorizes the effect.
-4. COMPOSE the chain: who can reach the sink (entry + authorization) + the unbound or under-constrained input it carries + the sink effect = ONE concrete attacker action. The links may come from DIFFERENT scopes below; assembling them across scope boundaries is the entire point of this phase.
-
-Confirm at the SINK, not the link: a composition finding is confirmed-executable only when a PoC demonstrates the END effect — funds move, an invariant breaks, or an unauthorized state change commits — not when one intermediate constraint is shown missing. Where the full chain genuinely cannot be built locally (e.g. it needs a real proof/circuit/oracle), record a "suspected" finding that names the exact chain (entry → unbound input → sink), each link's file:line, and the attacker impact — a surfaced cross-component chain beats a silently dropped one.
+${SYNTHESIS_MISSION}
 
 Prior per-scope audit (the material to compose — do NOT just re-list it; find what its pieces ENABLE together):
 ${seed}`;

@@ -61,8 +61,8 @@ do not change the model-owned audit strategy.
 
 - `standard`: default authorized review.
 - `bug-bounty`: normal bounty work. Keep real-target Confirm in the path when a
-  live target exists, and gate reports on scope, duplicate, known-issue, impact,
-  payout, and disclosure readiness.
+  live target exists, and gate reports on official scope, evidence, and mandatory submission
+  terms. Record private duplicate and reward uncertainty separately.
 - `bug-bounty-contest`: time-limited contest work. Favor short
   verify/refute/report batches, allow source-only local confirmation when venue
   rules permit skipping real-target confirmation, and append-map novel scopes
@@ -196,3 +196,20 @@ Run artifacts include `audit_scopes.json`, `audit_findings.json`,
 `events.jsonl`, `audit_transcript.json`, `summary.json`, and report files.
 Confirm artifacts include `confirm_provenance.json`, `confirm_decision.json`,
 `confirm_report.md`, and `confirm_equivalence.json`.
+
+## Evidence Boundary And Submission Advice
+
+Keep four axes separate: mandatory program compliance, the technical evidence
+boundary, submission advice, and reward/duplicate adjudication risk. A
+`reproduced` row must record whether execution was source-only local,
+local integration, a local fork, or the real published target. Official terms
+may accept pinned source-only evidence; never invent a live-deployment gate for
+that engagement. An unknown private duplicate or award amount is not itself a
+failed technical confirmation or a failed mandatory submission term.
+
+Attacker reachability, the claimed end-to-end effect, and impact bounds still
+require evidence. Privileged access alone proves neither exploitability nor
+safety. Preserve current-state/control evidence and distinguish a conditional
+mechanism from a currently reproduced attack. `submit-candidate` is advice,
+not authorization to disclose. Submission/disclosure requires the user's
+explicit authorization and the appropriate private venue.

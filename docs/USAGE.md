@@ -79,6 +79,36 @@ Findings use these audit statuses:
 
 The framework checks the recorded command result. The model cannot upgrade a finding by assertion. Local execution must stay local: unit tests, fixtures, regtest/devnet, forked local nodes, or isolated harnesses only.
 
+### Coverage Controls
+
+| Option | Behavior |
+| --- | --- |
+| `--map-samples <n>` | Independent MAP inventories are unioned; singleton scopes are retained. Default 1. |
+| `--dig-samples <n>` | Independent DIG passes per scope. Default 1. |
+| `--dig-max-samples <n>` | Adaptive ceiling above the base sample count; extra passes require incomplete, uncertain, or disagreeing outcomes. Default 1. |
+| `--no-adaptive-dig` | Disable outcome-driven passes above `--dig-samples`. |
+| `--eager-prepare` | Warm the isolated toolchain after MAP, before DIG. Default off. |
+| `--dig-concurrency <n>` | Concurrent scopes, each with its own workspace and session. Default 1. |
+| `--verify-concurrency <n>` | Concurrent verification of findings in isolated workspaces. Default 2. |
+| `--continue-coverage` | With `continue`, explicitly open another mapped batch after the current round is settled. |
+
+Standard project coverage targets 30 audited project scopes; the inventory can
+contain more. `--max-scopes` caps a run's pending scope work; with
+`continue --coverage custom`, it specifies the custom coverage target. Scope
+coverage and model-turn budgets are different: map/dig turns remain unbounded
+unless explicitly capped. Repetition is sampling, not novel coverage.
+
+```bash
+flounder run --source ./src --build-root . --map-samples 2 --dig-samples 2 --dig-max-samples 3
+flounder continue --project <uuid> --continue-coverage
+```
+
+Inventories and memory are tied to the prepared-material fingerprint. Changed
+source starts fresh coverage; it must not inherit an old completion verdict.
+DIG writes coverage outcomes even when there is no finding, and SYNTHESIS can
+use their composition evidence. Missing outcomes or setup blockers remain
+visible coverage gaps rather than evidence of safety.
+
 ## Install
 
 ```bash
@@ -490,8 +520,8 @@ work will be judged:
 - `bug-bounty`: normal public or private bug-bounty work. Prepare may collect
   program scope, deployments, provenance, and known-issue signals. Real-target
   Confirm remains expected when a live target exists, and reports should wait
-  for reproduced or locally confirmed findings that pass scope, novelty,
-  duplicate, known-issue, impact, and payout-readiness gates.
+  for findings meeting the official evidence minimum and mandatory program
+  terms. Record private duplicate and award uncertainty separately.
 - `bug-bounty-contest`: time-limited contest work. The project can run short
   settled batches so candidates move through verify/refute/report quickly before
   opening the next scope batch. Contest strategy supports `batchScopes`,

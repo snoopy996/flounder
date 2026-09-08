@@ -201,10 +201,14 @@ test("default prompts retain the generic capabilities needed by known-bug regres
   }
 });
 
-test("confirm prompt bounds novelty search after reproduction", () => {
-  assert.match(AUDIT_CONFIRM_SYSTEM, /Novelty checking is bounded/i);
-  assert.match(AUDIT_CONFIRM_SYSTEM, /at most THREE targeted public checks/i);
-  assert.match(AUDIT_CONFIRM_SYSTEM, /do not keep searching/i);
+test("workflow prompts leave strategy and novelty effort model-owned", () => {
+  const corpus = defaultPromptCorpus();
+  for (const schedule of [/apply (?:the )?three lenses/i, /at most THREE targeted public checks/i, /Sink-driven method/i, /-Znext-lockfile-bump/, /Method: \(1\)/]) {
+    assert.doesNotMatch(corpus, schedule);
+  }
+  assert.match(AUDIT_CONFIRM_SYSTEM, /You choose the novelty sources, searches, and effort/);
+  assert.match(AUDIT_CONFIRM_SYSTEM, /incomplete search must not be presented as established novelty/);
+  assert.match(AUDIT_VERIFY_SYSTEM, /An unavailable environment or a failed attempt is not refutation/);
 });
 
 test("confirm prompt makes bounty adjudication platform-neutral and conservative", () => {

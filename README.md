@@ -291,6 +291,17 @@ curl -X PATCH http://127.0.0.1:4500/api/findings/123/tracking \
   -d '{"status":"open"}'
 ```
 
+### Resumable Coverage And Sampling
+
+Use `--map-samples` for independent inventory enumeration, `--dig-samples` for
+independent deep passes, and `--dig-max-samples` for an adaptive ceiling.
+`--no-adaptive-dig` disables extra outcome-driven passes. `--eager-prepare`
+checks the isolated toolchain before digging. `--verify-concurrency` controls
+parallel finding verification. After settling a round,
+`flounder continue --project <uuid> --continue-coverage` opens another mapped
+batch. See [Coverage Controls](docs/USAGE.md#coverage-controls) for defaults,
+material fingerprinting, and the distinction between sampling and new coverage.
+
 ## Sandbox Runtime
 
 Real audits execute model-generated commands through the sandbox. The safe default is `--sandbox-backend auto`: on Apple silicon macOS it first uses Apple's `container` runtime when the selected image and sealed network are ready; otherwise it uses Docker-backed OCI when the image is available. If no sandbox engine is ready, it fails closed instead of silently running tests on the host.
@@ -364,6 +375,7 @@ You can run that end to end or drive each phase directly:
 | `flounder config list/get/set/unset/path` | read or write persisted CLI defaults |
 | `flounder storage report [--json]` | show disk pressure and per-project local storage |
 | `flounder storage clean --project <uuid\|name> [--apply]` | preview or apply metadata-only retention cleanup |
+| `flounder storage compact [--apply]` | preview or remove terminal-run inspection copies |
 | `flounder ui [--port <n>] [--host <h>] [--no-daemon]` | start the local control-plane dashboard, REST API, store, and optional co-located daemon |
 
 Formal report generation is available from the dashboard More actions menu or

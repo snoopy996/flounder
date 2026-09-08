@@ -55,6 +55,9 @@ jobs:
       - name: Database upgrade contract
         run: npm run check:db-upgrade:dist
 
+      - name: Installed package contract
+        run: npm run check:package:dist
+
       - name: Public-surface scan
         run: npm run check:public
 
