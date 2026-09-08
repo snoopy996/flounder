@@ -41,6 +41,11 @@ flounder daemon provider login openai-codex
 flounder daemon provider check openai-codex
 ```
 
+For choosing models, API-key setup (including DeepSeek and GLM Coding Plan),
+and missing-model troubleshooting, read [Model setup](models.md). `login` starts
+OAuth or imports existing pi credentials; it does not collect a new API key.
+`check` verifies local credential presence, not a successful remote API call.
+
 Provider auth is daemon-local. The server stores provider profiles and queues
 jobs; the daemon executes jobs and owns credentials. For `openai-codex`, run
 `flounder daemon provider login openai-codex` to trigger the user-facing OAuth

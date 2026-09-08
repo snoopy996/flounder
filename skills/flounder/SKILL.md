@@ -31,6 +31,7 @@ gates.
 | File | When to read |
 | --- | --- |
 | `SKILL.md` | Always after this skill triggers. It is the operating playbook. |
+| `reference/models.md` | Choosing a model, OAuth versus API keys, DeepSeek/GLM setup, and missing-model troubleshooting. |
 | `reference/commands.md` | Exact CLI, REST, provider, daemon, budget, output, and pi extension details. |
 | `reference/examples.md` | Concrete Solidity/EVM and ZK examples. |
 | `reference/product.md` | Dashboard, project lifecycle, run phases, tracking, and artifact model. |
@@ -183,7 +184,14 @@ For repository development or local builds, use Node 24 LTS from `.nvmrc` /
    flounder daemon start --server http://<server>:4500 --token <token>
    ```
 
-3. Authenticate every provider that the selected daemon will run:
+3. Authenticate every provider that the selected daemon will run. For model
+   selection or credential setup, read [the model setup guide](reference/models.md).
+   Use OAuth login only for OAuth-capable providers; API-key providers need keys
+   in the daemon environment or an existing stored pi credential. Coding Plan
+   subscriptions may also use API keys. Preserve the user's selected provider
+   and plan; do not assume they need a new adapter or metered endpoint.
+
+   OAuth example:
 
    ```bash
    flounder daemon provider login openai-codex
@@ -578,7 +586,7 @@ Open only the references needed for the current task:
 | Symptom | Likely cause | Recovery |
 | --- | --- | --- |
 | No daemon can claim a queued job | Project is pinned to an offline daemon | Start that daemon or edit the project daemon. |
-| Provider auth missing | Credentials live on daemon, not server | Run `flounder daemon provider login <provider>` and then `check`. |
+| Provider auth missing | Credentials live on daemon, not server | Use OAuth login or daemon-local API key configuration as appropriate, then `check`; see `reference/models.md`. |
 | Docker-backed OCI sandbox unavailable | Default image missing or Docker stopped | Start Docker and run `npm run sandbox:build`; host fallback needs explicit trusted-local approval. |
 | Apple container sandbox unavailable | Apple `container` is not installed/started, the selected image is missing from that runtime, or the internal sealed network cannot be created | Run `container system start` and build or pull the image into Apple's runtime; `auto` falls back to Docker when that path is not ready. |
 | `prepareSummary.quality=limited` | Source is usable but has caveats | Continue unless blocking issues exist; preserve caveats for confirm/report. |
